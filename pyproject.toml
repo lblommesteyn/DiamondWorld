@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "diamondworld"
+version = "0.1.0"
+description = "Pitch-level baseball world model and counterfactual simulator."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "duckdb>=0.10",
+  "lightgbm>=4.0",
+  "numpy>=1.24",
+  "polars>=0.20",
+  "pyarrow>=14",
+  "pybaseball>=2.2",
+  "requests>=2.31",
+  "scipy>=1.11",
+  "torch>=2.1",
+  "tqdm>=4.66",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.5"]
+
+[project.scripts]
+diamondworld-build-season = "diamondworld.data.pipeline:main"
+diamondworld-validate-season = "diamondworld.data.validate:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["diamondworld*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"

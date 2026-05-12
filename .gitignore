@@ -1,0 +1,22 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.venv/
+*.egg-info/
+
+data/raw/
+data/processed/*.parquet
+data/processed/*.json
+
+# Model checkpoints and logs (large binaries)
+checkpoints/
+logs/
+
+# Eval outputs (regenerate with eval scripts)
+eval/results/*.json
+eval/results/*.png
+eval/results/*.pkl
+
+# Serialised simulators
+*.pkl
