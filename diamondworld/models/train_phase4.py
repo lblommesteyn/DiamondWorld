@@ -261,7 +261,7 @@ class GameDataset(Dataset):
 
         # Compute PA summaries for completed PAs (as a polars-based call)
         import polars as pl
-        game_df = pl.from_dicts(rows)
+        game_df = pl.from_dicts(rows, infer_schema_length=None)
         pa_summaries = compute_pa_summaries(game_df)
         # pa_summaries[i] is summary for the i-th PA (in order)
 
@@ -740,10 +740,9 @@ def main() -> None:
         pin_memory=(args.device == "cuda"),
     )
 
-    # Build model
-    model = GameContextTransformer(
-        registry, d_model=args.d_model, n_layers=args.n_layers,
-    ).to(args.device)
+    # Build model — use defaults (hist_d_model=64, n_heads=4, n_layers=2)
+    # matching the checkpoint architecture from the original training run
+    model = GameContextTransformer(registry).to(args.device)
     scaler = TemperatureScaler()
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=args.lr, weight_decay=1e-2,
