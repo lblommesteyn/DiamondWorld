@@ -83,6 +83,13 @@ def load_season(season: int, data_root: Path = _DATA_ROOT) -> pl.DataFrame:
              * (180.0 / np.pi)).cast(pl.Float32).alias("spray_angle")
         ])
 
+    # Encode hurdle booleans → int8 (0/1) so batching can use them as obs
+    for col in ("swing", "contact", "foul"):
+        if col in df.columns:
+            df = df.with_columns([
+                pl.col(col).cast(pl.Int8).alias(f"{col}_obs")
+            ])
+
     return df
 
 

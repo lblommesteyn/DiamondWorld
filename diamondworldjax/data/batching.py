@@ -135,6 +135,10 @@ def build_batch(df: pl.DataFrame, max_t: int = MAX_T) -> dict[str, Any]:
     raw_bat      = _get("batter_id") if "batter_id" in df.columns else _get("batter_idx")
     raw_park     = _get("park_idx")
     raw_terminal = _col("pa_terminal", False).astype(bool)
+    # Hurdle observations (encoded int8 by pipeline.py; -1 = missing)
+    raw_swing_obs    = _col("swing_obs",    -1).astype(np.float64)
+    raw_contact_obs  = _col("contact_obs",  -1).astype(np.float64)
+    raw_foul_obs     = _col("foul_obs",     -1).astype(np.float64)
 
     sort_key1 = _get("at_bat_number") if "at_bat_number" in df.columns else _get("game_pk")
     sort_key2 = _get("pitch_number")
@@ -146,6 +150,11 @@ def build_batch(df: pl.DataFrame, max_t: int = MAX_T) -> dict[str, Any]:
 
         def _fill(dst, src, fill=0.0):
             vals = src[mask][order][:n]
+            if np.issubdtype(vals.dtype, np.floating):
+                nan_mask = np.isnan(vals)
+                if nan_mask.any():
+                    vals = vals.copy()
+                    vals[nan_mask] = fill
             dst[b_idx, :n] = vals
 
         pitch_valid[b_idx, :n] = True
@@ -184,6 +193,11 @@ def build_batch(df: pl.DataFrame, max_t: int = MAX_T) -> dict[str, Any]:
         swing_mask[b_idx, :n]    = True  # all valid pitches have a swing decision
         batted_mask[b_idx, :n]   = terminal_slice
 
+        # Fill hurdle obs from data (pipeline encodes swing/contact/foul as int8)
+        _fill(swing_obs,   raw_swing_obs,   fill=-1)
+        _fill(contact_obs, raw_contact_obs, fill=-1)
+        _fill(foul_obs,    raw_foul_obs,    fill=-1)
+
     return {
         # Masks
         "pitch_valid":   jnp.array(pitch_valid),
@@ -212,12 +226,11 @@ def build_batch(df: pl.DataFrame, max_t: int = MAX_T) -> dict[str, Any]:
         "plate_z":       jnp.array(plate_z),
         "pfx_x":         jnp.array(pfx_x),
         "pfx_z":         jnp.array(pfx_z),
-        # Hurdle observations
+        # Hurdle observations (called_strike and in_play are never populated
+        # from the raw data so they are omitted; batch.get() returns None)
         "obs_swing":     jnp.array(swing_obs),
-        "obs_called_strike": jnp.array(cs_obs),
         "obs_contact":   jnp.array(contact_obs),
         "obs_foul":      jnp.array(foul_obs),
-        "obs_in_play":   jnp.array(in_play_obs),
         # Batted ball
         "launch_speed":  jnp.array(launch_spd),
         "launch_angle":  jnp.array(launch_ang),
