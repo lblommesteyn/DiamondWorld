@@ -2,7 +2,7 @@
 #SBATCH --job-name=dw-svi-arma
 #SBATCH --account=def-pviswana_gpu
 #SBATCH --partition=gpubase_bygpu_b3
-#SBATCH --time=1:00:00
+#SBATCH --time=3:00:00
 #SBATCH --gres=gpu:h100:1
 #SBATCH --mem=32G
 #SBATCH --cpus-per-task=8

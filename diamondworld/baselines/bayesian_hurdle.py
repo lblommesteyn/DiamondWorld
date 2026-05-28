@@ -112,20 +112,11 @@ class BayesianHurdleSimulator(BaseSimulator):
     # ------------------------------------------------------------------
 
     def _sample_game_hurdles(self) -> dict[str, float]:
-        """One draw per game from a concentrated Beta posterior.
-
-        The posterior mean is preserved but variance is reduced by
-        _CONCENTRATION, preventing extreme game-level draws that cause
-        over-dispersion in the run distribution.
-        """
-        result = {}
-        for h, (a, b) in self._posteriors.items():
-            mean = a / (a + b)
-            # Re-parameterise as Beta(mean*C, (1-mean)*C) around the posterior mean
-            a_tight = mean * _CONCENTRATION
-            b_tight = (1.0 - mean) * _CONCENTRATION
-            result[h] = float(self.rng.beta(a_tight, b_tight))
-        return result
+        """One draw per game from each Beta posterior."""
+        return {
+            h: float(self.rng.beta(a, b))
+            for h, (a, b) in self._posteriors.items()
+        }
 
     def _sample_outcome(self, h: dict[str, float]) -> str:
         """Walk the hurdle tree to produce a PA outcome."""

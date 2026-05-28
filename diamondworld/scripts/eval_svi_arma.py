@@ -20,8 +20,9 @@ TEST_SEASONS  = [2023, 2024]
 
 
 def main() -> None:
+    print("Importing JAX...", flush=True)
     import jax
-    print(f"JAX devices: {jax.devices()}")
+    print(f"JAX devices: {jax.devices()}", flush=True)
 
     print(f"Loading training data {TRAIN_SEASONS}...")
     train_df = pl.concat([

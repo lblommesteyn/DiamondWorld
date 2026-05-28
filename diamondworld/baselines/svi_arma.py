@@ -179,7 +179,7 @@ class SVIARMASimulator(BaseSimulator):
         y_home = jnp.array(y_home_np, dtype=jnp.float32)
         y_away = jnp.array(y_away_np, dtype=jnp.float32)
         n_games = y_home.shape[0]
-        print(f"  [SVI] Fitting on {n_games} complete games, {self.n_steps} steps...")
+        print(f"  [SVI] Fitting on {n_games} complete games, {self.n_steps} steps...", flush=True)
 
         guide = autoguide.AutoNormal(_arma_model)
         optimizer = Adam(self.lr)
@@ -192,7 +192,7 @@ class SVIARMASimulator(BaseSimulator):
         for step in range(self.n_steps):
             svi_state, loss = svi.update(svi_state, y_home=y_home, y_away=y_away)
             if step % 500 == 0:
-                print(f"    step {step:4d}  ELBO = {-loss:.2f}")
+                print(f"    step {step:4d}  ELBO = {-loss:.2f}", flush=True)
             losses.append(float(loss))
 
         self._params = svi.get_params(svi_state)
