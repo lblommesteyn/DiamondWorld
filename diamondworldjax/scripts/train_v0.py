@@ -151,6 +151,8 @@ def main() -> None:
     parser.add_argument("--seed",    type=int, default=0)
     parser.add_argument("--batch",   type=int, default=32,
                         help="Games per mini-batch")
+    parser.add_argument("--resume",  type=str, default=None,
+                        help="Path to checkpoint .pkl to resume from")
     args = parser.parse_args()
 
     print("Importing JAX + NumPyro...", flush=True)
@@ -181,14 +183,15 @@ def main() -> None:
     t0 = time.time()
 
     svi_state, guide, losses = train(
-        model      = diamondworld_model,
-        batch_iter = batch_iter,
-        n_steps    = args.steps,
-        rank       = args.rank,
-        lr         = args.lr,
-        seed       = args.seed,
-        ckpt_dir   = _CKPT_DIR,
-        log_path   = _LOG_PATH,
+        model       = diamondworld_model,
+        batch_iter  = batch_iter,
+        n_steps     = args.steps,
+        rank        = args.rank,
+        lr          = args.lr,
+        seed        = args.seed,
+        ckpt_dir    = _CKPT_DIR,
+        log_path    = _LOG_PATH,
+        resume_path = args.resume,
     )
 
     elapsed = time.time() - t0
