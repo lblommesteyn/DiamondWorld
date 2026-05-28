@@ -304,15 +304,13 @@ def pitch_transformer_numpyro(
     transformer = flax_module(
         name,
         PitchTransformer(),
-        input_shape=[
-            (B, T, H),          # hist_pitch_type
-            (B, T, H, 4),       # hist_location
-            (B, T, H),          # hist_outcome
-            (B, T, H, 8),       # hist_game_state
-            (B, T, H),          # history_mask
-            (B, T, 16),         # fatigue_state
-            (B, T, M),          # manager_decision
-        ],
+        jnp.zeros((B, T, H), dtype=jnp.int32),
+        jnp.ones((B, T, H, 4)),
+        jnp.zeros((B, T, H), dtype=jnp.int32),
+        jnp.ones((B, T, H, 8)),
+        jnp.ones((B, T, H), dtype=bool),
+        jnp.ones((B, T, 16)),
+        jnp.ones((B, T, M)),
     )
 
     shared_context = transformer(

@@ -164,12 +164,17 @@ def _as_int_field(normalised: jnp.ndarray, scale: float) -> jnp.ndarray:
 
 
 def _obs_or_none(arr: jnp.ndarray, sentinel: int = -1) -> Optional[jnp.ndarray]:
-    """Return arr if it has any non-sentinel values, else None."""
+    """Replace sentinel values with 0 and return, or None if arr is None.
+
+    Pass None explicitly to leave a site unobserved.  We do NOT use
+    jnp.all() as a Python branch here because that would fail under JAX
+    JIT tracing.  Instead, sentinel (-1) positions are replaced with 0
+    (a valid in-distribution value) so they contribute a fixed but harmless
+    log-prob contribution; padded positions are further down-weighted by the
+    pitch_valid mask outside this function.
+    """
     if arr is None:
         return None
-    if jnp.all(arr == sentinel):
-        return None
-    # Replace sentinels with 0 so log_prob is finite; the mask will zero them.
     return jnp.where(arr == sentinel, 0, arr)
 
 
@@ -236,29 +241,6 @@ def diamondworld_model(
 
     steal_valid = (base_state_int > 0)  # runner on base
 
-    mgr = manager_decisions_numpyro(
-        inning            = batch["inning"][..., None],
-        outs              = batch["outs"][..., None],
-        score_diff        = batch["score_diff"][..., None],
-        pitch_count_game  = batch["pitch_count_game"][..., None],
-        base_state_onehot = base_state_oh,
-        pitcher_z         = pitcher_z,
-        batter_z          = batter_z,
-        steal_valid_mask  = steal_valid,
-        obs_pitching_change = _obs_or_none(batch.get("mgr_pitch_change")) if teacher_force else None,
-        obs_steal           = _obs_or_none(batch.get("mgr_steal"))         if teacher_force else None,
-        obs_runner_send     = None,   # not in current batch schema
-        obs_alignment       = None,
-    )
-
-    # Encode manager decision as dense vector for transformer input
-    mgr_vec = jnp.stack([
-        mgr.pitching_change.astype(jnp.float32),
-        mgr.steal_attempt.astype(jnp.float32),
-        mgr.runner_send.astype(jnp.float32),
-        mgr.defensive_alignment.astype(jnp.float32),
-    ], axis=-1)  # (B, T, 4)
-
     # ------------------------------------------------------------------ #
     # 4. Pitch transformer  →  shared_context  (B, T, 128)                #
     # ------------------------------------------------------------------ #
@@ -274,81 +256,100 @@ def diamondworld_model(
         valid_mask    = batch["pitch_valid"],
     )
 
-    shared_context = pitch_transformer_numpyro(
-        hist_pitch_type  = hist_pt,
-        hist_location    = hist_loc,
-        hist_outcome     = hist_oc,
-        hist_game_state  = hist_gs,
-        history_mask     = hist_mask,
-        fatigue_state    = fatigue_state,
-        manager_decision = mgr_vec,
-    )  # (B, T, 128)
-
     # ------------------------------------------------------------------ #
     # 5. Pitch execution features  (B, T, 8)                              #
     # ------------------------------------------------------------------ #
     pitch_execution = _make_pitch_execution(batch)
+    in_play_mask    = batch["in_play_mask"]
+    outs_int        = _as_int_field(batch["outs"], 2.0)
+    outcome_type    = _derive_outcome_type(batch)
 
     # ------------------------------------------------------------------ #
-    # 6. Hurdle model: pitch_type, location, swing/contact tree           #
+    # All (B, T) sample sites live inside these plates so that            #
+    # AutoGuides can distinguish batch from event dimensions.             #
     # ------------------------------------------------------------------ #
-    hurdle = hurdle_numpyro(
-        shared_context  = shared_context,
-        pitch_execution = pitch_execution,
-        obs_pitch_type    = _obs_or_none(batch["pitch_type"])     if teacher_force else None,
-        obs_plate_x       = batch["plate_x"]                      if teacher_force else None,
-        obs_plate_z       = batch["plate_z"]                      if teacher_force else None,
-        obs_release_speed = batch["release_speed"]                if teacher_force else None,
-        obs_swing         = _obs_or_none(batch["obs_swing"])      if teacher_force else None,
-        obs_called_strike = _obs_or_none(batch["obs_called_strike"]) if teacher_force else None,
-        obs_contact       = _obs_or_none(batch["obs_contact"])    if teacher_force else None,
-        obs_foul          = _obs_or_none(batch["obs_foul"])       if teacher_force else None,
-    )
+    with numpyro.plate("games", B, dim=-2), numpyro.plate("pitches", T, dim=-1):
 
-    # ------------------------------------------------------------------ #
-    # 7. Batted-ball physics (in-play pitches only)                       #
-    # ------------------------------------------------------------------ #
-    in_play_mask = batch["in_play_mask"]
+        # Manager decisions (sampled before transformer since mgr_vec feeds it)
+        mgr = manager_decisions_numpyro(
+            inning            = batch["inning"][..., None],
+            outs              = batch["outs"][..., None],
+            score_diff        = batch["score_diff"][..., None],
+            pitch_count_game  = batch["pitch_count_game"][..., None],
+            base_state_onehot = base_state_oh,
+            pitcher_z         = pitcher_z,
+            batter_z          = batter_z,
+            steal_valid_mask  = steal_valid,
+            obs_pitching_change = _obs_or_none(batch.get("mgr_pitch_change")) if teacher_force else None,
+            obs_steal           = _obs_or_none(batch.get("mgr_steal"))        if teacher_force else None,
+            obs_runner_send     = None,
+            obs_alignment       = None,
+        )
 
-    bb = batted_ball_numpyro(
-        shared_context    = shared_context,
-        pitch_execution   = pitch_execution,
-        batter_z          = batter_z,
-        pitcher_z         = pitcher_z,
-        park_id           = batch["park_ids"],
-        in_play_mask      = in_play_mask,
-        obs_launch_speed  = batch["launch_speed"]  if teacher_force else None,
-        obs_launch_angle  = batch["launch_angle"]  if teacher_force else None,
-        obs_spray_angle   = batch["spray_angle"]   if teacher_force else None,
-        obs_hit_distance  = batch["hit_distance"]  if teacher_force else None,
-    )
+        # Use soft probabilities (not sampled ints) so shape is stable under
+        # funsor enumeration which adds extra leading dims to discrete samples.
+        mgr_vec = jnp.stack([
+            mgr.pc_prob,
+            mgr.st_prob,
+            mgr.rs_prob,
+            mgr.al_probs[..., 0],  # P(standard alignment)
+        ], axis=-1)  # (B, T, 4)
 
-    # ------------------------------------------------------------------ #
-    # 8. State transition                                                  #
-    # ------------------------------------------------------------------ #
-    batted_ball_features = jnp.stack([
-        bb.launch_speed, bb.launch_angle, bb.spray_angle, bb.hit_distance
-    ], axis=-1)  # (B, T, 4)
+        shared_context = pitch_transformer_numpyro(
+            hist_pitch_type  = hist_pt,
+            hist_location    = hist_loc,
+            hist_outcome     = hist_oc,
+            hist_game_state  = hist_gs,
+            history_mask     = hist_mask,
+            fatigue_state    = fatigue_state,
+            manager_decision = mgr_vec,
+        )  # (B, T, 128)
 
-    outs_int       = _as_int_field(batch["outs"], 2.0)
-    outcome_type   = _derive_outcome_type(batch)
+        # Hurdle: pitch_type, location, swing/contact tree
+        hurdle = hurdle_numpyro(
+            shared_context  = shared_context,
+            pitch_execution = pitch_execution,
+            obs_pitch_type    = _obs_or_none(batch["pitch_type"])           if teacher_force else None,
+            obs_plate_x       = batch["plate_x"]                            if teacher_force else None,
+            obs_plate_z       = batch["plate_z"]                            if teacher_force else None,
+            obs_release_speed = batch["release_speed"]                      if teacher_force else None,
+            obs_swing         = _obs_or_none(batch["obs_swing"])            if teacher_force else None,
+            obs_called_strike = _obs_or_none(batch.get("obs_called_strike")) if teacher_force else None,
+            obs_contact       = _obs_or_none(batch["obs_contact"])          if teacher_force else None,
+            obs_foul          = _obs_or_none(batch["obs_foul"])             if teacher_force else None,
+        )
 
-    obs_runs   = _obs_or_none(batch["runs_scored"])      if teacher_force else None
-    obs_bsa    = _obs_or_none(batch["base_state_after"]) if teacher_force else None
+        # Batted-ball physics
+        bb = batted_ball_numpyro(
+            shared_context    = shared_context,
+            pitch_execution   = pitch_execution,
+            batter_z          = batter_z,
+            pitcher_z         = pitcher_z,
+            park_id           = batch["park_ids"],
+            in_play_mask      = in_play_mask,
+            obs_launch_speed  = batch["launch_speed"]  if teacher_force else None,
+            obs_launch_angle  = batch["launch_angle"]  if teacher_force else None,
+            obs_spray_angle   = batch["spray_angle"]   if teacher_force else None,
+            obs_hit_distance  = batch["hit_distance"]  if teacher_force else None,
+        )
 
-    transition_numpyro(
-        shared_context       = shared_context,
-        batted_ball_features = batted_ball_features,
-        base_state           = base_state_int,
-        outs                 = outs_int,
-        outcome_type         = outcome_type,
-        in_play_mask         = in_play_mask,
-        obs_runs_scored      = obs_runs,
-        obs_base_state_after = obs_bsa,
-        # Not in current batch schema — leave as None
-        obs_error_flag       = None,
-        obs_outs_added       = None,
-        obs_wild_pitch       = None,
-        obs_passed_ball      = None,
-        obs_balk             = None,
-    )
+        # State transition
+        batted_ball_features = jnp.stack([
+            bb.launch_speed, bb.launch_angle, bb.spray_angle, bb.hit_distance
+        ], axis=-1)  # (B, T, 4)
+
+        transition_numpyro(
+            shared_context       = shared_context,
+            batted_ball_features = batted_ball_features,
+            base_state           = base_state_int,
+            outs                 = outs_int,
+            outcome_type         = outcome_type,
+            in_play_mask         = in_play_mask,
+            obs_runs_scored      = _obs_or_none(batch["runs_scored"])       if teacher_force else None,
+            obs_base_state_after = _obs_or_none(batch["base_state_after"])  if teacher_force else None,
+            obs_error_flag       = None,
+            obs_outs_added       = None,
+            obs_wild_pitch       = None,
+            obs_passed_ball      = None,
+            obs_balk             = None,
+        )

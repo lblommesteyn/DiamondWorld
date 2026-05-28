@@ -213,12 +213,10 @@ def transition_numpyro(
     net = flax_module(
         name,
         TransitionNet(),
-        input_shape=[
-            (B, T, D_SHARED_CONTEXT),
-            (B, T, D_BATTED),
-            (B, T, BASE_STATE_DIM),
-            (B, T, 3),
-        ],
+        jnp.ones((B, T, D_SHARED_CONTEXT)),
+        jnp.ones((B, T, D_BATTED)),
+        jnp.ones((B, T, BASE_STATE_DIM)),
+        jnp.ones((B, T, 3)),
     )
 
     raw = net(shared_context, batted_ball_features, base_state_oh, outs_oh)

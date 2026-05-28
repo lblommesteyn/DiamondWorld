@@ -81,7 +81,7 @@ class BattedBallNet(nn.Module):
             params = nn.Dense(2, name=name)(h)           # (B, T, 2)
             mu        = params[..., 0]
             log_sigma = params[..., 1]
-            sigma = jax.nn.softplus(log_sigma) + 1e-4
+            sigma = jax.nn.softplus(log_sigma) + 1e-2
             return mu, sigma
 
         ls_mu,   ls_sigma   = _head("head_launch_speed")   # launch speed  mph
@@ -163,7 +163,7 @@ def batted_ball_numpyro(
     park_embedder = flax_module(
         park_emb_name,
         ParkEmbedding(),
-        input_shape=[(B, T)],
+        jnp.zeros((B, T), dtype=jnp.int32),
     )
     park_emb = park_embedder(park_id)   # (B, T, 16)
 
@@ -171,13 +171,11 @@ def batted_ball_numpyro(
     net = flax_module(
         name,
         BattedBallNet(),
-        input_shape=[
-            (B, T, D_SHARED_CONTEXT),
-            (B, T, D_EXECUTION),
-            (B, T, D_PLAYER_EMB),
-            (B, T, D_PLAYER_EMB),
-            (B, T, D_PARK_EMB),
-        ],
+        jnp.ones((B, T, D_SHARED_CONTEXT)),
+        jnp.ones((B, T, D_EXECUTION)),
+        jnp.ones((B, T, D_PLAYER_EMB)),
+        jnp.ones((B, T, D_PLAYER_EMB)),
+        jnp.ones((B, T, D_PARK_EMB)),
     )
 
     raw = net(shared_context, pitch_execution, batter_z, pitcher_z, park_emb)

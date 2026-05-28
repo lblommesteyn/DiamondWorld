@@ -99,6 +99,11 @@ class ManagerDecisions:
     steal_attempt: jnp.ndarray         # (B, T)  int {0,1}
     runner_send: jnp.ndarray           # (B, T)  int {0,1}
     defensive_alignment: jnp.ndarray   # (B, T)  int {0,1,2}
+    # Soft probabilities — same shape as above but float, safe after enumeration
+    pc_prob: jnp.ndarray               # (B, T)  float  P(pitching_change=1)
+    st_prob: jnp.ndarray               # (B, T)  float  P(steal=1)
+    rs_prob: jnp.ndarray               # (B, T)  float  P(runner_send=1)
+    al_probs: jnp.ndarray              # (B, T, 3) float
 
 
 # ---------------------------------------------------------------------------
@@ -145,15 +150,13 @@ def manager_decisions_numpyro(
     net = flax_module(
         name,
         ManagerNet(hidden_dim=hidden_dim),
-        input_shape=[
-            (B, T, 1),   # inning
-            (B, T, 1),   # outs
-            (B, T, 1),   # score_diff
-            (B, T, 1),   # pitch_count_game
-            (B, T, 8),   # base_state_onehot
-            (B, T, D),   # pitcher_z
-            (B, T, D),   # batter_z
-        ],
+        jnp.ones((B, T, 1)),
+        jnp.ones((B, T, 1)),
+        jnp.ones((B, T, 1)),
+        jnp.ones((B, T, 1)),
+        jnp.ones((B, T, 8)),
+        jnp.ones((B, T, D)),
+        jnp.ones((B, T, D)),
     )
 
     pc_logit, st_logit, rs_logit, al_logits = net(
@@ -215,4 +218,9 @@ def manager_decisions_numpyro(
         steal_attempt=steal_attempt,
         runner_send=runner_send,
         defensive_alignment=defensive_alignment,
+        # Soft probabilities — safe to use downstream even with enumeration
+        pc_prob  = jax.nn.sigmoid(pc_logit_sq),
+        st_prob  = jax.nn.sigmoid(st_logit_sq),
+        rs_prob  = jax.nn.sigmoid(rs_logit_sq),
+        al_probs = al_probs,
     )

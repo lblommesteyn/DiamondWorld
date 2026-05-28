@@ -113,7 +113,9 @@ class PlayerRegistry:
         f_player = player_stats.shape[-1]
 
         # Register the Flax module as a NumPyro site so SVI / MCMC can tune
-        # its parameters.
+        # its parameters.  Pass actual data as positional args so flax_module
+        # can infer shapes for multi-input modules (input_shape only works for
+        # single-input modules).
         encoder = flax_module(
             name,
             PlayerSeasonEncoder(
@@ -121,11 +123,9 @@ class PlayerRegistry:
                 hidden_dim=hidden_dim,
                 out_dim=out_dim,
             ),
-            input_shape=[
-                (player_stats.shape[0], f_player),  # player_stats
-                (player_stats.shape[0],),            # league_id
-                (player_stats.shape[0],),            # handedness
-            ],
+            player_stats,   # (P, F)  — used for param init on first trace
+            league_ids,     # (P,)
+            handedness,     # (P,)
         )
 
         # Forward-pass to produce the full embedding table (P, D).

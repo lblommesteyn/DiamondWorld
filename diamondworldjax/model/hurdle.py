@@ -64,7 +64,7 @@ class ContinuousHead(nn.Module):
         params = nn.Dense(2)(h)               # (..., 2)
         mu        = params[..., 0]
         log_sigma = params[..., 1]
-        sigma = jax.nn.softplus(log_sigma) + 1e-4
+        sigma = jax.nn.softplus(log_sigma) + 1e-2
         return mu, sigma
 
 
@@ -207,10 +207,8 @@ def hurdle_numpyro(
     net = flax_module(
         name,
         HurdleNet(),
-        input_shape=[
-            (B, T, D_MODEL),
-            (B, T, D_EXECUTION),
-        ],
+        jnp.ones((B, T, D_MODEL)),
+        jnp.ones((B, T, D_EXECUTION)),
     )
 
     raw = net(shared_context, pitch_execution)

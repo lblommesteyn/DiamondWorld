@@ -80,27 +80,17 @@ def fatigue_rollout(
     pitcher_z: jnp.ndarray,               # (B, T, D_pitcher)
     pitch_package_features: jnp.ndarray,  # (B, T, PITCH_PKG_DIM)
     game_state_scalar: jnp.ndarray,       # (B, T, 1)
-    pitch_count_plate_appearance: jnp.ndarray,  # (B, T) int — resets fatigue at 0
-    obs_fatigue: Optional[jnp.ndarray] = None,  # (B, T, FATIGUE_DIM) or None
+    pitch_count_plate_appearance: jnp.ndarray,  # (B, T) int — resets state at 0
+    obs_fatigue: Optional[jnp.ndarray] = None,  # ignored for v0 (deterministic)
     name_prefix: str = "fatigue",
 ) -> jnp.ndarray:                          # (B, T, FATIGUE_DIM)
     """
-    NumPyro model fragment: rolls out the stochastic fatigue process over T
-    pitch steps.
+    Deterministic GRU-based fatigue rollout (v0).
 
-    Stochastic sites
-    ----------------
-    {name_prefix}_sigma   — HalfNormal(0.1), global noise scale
-    {name_prefix}_init_0  — Normal(0, 0.3), initial fatigue state per appearance
-    {name_prefix}_eps_{t} — Normal(0, sigma), additive noise at each step
-
-    Parameters
-    ----------
-    pitch_count_plate_appearance : (B, T) int32
-        Pitch count within the current plate appearance.  When this equals 0,
-        a new plate appearance (and thus pitcher appearance) boundary is
-        assumed and the fatigue state is reset to a freshly-sampled initial
-        value.
+    The FatigueCell weights are registered as a NumPyro param site via
+    flax_module so they are optimised by SVI.  No stochastic latents are
+    introduced here, avoiding plate-declaration complexity while still
+    allowing the GRU to capture pitcher fatigue dynamics.
 
     Returns
     -------
@@ -108,74 +98,34 @@ def fatigue_rollout(
     """
     B, T, D_pitcher = pitcher_z.shape
 
-    # --- global noise-scale parameter ---
-    sigma_fatigue = numpyro.sample(
-        f"{name_prefix}_sigma",
-        dist.HalfNormal(0.1),
-    )  # scalar
-
     # Register the Flax FatigueCell as a NumPyro parameter site.
     cell = flax_module(
         f"{name_prefix}_cell",
         FatigueCell(fatigue_dim=FATIGUE_DIM),
-        input_shape=[
-            (B, FATIGUE_DIM),
-            (B, D_pitcher),
-            (B, PITCH_PKG_DIM),
-            (B, 1),
-        ],
+        jnp.ones((B, FATIGUE_DIM)),
+        jnp.ones((B, D_pitcher)),
+        jnp.ones((B, PITCH_PKG_DIM)),
+        jnp.ones((B, 1)),
     )
 
-    # --- initial fatigue state (per pitcher appearance) ---
-    # Shape (B, FATIGUE_DIM): one per sequence in the batch.
-    fatigue_init = numpyro.sample(
-        f"{name_prefix}_init_0",
-        dist.Normal(
-            jnp.zeros((B, FATIGUE_DIM)),
-            0.3 * jnp.ones((B, FATIGUE_DIM)),
-        ),
-    )  # (B, FATIGUE_DIM)
+    # Use lax.scan instead of a Python loop so JAX compiles one step and
+    # repeats it — O(1) compile time instead of O(T) unrolled graph.
+    def step_fn(state, t_inputs):
+        pc_pa, pz, ppf, gs = t_inputs          # scalars/slices at time t
+        is_new = (pc_pa == 0)[:, None]         # (B, 1) bool
+        state  = jnp.where(is_new, jnp.zeros_like(state), state)
+        state  = cell(state, pz, ppf, gs)
+        return state, state                    # (carry, output)
 
-    fatigue_states = []
-    state = fatigue_init  # (B, FATIGUE_DIM)
+    init_state = jnp.zeros((B, FATIGUE_DIM))
 
-    for t in range(T):
-        # --- reset at appearance boundary (pitch_count_plate_appearance == 0) ---
-        is_new_appearance = (pitch_count_plate_appearance[:, t] == 0)  # (B,)
-        # Broadcast reset mask over fatigue dim.
-        reset_mask = is_new_appearance[:, None]                         # (B, 1)
+    # Pack per-timestep inputs as (T, ...) leading axis for lax.scan
+    t_inputs = (
+        pitch_count_plate_appearance.transpose(1, 0),   # (T, B)
+        pitcher_z.transpose(1, 0, 2),                   # (T, B, D)
+        pitch_package_features.transpose(1, 0, 2),      # (T, B, Pkg)
+        game_state_scalar.transpose(1, 0, 2),           # (T, B, 1)
+    )
 
-        # For positions that start a new appearance, sample a new init state.
-        new_init = numpyro.sample(
-            f"{name_prefix}_init_{t}_reset",
-            dist.Normal(
-                jnp.zeros((B, FATIGUE_DIM)),
-                0.3 * jnp.ones((B, FATIGUE_DIM)),
-            ),
-        )  # (B, FATIGUE_DIM)
-
-        state = jnp.where(reset_mask, new_init, state)  # (B, FATIGUE_DIM)
-
-        # --- deterministic GRU step ---
-        det_next = cell(
-            state,
-            pitcher_z[:, t, :],               # (B, D_pitcher)
-            pitch_package_features[:, t, :],  # (B, PITCH_PKG_DIM)
-            game_state_scalar[:, t, :],        # (B, 1)
-        )  # (B, FATIGUE_DIM)
-
-        # --- stochastic noise ---
-        obs_t = obs_fatigue[:, t, :] if obs_fatigue is not None else None
-        eps = numpyro.sample(
-            f"{name_prefix}_eps_{t}",
-            dist.Normal(
-                jnp.zeros((B, FATIGUE_DIM)),
-                sigma_fatigue * jnp.ones((B, FATIGUE_DIM)),
-            ),
-            obs=obs_t,
-        )  # (B, FATIGUE_DIM)  — obs=None → sampled freely
-
-        state = det_next + eps             # (B, FATIGUE_DIM)
-        fatigue_states.append(state)
-
-    return jnp.stack(fatigue_states, axis=1)  # (B, T, FATIGUE_DIM)
+    _, fatigue_states = jax.lax.scan(step_fn, init_state, t_inputs)
+    return fatigue_states.transpose(1, 0, 2)  # (B, T, FATIGUE_DIM)
