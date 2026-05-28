@@ -38,7 +38,9 @@ def load_model(path: Path, device: str = "cpu"):
     scaler = TemperatureScaler()
     scaler.load_state_dict(ckpt["scaler_state_dict"])
     scaler.to(device)
-    print(f"  Loaded epoch {ckpt['epoch']}, best val PA NLL = {ckpt['best_val_pa_nll']:.4f}")
+    nll = ckpt.get('best_val_pa_nll')
+    nll_str = f"{nll:.4f}" if nll is not None else "N/A"
+    print(f"  Loaded epoch {ckpt['epoch']}, best val PA NLL = {nll_str}")
     return model, scaler, registry
 
 
@@ -50,7 +52,7 @@ def main() -> None:
     device = args.device
 
     print("Loading GameContextTransformer...")
-    model, scaler, registry = load_model(_CKPT_DIR / "game_context_transformer" / "final_model.pt", device=device)
+    model, scaler, registry = load_model(_CKPT_DIR / "phase4_transformer" / "best_model.pt", device=device)
 
     print("Loading transition table + HBP rate from B0 checkpoint...")
     with open(_CKPT_DIR / "baselines" / "B0_markov_re24.pkl", "rb") as f:

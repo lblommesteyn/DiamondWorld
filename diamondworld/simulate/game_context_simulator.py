@@ -56,12 +56,86 @@ class GameContextPASimulator:
         self.hbp_rate = hbp_rate
         self.device = device
         self.model.eval()
-        # Game memory: list of 28-dim numpy arrays, one per completed PA
+        # Game memory: list of 29-dim numpy arrays, one per completed PA
         self.game_memory: list[np.ndarray] = []
+        # Half-inning tracking (reset on inning/half change)
+        self._current_inning_half: tuple[int, str] | None = None
+        self._runs_this_inning: int = 0
+        self._reach_history: list[bool] = []
+        self._runner_how_on: dict[int, str | None] = {1: None, 2: None, 3: None}
+        # Per-pitcher baseline velo for velo_delta (first pitch seen in game)
+        self._pitcher_baseline_velo: dict[int, float] = {}
+        # Velo of the first pitch of the previous PA (for velo_delta on current PA's first pitch)
+        self._last_pa_first_pitch_velo: float | None = None
 
     def reset_game(self) -> None:
-        """Clear game memory at the start of a new game."""
+        """Clear all per-game tracking state at the start of a new game."""
         self.game_memory = []
+        self._current_inning_half = None
+        self._runs_this_inning = 0
+        self._reach_history = []
+        self._runner_how_on = {1: None, 2: None, 3: None}
+        self._pitcher_baseline_velo = {}
+        self._last_pa_first_pitch_velo = None
+
+    def _reset_half_inning_if_changed(self, inning: int, half: str) -> None:
+        """Clear per-half-inning state when inning or half changes."""
+        key = (int(inning), str(half))
+        if self._current_inning_half != key:
+            self._current_inning_half = key
+            self._runs_this_inning = 0
+            self._reach_history = []
+            self._runner_how_on = {1: None, 2: None, 3: None}
+
+    def _update_runner_how_on(
+        self,
+        bs_after: int,
+        outcome: str,
+        runner_how_on_before: dict[int, str | None],
+    ) -> dict[int, str | None]:
+        """Approximate post-PA runner provenance per base.
+
+        Maps outcome to the batter's how_on category and propagates existing
+        runners forward where bases remain occupied.  This is approximate —
+        the empirical transition table is a black box that doesn't tell us
+        which runner ended up where — but matches the right distribution
+        well enough for the model to use the signal it was trained on.
+        """
+        outcome_to_how_on = {
+            "BB": "walk", "HBP": "hbp",
+            "1B": "hit", "2B": "hit", "3B": "hit", "HR": "hit",
+            "E": "error",
+        }
+        batter_how_on = outcome_to_how_on.get(outcome)
+
+        if outcome in {"BB", "HBP", "1B", "E"}:
+            batter_to = 1
+        elif outcome == "2B":
+            batter_to = 2
+        elif outcome == "3B":
+            batter_to = 3
+        else:
+            batter_to = None  # HR scored / K / out
+
+        new_how_on: dict[int, str | None] = {1: None, 2: None, 3: None}
+        if batter_how_on is not None and batter_to is not None:
+            new_how_on[batter_to] = batter_how_on
+
+        # For bases occupied after the PA but not filled by the batter, inherit
+        # the provenance of whoever was on that base or a lower base before.
+        bases_after = {b: bool(bs_after & (1 << (b - 1))) for b in (1, 2, 3)}
+        for b in (1, 2, 3):
+            if bases_after[b] and new_how_on[b] is None:
+                for src in (b, b - 1, b - 2):
+                    if src >= 1 and runner_how_on_before.get(src):
+                        new_how_on[b] = runner_how_on_before[src]
+                        break
+
+        # Drop entries for bases that are now empty (defensive cleanup).
+        for b in (1, 2, 3):
+            if not bases_after[b]:
+                new_how_on[b] = None
+        return new_how_on
 
     def _build_batch(
         self,
@@ -166,13 +240,32 @@ class GameContextPASimulator:
 
         feat_pcg = _i(gs.get("pitch_count_game"), 0) / 100.0
         feat_pci = _i(gs.get("pitch_count_inning"), 0) / 30.0
-        feat_velo = 0.0  # velo_delta not tracked in simulation
-        feat_pbr = 0.0   # prior_batter_reached not tracked in simple sim
-        feat_ptr = 0.0   # prior_two_reached not tracked in simple sim
-        feat_h1 = 0.0    # how_on_1b not tracked in simple sim
-        feat_h2 = 0.0
-        feat_h3 = 0.0
-        feat_ri = 0.0    # runs_this_inning not tracked in simple sim
+
+        # velo_delta: first pitch's release_speed minus the pitcher's baseline velo
+        # (first pitch we saw from them this game). Falls back to 0 if unknown.
+        velo_delta = gs.get("velo_delta", 0.0)
+        feat_velo = float(np.clip(velo_delta, -10.0, 10.0)) / 10.0
+
+        # prior_batter_reached / prior_two_reached: from this half-inning's history
+        feat_pbr = 1.0 if (len(self._reach_history) >= 1 and self._reach_history[-1]) else 0.0
+        feat_ptr = (
+            1.0
+            if (
+                len(self._reach_history) >= 2
+                and self._reach_history[-1]
+                and self._reach_history[-2]
+            )
+            else 0.0
+        )
+
+        # how_on_*: provenance of runners currently on each base
+        feat_h1 = HOW_ON_ENC.get(self._runner_how_on.get(1), 0) / 5.0
+        feat_h2 = HOW_ON_ENC.get(self._runner_how_on.get(2), 0) / 5.0
+        feat_h3 = HOW_ON_ENC.get(self._runner_how_on.get(3), 0) / 5.0
+
+        # runs_this_inning: accumulated runs in current half-inning before this PA
+        feat_ri = float(self._runs_this_inning) / 5.0
+
         feat_bs = _i(gs.get("base_state"), 0) / 7.0
         feat_outs = _i(gs.get("outs"), 0) / 2.0
         feat_tto = _i(gs.get("tto"), 1) / 3.0
@@ -245,26 +338,37 @@ class GameContextPASimulator:
         bs = game_state.get("base_state", 0)
         outs = game_state.get("outs", 0)
 
+        # Detect inning/half changes and reset per-half-inning tracking
+        self._reset_half_inning_if_changed(
+            game_state.get("inning", 1), game_state.get("half", "top")
+        )
+
         # Save starting game state for PA summary computation
         game_state_start = dict(game_state)
 
-        # HBP: apply once per PA
+        # HBP: apply once per PA. No pitch sampled → velo_delta unknown, leave at 0.
         if rng.random() < self.hbp_rate:
+            game_state_start["velo_delta"] = 0.0
             bs_after, runs = _empirical_transition(bs, outs, "HBP", self.transition_table, rng)
             pa_summary = self._compute_pa_summary([], "HBP", game_state_start, bs_after)
             self.game_memory.append(pa_summary)
-            return {
-                "pa_outcome": "HBP",
-                "runs_scored": runs,
-                "n_pitches": 1,
-                "base_state_after": bs_after,
-            }
+            return self._finalize_pa("HBP", bs_after, runs, n_pitches=1)
 
         pa_pitches: list[dict[str, Any]] = []
 
         for n in range(20):
             pitch_feats = forced_pitch if forced_pitch is not None else pitch_sampler.sample(pitcher_idx, rng)
             pa_pitches.append(pitch_feats)
+
+            # On the first pitch of the PA, set velo_delta vs the pitcher's
+            # baseline velocity (their first observed pitch this game).
+            if n == 0:
+                first_velo = float(pitch_feats.get("release_speed_norm", 92.0))
+                if pitcher_idx not in self._pitcher_baseline_velo:
+                    self._pitcher_baseline_velo[pitcher_idx] = first_velo
+                game_state_start["velo_delta"] = (
+                    first_velo - self._pitcher_baseline_velo[pitcher_idx]
+                )
 
             state = dict(game_state)
             state["balls"] = balls
@@ -307,14 +411,14 @@ class GameContextPASimulator:
                     bs_after, runs = _empirical_transition(bs, outs, outcome, self.transition_table, rng)
                     pa_summary = self._compute_pa_summary(pa_pitches, outcome, game_state_start, bs_after)
                     self.game_memory.append(pa_summary)
-                    return {"pa_outcome": outcome, "runs_scored": runs, "n_pitches": n + 1, "base_state_after": bs_after}
+                    return self._finalize_pa(outcome, bs_after, runs, n_pitches=n + 1)
                 else:
                     strikes += 1
                     if strikes >= 3:
                         bs_after, runs = _empirical_transition(bs, outs, "K", self.transition_table, rng)
                         pa_summary = self._compute_pa_summary(pa_pitches, "K", game_state_start, bs_after)
                         self.game_memory.append(pa_summary)
-                        return {"pa_outcome": "K", "runs_scored": runs, "n_pitches": n + 1, "base_state_after": bs_after}
+                        return self._finalize_pa("K", bs_after, runs, n_pitches=n + 1)
             else:
                 if _in_strike_zone(plate_x, plate_z):
                     strikes += 1
@@ -322,20 +426,41 @@ class GameContextPASimulator:
                         bs_after, runs = _empirical_transition(bs, outs, "K", self.transition_table, rng)
                         pa_summary = self._compute_pa_summary(pa_pitches, "K", game_state_start, bs_after)
                         self.game_memory.append(pa_summary)
-                        return {"pa_outcome": "K", "runs_scored": runs, "n_pitches": n + 1, "base_state_after": bs_after}
+                        return self._finalize_pa("K", bs_after, runs, n_pitches=n + 1)
                 else:
                     balls += 1
                     if balls >= 4:
                         bs_after, runs = _empirical_transition(bs, outs, "BB", self.transition_table, rng)
                         pa_summary = self._compute_pa_summary(pa_pitches, "BB", game_state_start, bs_after)
                         self.game_memory.append(pa_summary)
-                        return {"pa_outcome": "BB", "runs_scored": runs, "n_pitches": n + 1, "base_state_after": bs_after}
+                        return self._finalize_pa("BB", bs_after, runs, n_pitches=n + 1)
 
         # Fallback: walk after 20 pitches
         bs_after, runs = _empirical_transition(bs, outs, "BB", self.transition_table, rng)
         pa_summary = self._compute_pa_summary(pa_pitches, "BB", game_state_start, bs_after)
         self.game_memory.append(pa_summary)
-        return {"pa_outcome": "BB", "runs_scored": runs, "n_pitches": 20, "base_state_after": bs_after}
+        return self._finalize_pa("BB", bs_after, runs, n_pitches=20)
+
+    def _finalize_pa(
+        self,
+        outcome: str,
+        bs_after: int,
+        runs: int,
+        n_pitches: int,
+    ) -> dict[str, Any]:
+        """Update tracking state after a PA completes and return the result dict."""
+        self._runs_this_inning += int(runs)
+        reached = outcome in {"BB", "HBP", "1B", "2B", "3B", "HR", "E"}
+        self._reach_history.append(reached)
+        self._runner_how_on = self._update_runner_how_on(
+            bs_after, outcome, self._runner_how_on
+        )
+        return {
+            "pa_outcome": outcome,
+            "runs_scored": runs,
+            "n_pitches": n_pitches,
+            "base_state_after": bs_after,
+        }
 
 
 class GameContextGameSimulator:

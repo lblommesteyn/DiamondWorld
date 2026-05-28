@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=dw-eval-phase4
 #SBATCH --account=def-pviswana
-#SBATCH --partition=gpubase_bygpu_b3
+#SBATCH --partition=gpubase_bygpu_b4
 #SBATCH --time=2:00:00
 #SBATCH --gres=gpu:h100:1
 #SBATCH --mem=32G
