@@ -81,7 +81,7 @@ class BattedBallNet(nn.Module):
             params = nn.Dense(2, name=name)(h)           # (B, T, 2)
             mu        = params[..., 0]
             log_sigma = params[..., 1]
-            sigma = jax.nn.softplus(log_sigma) + 1e-2
+            sigma = jax.nn.softplus(log_sigma) + 5e-2
             return mu, sigma
 
         ls_mu,   ls_sigma   = _head("head_launch_speed")   # launch speed  mph

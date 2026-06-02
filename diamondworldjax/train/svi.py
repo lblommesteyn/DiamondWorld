@@ -32,7 +32,7 @@ DEFAULT_LR        = 1e-3
 DEFAULT_STEPS     = 50_000
 LOG_INTERVAL      = 500
 CKPT_INTERVAL     = 5_000
-GRAD_CLIP_NORM    = 1.0   # max global grad norm
+GRAD_CLIP_VALUE   = 1.0   # per-element gradient clip threshold
 
 
 def empty_guide(*args, **kwargs) -> None:
@@ -40,15 +40,21 @@ def empty_guide(*args, **kwargs) -> None:
 
 
 def make_optimizer(lr: float = DEFAULT_LR) -> Any:
-    """Adam with global-norm grad clipping (numpyro-compatible).
+    """Adam with per-element grad clipping (numpyro-compatible).
 
-    NaN handling is done in the training loop (revert state on NaN loss) —
-    NOT in the optax chain.  Both apply_if_finite and zero_nans use lax.cond /
-    where inside the chain, which JIT-deadlocks with NumPyro's SVI wrapper
-    past ~step 1000.  Plain-Python revert avoids that entirely.
+    Per-element clip (optax.clip) instead of global-norm clip:
+    clip_by_global_norm computes sqrt(sum(g**2)) which overflows float32
+    once any individual gradient exceeds ~1e15. Once that overflow makes
+    the norm Inf, all clipped grads become NaN. Per-element clipping never
+    has to compute a global sum so it can't overflow.
+
+    NaN handling is also done in the training loop (revert state on NaN
+    loss). apply_if_finite and zero_nans both use lax.cond / where inside
+    the chain, which JIT-deadlocks with NumPyro's SVI wrapper past
+    ~step 1000.  Plain-Python revert avoids that entirely.
     """
     chain = optax.chain(
-        optax.clip_by_global_norm(GRAD_CLIP_NORM),
+        optax.clip(GRAD_CLIP_VALUE),
         optax.adam(lr),
     )
     return optax_to_numpyro(chain)
