@@ -4,9 +4,10 @@ from pathlib import Path
 import numpy as np
 import polars as pl
 
+from diamondworldjax.paths import processed_root
 from diamondworldjax.schema import DW_REMAP, PITCH_TYPE_IDX, PA_OUTCOME_IDX
 
-_DATA_ROOT = Path("/scratch/lblommes/diamondworld/data/processed")
+_DATA_ROOT = processed_root()
 
 # Seasons with full Statcast pitch tracking
 TRACKING_SEASONS = list(range(2017, 2025))

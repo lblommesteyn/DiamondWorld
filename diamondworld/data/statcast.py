@@ -46,7 +46,19 @@ def _date_span(start: date, end: date) -> list[date]:
     return days
 
 
-def fetch_statcast_range(start_dt: str, end_dt: str, *, attempts: int = 3) -> pl.DataFrame:
+def biweekly_ranges(start_dt: str, end_dt: str) -> list[tuple[str, str]]:
+    start = date.fromisoformat(start_dt)
+    end = date.fromisoformat(end_dt)
+    ranges: list[tuple[str, str]] = []
+    current = start
+    while current <= end:
+        chunk_end = min(end, current + timedelta(days=13))
+        ranges.append((current.isoformat(), chunk_end.isoformat()))
+        current = chunk_end + timedelta(days=1)
+    return ranges
+
+
+def fetch_statcast_range(start_dt: str, end_dt: str, *, attempts: int = 5) -> pl.DataFrame:
     last_error: Exception | None = None
     for attempt in range(attempts):
         try:
@@ -54,7 +66,7 @@ def fetch_statcast_range(start_dt: str, end_dt: str, *, attempts: int = 3) -> pl
             return pl.from_pandas(pdf, include_index=False) if len(pdf) else pl.DataFrame()
         except Exception as exc:
             last_error = exc
-            time.sleep(2 * (attempt + 1))
+            time.sleep(10 * (attempt + 1))
     raise RuntimeError(f"Statcast fetch failed for {start_dt} through {end_dt}") from last_error
 
 
@@ -63,6 +75,7 @@ def fetch_statcast_season(season: int, *, force: bool = False) -> pl.DataFrame:
 
     pybaseball returns pandas; the object is immediately converted to Polars and
     persisted as Parquet so downstream processing stays in Polars.
+    Uses 2-week chunks to avoid connection resets from Baseball Savant.
     """
     ensure_data_dirs()
     cache_path = statcast_cache_path(season)
@@ -70,16 +83,19 @@ def fetch_statcast_season(season: int, *, force: bool = False) -> pl.DataFrame:
         return pl.read_parquet(cache_path)
 
     frames = []
-    for start_dt, end_dt in monthly_ranges(*season_dates(season)):
+    for start_dt, end_dt in biweekly_ranges(*season_dates(season)):
         try:
             frame = fetch_statcast_range(start_dt, end_dt)
             if frame.height:
                 frames.append(frame)
         except Exception:
             for day_start, day_end in daily_ranges(start_dt, end_dt):
-                frame = fetch_statcast_range(day_start, day_end)
-                if frame.height:
-                    frames.append(frame)
+                try:
+                    frame = fetch_statcast_range(day_start, day_end)
+                    if frame.height:
+                        frames.append(frame)
+                except Exception:
+                    pass  # skip days that repeatedly fail (likely no games)
     frame = pl.concat(frames, how="diagonal_relaxed") if frames else pl.DataFrame()
     frame = frame.filter(pl.col("game_year") == season)
     frame.write_parquet(cache_path)

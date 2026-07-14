@@ -8,6 +8,9 @@ import numpyro.distributions as dist
 from numpyro.contrib.module import flax_module
 from typing import Optional
 
+# Dimension of the per-player stochastic skill vector.
+SKILL_DIM = 32
+
 
 # ---------------------------------------------------------------------------
 # Flax sub-modules
@@ -31,6 +34,27 @@ class HandednessEmbedding(nn.Module):
     def __call__(self, hand: jnp.ndarray) -> jnp.ndarray:
         # hand: (P,) int32
         return nn.Embed(num_embeddings=2, features=self.embed_dim)(hand)
+
+
+class SkillFusionLayer(nn.Module):
+    """Fuses deterministic player encoding with a stochastic skill vector.
+
+    det_emb  : (P, out_dim)   — output of PlayerSeasonEncoder
+    skill_vec: (P, SKILL_DIM) — sampled from variational posterior
+    → fused  : (P, out_dim)
+    """
+    out_dim: int = 64
+
+    @nn.compact
+    def __call__(
+        self,
+        det_emb: jnp.ndarray,   # (P, out_dim)
+        skill_vec: jnp.ndarray, # (P, SKILL_DIM)
+    ) -> jnp.ndarray:           # (P, out_dim)
+        x = jnp.concatenate([det_emb, skill_vec], axis=-1)
+        h = nn.Dense(self.out_dim)(x)
+        h = nn.LayerNorm()(h)
+        return h
 
 
 class PlayerSeasonEncoder(nn.Module):
@@ -103,19 +127,17 @@ class PlayerRegistry:
 
     def __init__(
         self,
-        player_stats: jnp.ndarray,   # (P, F_player)  full player table
-        league_ids: jnp.ndarray,     # (P,)  int32
-        handedness: jnp.ndarray,     # (P,)  int32
+        player_stats: jnp.ndarray,    # (P, F_player)  full player table
+        league_ids: jnp.ndarray,      # (P,)  int32
+        handedness: jnp.ndarray,      # (P,)  int32
+        player_skills: jnp.ndarray,   # (P, SKILL_DIM)  stochastic skill vectors
         name: str = "player_encoder",
         hidden_dim: int = 128,
         out_dim: int = 64,
     ):
         f_player = player_stats.shape[-1]
 
-        # Register the Flax module as a NumPyro site so SVI / MCMC can tune
-        # its parameters.  Pass actual data as positional args so flax_module
-        # can infer shapes for multi-input modules (input_shape only works for
-        # single-input modules).
+        # Deterministic encoding: raw stats + league + hand → (P, out_dim)
         encoder = flax_module(
             name,
             PlayerSeasonEncoder(
@@ -123,13 +145,20 @@ class PlayerRegistry:
                 hidden_dim=hidden_dim,
                 out_dim=out_dim,
             ),
-            player_stats,   # (P, F)  — used for param init on first trace
-            league_ids,     # (P,)
-            handedness,     # (P,)
+            player_stats,
+            league_ids,
+            handedness,
         )
+        det_emb: jnp.ndarray = encoder(player_stats, league_ids, handedness)
 
-        # Forward-pass to produce the full embedding table (P, D).
-        self._table: jnp.ndarray = encoder(player_stats, league_ids, handedness)
+        # Fuse deterministic encoding with stochastic skill vector → (P, out_dim)
+        fusion = flax_module(
+            f"{name}_skill_fusion",
+            SkillFusionLayer(out_dim=out_dim),
+            det_emb,
+            player_skills,
+        )
+        self._table: jnp.ndarray = fusion(det_emb, player_skills)
         self.out_dim = out_dim
 
     def lookup(self, ids: jnp.ndarray) -> jnp.ndarray:
@@ -152,11 +181,12 @@ class PlayerRegistry:
 # ---------------------------------------------------------------------------
 
 def encode_players_numpyro(
-    player_stats: jnp.ndarray,   # (P, F_player)
-    league_ids: jnp.ndarray,     # (P,) int32
-    handedness: jnp.ndarray,     # (P,) int32
-    pitcher_ids: jnp.ndarray,    # (B, T) int32
-    batter_ids: jnp.ndarray,     # (B, T) int32
+    player_stats: jnp.ndarray,    # (P, F_player)
+    league_ids: jnp.ndarray,      # (P,) int32
+    handedness: jnp.ndarray,      # (P,) int32
+    pitcher_ids: jnp.ndarray,     # (B, T) int32
+    batter_ids: jnp.ndarray,      # (B, T) int32
+    player_skills: jnp.ndarray,   # (P, SKILL_DIM) — sampled latent skill vectors
     hidden_dim: int = 128,
     out_dim: int = 64,
     name: str = "player_encoder",
@@ -170,7 +200,7 @@ def encode_players_numpyro(
     batter_z  : (B, T, D)
     """
     registry = PlayerRegistry(
-        player_stats, league_ids, handedness,
+        player_stats, league_ids, handedness, player_skills,
         name=name, hidden_dim=hidden_dim, out_dim=out_dim,
     )
     pitcher_z = registry.lookup(pitcher_ids)  # (B, T, D)

@@ -17,9 +17,11 @@ from pathlib import Path
 
 import numpy as np
 
-_DATA_ROOT   = Path("/scratch/lblommes/diamondworld/data/processed")
-_CKPT_DIR    = Path("/scratch/lblommes/diamondworld/checkpoints/dwjax_v0")
-_LOG_PATH    = Path("/scratch/lblommes/diamondworld/eval/results/dwjax_v0_elbo.json")
+from diamondworldjax.paths import processed_root, checkpoints_root, results_root
+
+_DATA_ROOT   = processed_root()
+_CKPT_DIR    = checkpoints_root() / "dwjax_v0"
+_LOG_PATH    = results_root() / "dwjax_v0_elbo.json"
 
 TRAIN_SEASONS = list(range(2015, 2023))
 TEST_SEASONS  = [2023, 2024]

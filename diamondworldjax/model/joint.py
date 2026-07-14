@@ -17,8 +17,9 @@ from typing import Optional
 import jax
 import jax.numpy as jnp
 import numpyro
+import numpyro.distributions as dist
 
-from .embeddings import encode_players_numpyro
+from .embeddings import encode_players_numpyro, SKILL_DIM
 from .fatigue import fatigue_rollout
 from .manager import manager_decisions_numpyro
 from .pitch_transformer import pitch_transformer_numpyro
@@ -201,6 +202,20 @@ def diamondworld_model(
         False → free rollout from the posterior predictive.
     """
     B, T = batch["pitch_valid"].shape
+    P = player_table["stats"].shape[0]
+
+    # ------------------------------------------------------------------ #
+    # 0. Per-player latent skill vectors  (P, SKILL_DIM)                  #
+    #    Sampled once per forward pass outside the pitch plates.           #
+    #    Prior: N(0, I).  Guide provides the variational posterior.        #
+    # ------------------------------------------------------------------ #
+    player_skills = numpyro.sample(
+        "player_skills",
+        dist.Normal(
+            jnp.zeros((P, SKILL_DIM)),
+            jnp.ones((P, SKILL_DIM)),
+        ).to_event(2),
+    )  # (P, SKILL_DIM)
 
     # ------------------------------------------------------------------ #
     # 1. Player embeddings  →  pitcher_z, batter_z  (B, T, 64)           #
@@ -209,8 +224,9 @@ def diamondworld_model(
         player_table["stats"],
         player_table["league"],
         player_table["hand"],
-        pitcher_ids = batch["pitcher_ids"],
-        batter_ids  = batch["batter_ids"],
+        pitcher_ids   = batch["pitcher_ids"],
+        batter_ids    = batch["batter_ids"],
+        player_skills = player_skills,
     )  # (B, T, 64) each
 
     # ------------------------------------------------------------------ #

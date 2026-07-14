@@ -23,6 +23,18 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "ruff>=0.5"]
+jax = [
+  "jax[cuda12]>=0.4.26",
+  "flax>=0.8",
+  "numpyro>=0.15",
+  "optax>=0.2",
+]
+jax-cpu = [
+  "jax[cpu]>=0.4.26",
+  "flax>=0.8",
+  "numpyro>=0.15",
+  "optax>=0.2",
+]
 
 [project.scripts]
 diamondworld-build-season = "diamondworld.data.pipeline:main"

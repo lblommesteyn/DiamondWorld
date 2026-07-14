@@ -21,9 +21,11 @@ from typing import Any
 
 import numpy as np
 
-_DATA_ROOT    = Path("/scratch/lblommes/diamondworld/data/processed")
-_RESULTS_DIR  = Path("/scratch/lblommes/diamondworld/eval/results")
-_DEFAULT_CKPT = Path("/scratch/lblommes/diamondworld/checkpoints/dwjax_v0/dwjax_step_0005000.pkl")
+from diamondworldjax.paths import processed_root, checkpoints_root, results_root
+
+_DATA_ROOT    = processed_root()
+_RESULTS_DIR  = results_root()
+_DEFAULT_CKPT = checkpoints_root() / "dwjax_v0" / "dwjax_step_0005000.pkl"
 
 TEST_SEASONS    = [2023, 2024]
 SAMPLER_SEASONS = [2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022]
@@ -78,7 +80,7 @@ def main() -> None:
     from diamondworldjax.model.joint import diamondworld_model
     from diamondworldjax.simulate.rollout import free_rollout_samples, extract_game_runs
     from diamondworldjax.eval.calibration import game_run_metrics
-    from diamondworldjax.train.svi import empty_guide
+    from diamondworldjax.train.svi import make_player_skills_guide
 
     print(f"Loading checkpoint: {args.ckpt}", flush=True)
     with open(args.ckpt, "rb") as f:
@@ -94,6 +96,7 @@ def main() -> None:
     player_table_np = _build_player_table(train_pitches)
     P = len(player_table_np["all_ids"])
     print(f"  {P:,} players in registry.", flush=True)
+    guide = make_player_skills_guide(P)
     del train_pitches  # free memory; we only need the id_to_idx map going forward
 
     print(f"Loading test seasons {TEST_SEASONS}...", flush=True)
@@ -127,7 +130,7 @@ def main() -> None:
 
         rng, key = jax.random.split(rng)
         samples = free_rollout_samples(
-            diamondworld_model, empty_guide, params,
+            diamondworld_model, guide, params,
             batch, player_table, key, num_samples=args.samples,
         )
         # extract_game_runs returns (num_samples, B) — average over samples.
