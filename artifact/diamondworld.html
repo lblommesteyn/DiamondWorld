@@ -208,7 +208,7 @@
     </div>
     <h1>A model that plays the<br><span class="tint">whole game</span>, one pitch at a time.</h1>
     <p class="lede">DiamondWorld generates every plate appearance from batter, pitcher, and park,
-      then plays out full games. On the aggregate run distribution it <b>edges the strongest
+      then plays out full games. On the aggregate run distribution it <b>beats the strongest
       run-only baselines</b> &mdash; and unlike them, it <b>reproduces individual players'
       stat lines</b>. Trained on 2015&ndash;2022, judged on 4,859 games from 2023&ndash;2024.</p>
 
@@ -255,8 +255,8 @@
       </div>
       <svg id="distChart" class="chart-fig" viewBox="0 0 920 340" role="img"
            aria-label="Run distribution: real versus simulated, runs 0 to 20 per game."></svg>
-      <div class="cap">Bars: real relative frequency. Line: simulated (shape-optimal recal, N=4,859). Runs binned
-        0&ndash;20 per game, both teams. The curve tracks real across the whole range; KL divergence 0.0068,
+      <div class="cap">Bars: real relative frequency. Line: simulated (mean-matched recal, N=4,859). Runs binned
+        0&ndash;20 per game, both teams. The curve tracks real across the whole range; KL divergence 0.0056,
         the lowest of any method.</div>
     </div>
   </section>
@@ -277,11 +277,11 @@
         </thead>
         <tbody id="boardBody"><!-- filled by JS --></tbody>
       </table>
-      <div class="cap">Real mean 8.86 runs/game; all rows scored against the same 4,859-game reference.
-        <b>v9's KL is the best of any method</b> (0.0068, vs 0.016 for the baselines) &mdash; it matches the
-        distribution's shape most closely. At the shape-optimal recal the mean runs ~0.4 light, which lifts
-        Wasserstein and tail error; a mean-matched recal (row marked *, from the 1,200-game sweep, full-slate
-        confirmation running) restores both while keeping KL below the baselines. Baselines have no batter identity.</div>
+      <div class="cap">Real mean 8.86 runs/game; all rows N=4,859, scored against the same reference.
+        <b>v9 posts the lowest KL and Wasserstein of any method</b> (KL 0.0056 vs 0.016 for the baselines,
+        a 2.9&times; closer fit), matches the mean and variance, and is competitive on the tail &mdash; while
+        uniquely reproducing player stat lines. B0's tail error (0.0031) is the single best cell; v9's (0.0088)
+        beats the other baseline.</div>
     </div>
   </section>
 
@@ -348,6 +348,9 @@
           rate &mdash; not a hot subsample that flatters the tail.</li>
         <li><b>The park bug fixed everywhere.</b> All conditioned diagnostics rebuild real park
           indices, so the park-aware model is never judged on a phantom stadium.</li>
+        <li><b>Game structure verified, not assumed.</b> An apparent extra-inning inflation turned out
+          to be the same recal-scale artifact; at the matched scale the tie-after-9 rate (10.0% sim vs
+          9.1% real), home/away score independence, and margin spread (SD 4.39 vs 4.39) all match real.</li>
       </ul>
     </div>
   </section>
@@ -355,10 +358,10 @@
   <!-- VERDICT -->
   <section style="border-bottom:none">
     <div class="sec-head"><span class="eyebrow">The call</span></div>
-    <p class="verdict">On the aggregate run distribution DiamondWorld is <span class="tint">at least the equal of
-      strong run-only baselines</span>, and it is the only method that also reproduces the players.
-      The remaining gap is a small structural under-scoring in the simulator &mdash; the next lever,
-      and not the model.</p>
+    <p class="verdict">On the aggregate run distribution DiamondWorld <span class="tint">beats strong run-only
+      baselines</span> &mdash; the lowest KL and Wasserstein of any method &mdash; and it is the only one
+      that also reproduces the players. Its simulated game structure, down to the extra-inning rate and
+      score margin, matches real. The one free knob is a single global recalibration scale.</p>
   </section>
 </main>
 
@@ -372,27 +375,25 @@
 <script>
 (function () {
   "use strict";
-  // ---------- DATA (N=4859 full test slate unless noted) ----------
+  // ---------- DATA (N=4859 full test slate) ----------
   const REAL_HIST = [0.0000,0.0189,0.0231,0.0570,0.0539,0.0959,0.0766,0.1021,0.0836,0.0973,
                      0.0663,0.0726,0.0545,0.0560,0.0338,0.0280,0.0218,0.0193,0.0105,0.0107,0.0000];
-  // v9 simulated histogram, shape-optimal recal, N=4859
-  let V9_HIST     = [0.0000,0.0228,0.0251,0.0692,0.0500,0.1105,0.0770,0.1157,0.0790,0.1013,
-                     0.0611,0.0654,0.0461,0.0543,0.0276,0.0265,0.0189,0.0173,0.0080,0.0086,0.0000];
+  // v9 simulated histogram, mean-matched recal (0.55), N=4859
+  let V9_HIST     = [0.0000,0.0196,0.0175,0.0611,0.0465,0.0990,0.0751,0.1175,0.0716,0.0971,
+                     0.0605,0.0803,0.0461,0.0582,0.0344,0.0317,0.0202,0.0204,0.0123,0.0105,0.0000];
 
-  const HERO = { kl_v9: "0.007", klbase: "0.016", kcorr: "0.58", ngames: "4,859" };
+  const HERO = { kl_v9: "0.006", klbase: "0.016", kcorr: "0.58", ngames: "4,859" };
 
   // scoreboard rows: [label, colorVar, mean, kl, wass, tail, playerYes, isHero]
-  // Baselines + v9 shape-opt at N=4859; v9 mean-matched from the N=1.2k sweep
-  // (full-N confirmation in progress). All scored vs the same 4859-game real ref.
+  // All N=4859, all scored vs the same 4859-game real reference.
   const BOARD = [
     ["Real",                  "--s-real", "8.86", "—", "—", "—", null, false],
     ["B0 Markov (RE24)",      "--s-b0",   "8.80", "0.0163", "0.120", "0.0031", false, false],
     ["B1 NegBinom",           "--s-b1",   "8.92", "0.0170", "0.179", "0.0154", false, false],
-    ["v9 shape-opt",          "--s-v9",   "8.46", "0.0068", "0.396", "0.0428", true,  true],
-    ["v9 mean-matched *",     "--s-v9",   "8.92", "0.0135", "0.109", "0.0083", true,  false]
+    ["v9 (park + fatigue)",   "--s-v9",   "8.93", "0.0056", "0.099", "0.0088", true,  true]
   ];
   // best-in-column markers (lower better) among model+baseline rows
-  const BEST = { kl: "0.0068", wass: "0.109", tail: "0.0031" };
+  const BEST = { kl: "0.0056", wass: "0.099", tail: "0.0031" };
 
   // player stats: [stat, realMean, corr, mae]
   const PSTATS = [
