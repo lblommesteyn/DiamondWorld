@@ -112,6 +112,8 @@ def simulate(
 
     away_score = np.zeros(G)
     home_score = np.zeros(G)
+    away9 = np.full(G, np.nan)   # score snapshot after 9 innings (pre-extras)
+    home9 = np.full(G, np.nan)
     away_ptr = np.zeros(G, dtype=np.int64)
     home_ptr = np.zeros(G, dtype=np.int64)
     away_cyc = np.zeros((G, 9), dtype=np.int64)
@@ -261,11 +263,20 @@ def simulate(
         if not fixed_nine and inning >= 9:
             game_over[playing & (home_score != away_score)] = True
 
+        if inning == 9:
+            # Snapshot the score at the end of regulation for every game that has
+            # reached the 9th (all of them), before any extra innings are added.
+            reached = np.isnan(away9)
+            away9[reached] = away_score[reached]
+            home9[reached] = home_score[reached]
+
     n_ties = int((~game_over).sum()) if not fixed_nine else int((home_score == away_score).sum())
 
     return {
         "away": away_score,
         "home": home_score,
+        "away9": away9,
+        "home9": home9,
         "occ": occ_on / max(occ_n, 1),
         "pcounts": pcounts,
         "runs_by_inning": runs_by_inning,
@@ -313,6 +324,9 @@ def main() -> None:
     ap.add_argument("--min-pa", type=int, default=150)
     ap.add_argument("--dump-runs", type=Path, default=None,
                     help="Save per-game total runs (away+home) to this .npy for baseline comparison.")
+    ap.add_argument("--dump-scores", type=Path, default=None,
+                    help="Save per-game away/home final and after-9 scores to this .npz "
+                         "(for tie/margin/extras diagnostics).")
     ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
 
@@ -398,6 +412,11 @@ def main() -> None:
     if args.dump_runs is not None:
         np.save(args.dump_runs, total)
         print(f"  saved per-game runs -> {args.dump_runs}", flush=True)
+
+    if args.dump_scores is not None:
+        np.savez(args.dump_scores, away=res["away"], home=res["home"],
+                 away9=res["away9"], home9=res["home9"])
+        print(f"  saved per-game scores -> {args.dump_scores}", flush=True)
 
     if args.player_stats:
         P = int(np.asarray(pt["stats"]).shape[0])
