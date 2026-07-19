@@ -63,7 +63,33 @@ def _build_player_table(pitches) -> dict:
     pa_count = np.maximum(stats[:, 4:5], 1)
     stats[:, :4] /= pa_count
 
+    # Per-player modal handedness for the simulator + the hand embedding.
+    # bat_hand: modal batting side (stand); pit_hand: modal throw hand (p_throws).
+    # R=1, L=0, unknown=0.5 (a batter who never appears keeps 0.5).
+    bat_hand = np.full(P, 0.5, dtype=np.float32)
+    pit_hand = np.full(P, 0.5, dtype=np.float32)
+    bat_hand_col = "batter_hand" if "batter_hand" in terminal.columns else "stand"
+    pit_hand_col = "pitcher_hand" if "pitcher_hand" in terminal.columns else "p_throws"
+    if bat_hand_col in terminal.columns:
+        m = (terminal.group_by(batter_col)
+             .agg((pl.col(bat_hand_col) == "R").mean().alias("r")))
+        for row in m.iter_rows(named=True):
+            i = id_to_idx.get(int(row[batter_col]), None)
+            if i is not None and row["r"] is not None:
+                bat_hand[i] = 1.0 if row["r"] >= 0.5 else 0.0
+    if pit_hand_col in terminal.columns:
+        m = (terminal.group_by(pitcher_col)
+             .agg((pl.col(pit_hand_col) == "R").mean().alias("r")))
+        for row in m.iter_rows(named=True):
+            i = id_to_idx.get(int(row[pitcher_col]), None)
+            if i is not None and row["r"] is not None:
+                pit_hand[i] = 1.0 if row["r"] >= 0.5 else 0.0
+    # hand embedding input (int 0/1): pitchers use throw hand, else batting side.
+    hand = np.where(pit_hand != 0.5, pit_hand, bat_hand)
+    hand = (hand >= 0.5).astype(np.int32)
+
     return {"stats": stats, "league": league, "hand": hand,
+            "bat_hand": bat_hand, "pit_hand": pit_hand,
             "id_to_idx": id_to_idx, "all_ids": all_ids}
 
 
@@ -162,6 +188,9 @@ def main() -> None:
     parser.add_argument("--fatigue", action="store_true",
                         help="Phase-4: add pitcher cumulative game pitch count to the model "
                              "context (STATE_DIM 8 -> 9). Fresh train (changes context dim).")
+    parser.add_argument("--platoon", action="store_true",
+                        help="Add batter side + pitcher throw hand (real per-PA stand/p_throws) "
+                             "to the context (+2 dims). Fresh train (changes context dim).")
     parser.add_argument("--tag", type=str, default=None,
                         help="Checkpoint/log dir tag override (e.g. v6).")
     args = parser.parse_args()
@@ -211,6 +240,8 @@ def main() -> None:
         _mkw["outcome_only"] = True
     if args.fatigue:
         _mkw["fatigue"] = True
+    if args.platoon:
+        _mkw["platoon"] = True
     model_fn = partial(pa_model, **_mkw) if _mkw else pa_model
 
     svi_state, guide, losses = train(

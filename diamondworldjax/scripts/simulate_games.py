@@ -97,7 +97,7 @@ RECAL_VECS = {"v6": RECAL_V6, "v9": RECAL_V9, "v10": RECAL_V10}
 def simulate(
     model_fn, params, pt, games, rng_key,
     shift=1.0, clock=1.0, recal=False, recal_scale=1.0, recal_vec=RECAL_V6,
-    fixed_nine=False, no_bullpen=False, seed=0,
+    fixed_nine=False, no_bullpen=False, seed=0, platoon=False, recal_temp=1.0,
 ):
     """Vectorized simulation across all games with real game structure.
 
@@ -209,13 +209,16 @@ def simulate(
                 "pitch_count_game": jnp.array(
                     np.clip(ps["pa"][idx] * PITCHES_PER_PA / 120.0, 0, 1.5)[:, None], jnp.float32),
             }
+            if platoon:
+                tb["bat_side"] = jnp.array(pt["bat_hand"][batter][:, None], jnp.float32)
+                tb["pit_hand"] = jnp.array(pt["pit_hand"][pitcher][:, None], jnp.float32)
             rng_key, k = jax.random.split(rng_key)
             with nh.seed(rng_seed=k):
                 with nh.substitute(data=params):
                     with nh.trace() as tr:
                         model_fn(tb, pt, teacher_force=False)
             if recal:
-                logits = np.array(tr["pa_outcome"]["fn"].logits)[:, 0, :] + recal_scale * recal_vec
+                logits = (np.array(tr["pa_outcome"]["fn"].logits)[:, 0, :] + recal_scale * recal_vec) / recal_temp
                 oc = np.argmax(logits + rng_np.gumbel(size=logits.shape), axis=-1).astype(np.int64)
             else:
                 oc = np.array(tr["pa_outcome"]["value"])[:, 0].astype(np.int64)
@@ -320,10 +323,19 @@ def main() -> None:
     ap.add_argument("--recal-scale", type=float, default=0.3,
                     help="Pinned v6-final calibration strength (0.3 matches the FULL test-set "
                          "run rate: 8.81 vs 8.86 real. 0.4 was tuned on a biased subset).")
+    ap.add_argument("--recal-file", type=Path, default=None,
+                    help="Load a fitted per-class recal vector from npz (overrides --recal-version). "
+                         "Key set by --recal-key (default 'b'). From fit_calibration.py.")
+    ap.add_argument("--recal-key", type=str, default="b",
+                    help="Array key in --recal-file to use as the recal vector (e.g. b, b_heur).")
+    ap.add_argument("--recal-temp", type=float, default=1.0,
+                    help="Temperature for learned calibration: logits=(logits+scale*vec)/T.")
     ap.add_argument("--fixed-nine", action="store_true",
                     help="Legacy v1 structure: fixed 9 innings, no walk-offs/extras.")
     ap.add_argument("--no-bullpen", action="store_true",
                     help="Legacy v1 pitching: the starter pitches the whole game.")
+    ap.add_argument("--platoon", action="store_true",
+                    help="Feed batter side + pitcher throw hand (v11+ platoon models).")
     ap.add_argument("--use-park", action="store_true",
                     help="Feed real park indices (v9+ checkpoints trained with the "
                          "park_idx fix; pre-v9 park embeddings trained on all-zeros).")
@@ -371,19 +383,30 @@ def main() -> None:
     print(f"  {len(games)} games usable", flush=True)
 
     pt = {"stats": jnp.array(ptab["stats"]), "league": jnp.array(ptab["league"]),
-          "hand": jnp.array(ptab["hand"]), "_engine": engine, "_hook_dists": hook_dists}
+          "hand": jnp.array(ptab["hand"]),
+          "bat_hand": np.asarray(ptab["bat_hand"]), "pit_hand": np.asarray(ptab["pit_hand"]),
+          "_engine": engine, "_hook_dists": hook_dists}
     mkw = {}
     if args.outcome_only:
         mkw["outcome_only"] = True
     if args.fatigue:
         mkw["fatigue"] = True
+    if args.platoon:
+        mkw["platoon"] = True
     model_fn = partial(pa_model, **mkw) if mkw else pa_model
+
+    if args.recal_file is not None:
+        _recal_vec = np.load(args.recal_file)[args.recal_key].astype(np.float64)
+        print(f"  recal from {args.recal_file} [{args.recal_key}] T={args.recal_temp}", flush=True)
+    else:
+        _recal_vec = RECAL_VECS[args.recal_version]
 
     t0 = time.time()
     res = simulate(
         model_fn, params, pt, games, jax.random.PRNGKey(args.seed),
-        recal=args.recal, recal_scale=args.recal_scale, recal_vec=RECAL_VECS[args.recal_version],
+        recal=args.recal, recal_scale=args.recal_scale, recal_vec=_recal_vec,
         fixed_nine=args.fixed_nine, no_bullpen=args.no_bullpen, seed=args.seed,
+        platoon=args.platoon, recal_temp=args.recal_temp,
     )
     away, home, total = res["away"], res["home"], res["away"] + res["home"]
     G = len(games)

@@ -79,6 +79,8 @@ def main() -> None:
     parser.add_argument("--use-park", action="store_true",
                         help="Rebuild real park indices for the park-aware model (v9+). Leave OFF "
                              "for pre-v9 checkpoints, which trained on park_idx=0 (all-zeros).")
+    parser.add_argument("--platoon", action="store_true",
+                        help="Model trained with platoon (batter side + pitcher hand), v11+.")
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
 
@@ -120,12 +122,16 @@ def main() -> None:
 
     # --- Simulated per-batter outcome counts (conditioned sampling) ---
     pt = {"stats": jnp.array(ptab["stats"]), "league": jnp.array(ptab["league"]),
-          "hand": jnp.array(ptab["hand"])}
+          "hand": jnp.array(ptab["hand"]),
+          "bat_hand": jnp.array(ptab.get("bat_hand", np.full(len(ptab["hand"]), 0.5, np.float32))),
+          "pit_hand": jnp.array(ptab.get("pit_hand", np.full(len(ptab["hand"]), 0.5, np.float32)))}
     _mkw = {}
     if args.outcome_only:
         _mkw["outcome_only"] = True
     if args.fatigue:
         _mkw["fatigue"] = True
+    if args.platoon:
+        _mkw["platoon"] = True
     model_fn = partial(pa_model, **_mkw) if _mkw else pa_model
 
     sim_counts = np.zeros((P, 9), dtype=np.float64)

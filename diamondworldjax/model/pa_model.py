@@ -103,6 +103,7 @@ def pa_model(
     teacher_force: bool = True,
     outcome_only: bool = False,
     fatigue: bool = False,
+    platoon: bool = False,
 ) -> None:
     B, T = batch["pa_valid"].shape
     P    = player_table["stats"].shape[0]
@@ -136,7 +137,15 @@ def pa_model(
         # Phase-4: pitcher cumulative game pitch count (normalised). The single
         # biggest missing real effect — starters fade as the count climbs.
         state_feats.append(batch["pitch_count_game"])
-    game_state = jnp.stack(state_feats, axis=-1)  # (B, T, 8 or 9)
+    if platoon:
+        # Platoon: batter side and pitcher throw hand (R=1, L=0), per PA. The
+        # (bat_side, pit_hand) pair lets the head learn the platoon interaction
+        # directly (incl. its L/R asymmetry) instead of extracting it from two
+        # 32-dim player embeddings; bat_side is the real per-PA side, correct
+        # for switch hitters.
+        state_feats.append(batch["bat_side"])
+        state_feats.append(batch["pit_hand"])
+    game_state = jnp.stack(state_feats, axis=-1)  # (B, T, 8..11)
 
     context  = jnp.concatenate([game_state, pitcher_z, batter_z, park_emb], axis=-1)  # (B, T, 144/145)
     dummy_oh = jnp.zeros((B, T, N_PA_OUTCOMES))

@@ -48,6 +48,8 @@ def build_pa_batch(pa_df: pl.DataFrame, max_pa: int = MAX_PA) -> dict:
     arr_batter_ids   = _i(0)
     arr_park_ids     = _i(0)
     arr_pitch_count  = _f()   # Phase-4 fatigue: pitcher's cumulative game pitch count
+    arr_bat_side     = _f()   # platoon: batter side this PA (R=1, L=0); 0.5 unknown
+    arr_pit_hand     = _f()   # platoon: pitcher throw hand (R=1, L=0); 0.5 unknown
 
     raw_inning   = _col("inning", 1.0)
     raw_half     = _col("half_bin", 0.0)
@@ -66,6 +68,20 @@ def build_pa_batch(pa_df: pl.DataFrame, max_pa: int = MAX_PA) -> dict:
     raw_bsa      = _col("base_state_after", 0.0)
     raw_pc_game  = _col("pitch_count_game", 0.0)
     raw_at_bat   = _col("at_bat_number", 0.0)
+
+    def _hand_col(*names):
+        # 'R'/'L' strings; encode R=1.0, L=0.0, unknown=0.5. DWJAX schema renames
+        # raw stand/p_throws -> batter_hand/pitcher_hand (try both).
+        for name in names:
+            if name in pa_df.columns:
+                s = pa_df[name].to_numpy()
+                out = np.full(len(pa_df), 0.5, dtype=np.float32)
+                out[s == "R"] = 1.0
+                out[s == "L"] = 0.0
+                return out
+        return np.full(len(pa_df), 0.5, dtype=np.float32)
+    raw_bat_side = _hand_col("batter_hand", "stand")
+    raw_pit_hand = _hand_col("pitcher_hand", "p_throws")
     raw_pitcher  = (_col("pitcher_id") if "pitcher_id" in pa_df.columns
                     else _col("pitcher_idx"))
     raw_batter   = (_col("batter_id")  if "batter_id"  in pa_df.columns
@@ -100,6 +116,8 @@ def build_pa_batch(pa_df: pl.DataFrame, max_pa: int = MAX_PA) -> dict:
         _ff(arr_shift,      raw_shift)
         _ff(arr_clock,      raw_clock)
         _ff(arr_pitch_count, raw_pc_game, scale=120.0)  # ~120 = typical starter pull point
+        _ff(arr_bat_side,   raw_bat_side)
+        _ff(arr_pit_hand,   raw_pit_hand)
         _fi(arr_pa_outcome, raw_pao, fill=-1)
         _fi(arr_runs_scored, raw_runs)
         _fi(arr_bs_after,   raw_bsa)
@@ -121,6 +139,8 @@ def build_pa_batch(pa_df: pl.DataFrame, max_pa: int = MAX_PA) -> dict:
         "runs_scored":      jnp.array(arr_runs_scored),
         "base_state_after": jnp.array(arr_bs_after),
         "pitch_count_game": jnp.array(arr_pitch_count),
+        "bat_side":         jnp.array(arr_bat_side),
+        "pit_hand":         jnp.array(arr_pit_hand),
         "pitcher_ids":      jnp.array(arr_pitcher_ids),
         "batter_ids":       jnp.array(arr_batter_ids),
         "park_ids":         jnp.array(arr_park_ids),

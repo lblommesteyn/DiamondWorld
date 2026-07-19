@@ -41,12 +41,19 @@ def main() -> None:
     parser.add_argument("--use-park", action="store_true",
                         help="Rebuild real park indices for the park-aware model (v9+). Leave OFF "
                              "for pre-v9 checkpoints, which trained on park_idx=0 (all-zeros).")
+    parser.add_argument("--platoon", action="store_true",
+                        help="Model trained with platoon (batter side + pitcher hand), v11+.")
+    parser.add_argument("--dump-logits", type=Path, default=None,
+                        help="Save per-PA (logits, real_outcome) over valid PAs to npz for "
+                             "learned calibration (fit_calibration.py).")
     args = parser.parse_args()
     mkw = {}
     if args.outcome_only:
         mkw["outcome_only"] = True
     if args.fatigue:
         mkw["fatigue"] = True
+    if args.platoon:
+        mkw["platoon"] = True
     model_fn = partial(pa_model, **mkw) if mkw else pa_model
 
     with open(args.ckpt, "rb") as f:
@@ -74,9 +81,13 @@ def main() -> None:
 
     # Sample model outcomes on real (conditioned) states, several batches.
     game_ids = test_pa["game_pk"].unique().to_numpy()[:512]
-    pt = {"stats": jnp.array(ptab["stats"]), "league": jnp.array(ptab["league"]), "hand": jnp.array(ptab["hand"])}
+    pt = {"stats": jnp.array(ptab["stats"]), "league": jnp.array(ptab["league"]),
+          "hand": jnp.array(ptab["hand"]),
+          "bat_hand": jnp.array(ptab.get("bat_hand", np.full(len(ptab["hand"]), 0.5, np.float32))),
+          "pit_hand": jnp.array(ptab.get("pit_hand", np.full(len(ptab["hand"]), 0.5, np.float32)))}
     rng = jax.random.PRNGKey(0)
     model_hist = np.zeros(len(PA_OUTCOMES))
+    dump_logits, dump_real = [], []
     for i in range(0, len(game_ids), 64):
         chunk = game_ids[i:i+64]
         df = test_pa.filter(pl.col("game_pk").is_in(chunk.tolist()))
@@ -90,7 +101,20 @@ def main() -> None:
         oc = np.array(tr["pa_outcome"]["value"])
         for j in range(len(PA_OUTCOMES)):
             model_hist[j] += ((oc == j) & valid).sum()
+        if args.dump_logits is not None:
+            lg = np.array(tr["pa_outcome"]["fn"].logits)  # (B, T, 9)
+            ro = np.array(batch["pa_outcome"])            # (B, T) real outcome idx, -1 pad
+            vm = valid & (ro >= 0)
+            dump_logits.append(lg[vm])
+            dump_real.append(ro[vm])
     model_hist /= model_hist.sum()
+
+    if args.dump_logits is not None:
+        L = np.concatenate(dump_logits, axis=0)
+        Y = np.concatenate(dump_real, axis=0).astype(np.int64)
+        args.dump_logits.parent.mkdir(parents=True, exist_ok=True)
+        np.savez(args.dump_logits, logits=L, real=Y)
+        print(f"dumped {len(Y)} PA logits -> {args.dump_logits}", flush=True)
 
     print(f"\n{'outcome':8s} {'real%':>8s} {'model%':>8s} {'ratio':>7s}", flush=True)
     for j, name in enumerate(PA_OUTCOMES):

@@ -48,7 +48,7 @@ def extract_games(test_pa: pl.DataFrame, id_to_idx: dict, park_map: dict | None 
     games = []
     df = test_pa.sort(["game_pk", "at_bat_number"])
     for gid, gdf in df.group_by("game_pk", maintain_order=True):
-        rec = {}
+        rec = {"game_pk": int(gid[0] if isinstance(gid, tuple) else gid)}
         ok = True
         for half, batting, fielding in [(0, "away", "home"), (1, "home", "away")]:
             h = gdf.filter(pl.col("half_bin") == half)
