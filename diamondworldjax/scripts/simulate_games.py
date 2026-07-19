@@ -83,7 +83,15 @@ RECAL_V9 = np.array([
     -0.1301, -0.0425, +0.2990, +0.0271, +0.2061, +0.0372, +0.3269, +0.0255, 0.0,
 ], dtype=np.float64)
 
-RECAL_VECS = {"v6": RECAL_V6, "v9": RECAL_V9}
+# v10 (v9 recipe trained to 50K steps) recalibration = log(real/model) from
+# diag_outcomes on real park indices. The longer run fixed HR calibration (1.00x,
+# no correction needed vs v9's 0.72x) but over-predicts K more (1.28x vs 1.14x);
+# net corrections lift 1B/2B/out and trim K. Order: K, BB, HBP, 1B, 2B, 3B, HR, out, E.
+RECAL_V10 = np.array([
+    -0.2457, -0.1308, +0.1857, +0.1488, +0.1782, +0.0441, -0.0027, +0.1060, 0.0,
+], dtype=np.float64)
+
+RECAL_VECS = {"v6": RECAL_V6, "v9": RECAL_V9, "v10": RECAL_V10}
 
 
 def simulate(

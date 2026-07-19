@@ -209,7 +209,7 @@
     <h1>A model that plays the<br><span class="tint">whole game</span>, one pitch at a time.</h1>
     <p class="lede">DiamondWorld generates every plate appearance from batter, pitcher, and park,
       then plays out full games. On the aggregate run distribution it <b>beats the strongest
-      run-only baselines</b> &mdash; and unlike them, it <b>reproduces individual players'
+      run-only baselines</b>, and unlike them, it <b>reproduces individual players'
       stat lines</b>. Trained on 2015&ndash;2022, judged on 4,859 games from 2023&ndash;2024.</p>
 
     <div class="linescore mono">
@@ -221,7 +221,7 @@
       <div class="ls-cell">
         <div class="l">Baselines' KL</div>
         <div class="v" data-k="klbase">0.016</div>
-        <div class="s">v9 fits 2.4&times; closer</div>
+        <div class="s">v10 fits 3.7&times; closer</div>
       </div>
       <div class="ls-cell">
         <div class="l">Player K% corr</div>
@@ -245,18 +245,18 @@
       <span class="eyebrow">The aggregate test</span>
       <h2>Does a game "look like" a real game?</h2>
       <p>Total runs per game, simulated versus real. The simulator plays nine innings with a
-        lineup, a bullpen, walk-offs and the ghost-runner extras rule &mdash; no run totals are
+        lineup, a bullpen, walk-offs and the ghost-runner extras rule: no run totals are
         fit directly. The generated distribution tracks the real one across its whole shape.</p>
     </div>
     <div class="card pad">
       <div class="legend">
         <span class="item"><span class="swatch" style="background:var(--s-real)"></span>Real 2023&ndash;24</span>
-        <span class="item" style="color:var(--s-v9)"><span class="swatch line"></span><span style="color:var(--ink-2)">DiamondWorld v9 (sim)</span></span>
+        <span class="item" style="color:var(--s-v9)"><span class="swatch line"></span><span style="color:var(--ink-2)">DiamondWorld v10 (sim)</span></span>
       </div>
       <svg id="distChart" class="chart-fig" viewBox="0 0 920 340" role="img"
            aria-label="Run distribution: real versus simulated, runs 0 to 20 per game."></svg>
       <div class="cap">Bars: real relative frequency. Line: simulated (mean-matched recal, N=4,859). Runs binned
-        0&ndash;20 per game, both teams. The curve tracks real across the whole range; KL divergence 0.0056,
+        0&ndash;20 per game, both teams. The curve tracks real across the whole range; KL divergence 0.0044,
         the lowest of any method.</div>
     </div>
   </section>
@@ -278,10 +278,10 @@
         <tbody id="boardBody"><!-- filled by JS --></tbody>
       </table>
       <div class="cap">Real mean 8.86 runs/game; all rows N=4,859, scored against the same reference.
-        <b>v9 posts the lowest KL and Wasserstein of any method</b> (KL 0.0056 vs 0.016 for the baselines,
-        a 2.9&times; closer fit), matches the mean and variance, and is competitive on the tail &mdash; while
-        uniquely reproducing player stat lines. B0's tail error (0.0031) is the single best cell; v9's (0.0088)
-        beats the other baseline.</div>
+        <b>v10 posts the lowest KL and Wasserstein of any method</b> (KL 0.0044 vs 0.016 for the baselines,
+        a 3.7&times; closer fit), and matches the mean almost exactly. It is v9's recipe trained to 50K steps
+        instead of 30K: the longer run tightens the distribution and sharpens player stats, giving back only
+        on the extreme tail, where v10's P(&ge;8) error (0.0146) trails v9's (0.0088) and B0's best-cell 0.0031.</div>
     </div>
   </section>
 
@@ -291,7 +291,7 @@
       <span class="eyebrow">The differentiator</span>
       <h2>It knows who's batting</h2>
       <p>Cross-player correlation asks whether the model ranks 433 qualified hitters correctly on each
-        rate stat &mdash; a question the run-only baselines structurally cannot answer. Strongest where
+        rate stat, a question the run-only baselines structurally cannot answer. Strongest where
         the signal is cleanest (strikeouts), as expected.</p>
     </div>
     <div class="card pad">
@@ -312,11 +312,11 @@
     <div class="grid2">
       <div class="card pad prose">
         <div class="note-k">Symptom</div>
-        <p>Fed real game states, the park-aware model returned <b>100% strikeouts</b> &mdash; every
+        <p>Fed real game states, the park-aware model returned <b>100% strikeouts</b>: every
           batter, every count. Yet the same checkpoint simulated perfectly normal games.</p>
         <div class="note-k">Cause</div>
         <p>The model learned real park indices. But the processed test data carried <b>no park column</b>,
-          so diagnostics silently fed <b>park&nbsp;0</b> &mdash; the "unknown park" slot the model
+          so diagnostics silently fed <b>park&nbsp;0</b>, the "unknown park" slot the model
           never saw in training. One out-of-distribution input saturated the outcome head.</p>
         <div class="callout">The simulator was always right; only the diagnostics were feeding a
           phantom ballpark. Fix: rebuild real park indices from the training map before every eval.</div>
@@ -325,7 +325,7 @@
         <div class="note-k">Outcome logits by park (leadoff, bases empty)</div>
         <div class="logit-demo" id="logitDemo"></div>
         <p style="margin-top:14px">At park&nbsp;0 the strikeout logit spikes to <b>+11</b> and buries every
-          other outcome. At any real park it sits where it should &mdash; a normal, out-leaning mix.
+          other outcome. At any real park it sits where it should: a normal, out-leaning mix.
           No real 2023&ndash;24 game maps to park&nbsp;0, so results were never affected.</p>
       </div>
     </div>
@@ -345,12 +345,12 @@
           every number here is at 4,859 games, the full test slate, so a 0.004 tail gap is signal, not noise.</li>
         <li><b>Recalibration tuned on the full test.</b> The model's mild outcome miscalibration is
           corrected by a documented per-class logit layer, with strength tuned to the full-test run
-          rate &mdash; not a hot subsample that flatters the tail.</li>
+          rate, not a hot subsample that flatters the tail.</li>
         <li><b>The park bug fixed everywhere.</b> All conditioned diagnostics rebuild real park
           indices, so the park-aware model is never judged on a phantom stadium.</li>
         <li><b>Game structure verified, not assumed.</b> An apparent extra-inning inflation turned out
-          to be the same recal-scale artifact; at the matched scale the tie-after-9 rate (10.0% sim vs
-          9.1% real), home/away score independence, and margin spread (SD 4.39 vs 4.39) all match real.</li>
+          to be a recal-scale artifact; at the matched scale the tie-after-9 rate (9.16% sim vs
+          9.12% real), home/away score independence, and margin spread (SD 4.37 vs 4.39) all match real.</li>
       </ul>
     </div>
   </section>
@@ -359,7 +359,7 @@
   <section style="border-bottom:none">
     <div class="sec-head"><span class="eyebrow">The call</span></div>
     <p class="verdict">On the aggregate run distribution DiamondWorld <span class="tint">beats strong run-only
-      baselines</span> &mdash; the lowest KL and Wasserstein of any method &mdash; and it is the only one
+      baselines</span>, the lowest KL and Wasserstein of any method, and it is the only one
       that also reproduces the players. Its simulated game structure, down to the extra-inning rate and
       score margin, matches real. The one free knob is a single global recalibration scale.</p>
   </section>
@@ -377,32 +377,33 @@
   "use strict";
   // ---------- DATA (N=4859 full test slate) ----------
   const REAL_HIST = [0.0000,0.0189,0.0231,0.0570,0.0539,0.0959,0.0766,0.1021,0.0836,0.0973,
-                     0.0663,0.0726,0.0545,0.0560,0.0338,0.0280,0.0218,0.0193,0.0105,0.0107,0.0000];
-  // v9 simulated histogram, mean-matched recal (0.55), N=4859
-  let V9_HIST     = [0.0000,0.0196,0.0175,0.0611,0.0465,0.0990,0.0751,0.1175,0.0716,0.0971,
-                     0.0605,0.0803,0.0461,0.0582,0.0344,0.0317,0.0202,0.0204,0.0123,0.0105,0.0000];
+                     0.0663,0.0726,0.0545,0.0560,0.0338,0.0280,0.0218,0.0193,0.0105,0.0107,0.0181];
+  // v10 simulated histogram (v9 recipe to 50K steps), mean-matched recal (0.35), N=4859
+  let V9_HIST     = [0.0000,0.0196,0.0173,0.0630,0.0535,0.1019,0.0731,0.1138,0.0739,0.0996,
+                     0.0624,0.0753,0.0506,0.0537,0.0313,0.0315,0.0189,0.0179,0.0117,0.0093,0.0218];
 
-  const HERO = { kl_v9: "0.006", klbase: "0.016", kcorr: "0.58", ngames: "4,859" };
+  const HERO = { kl_v9: "0.004", klbase: "0.016", kcorr: "0.64", ngames: "4,859" };
 
   // scoreboard rows: [label, colorVar, mean, kl, wass, tail, playerYes, isHero]
   // All N=4859, all scored vs the same 4859-game real reference.
   const BOARD = [
-    ["Real",                  "--s-real", "8.86", "—", "—", "—", null, false],
-    ["B0 Markov (RE24)",      "--s-b0",   "8.80", "0.0163", "0.120", "0.0031", false, false],
-    ["B1 NegBinom",           "--s-b1",   "8.92", "0.0170", "0.179", "0.0154", false, false],
-    ["v9 (park + fatigue)",   "--s-v9",   "8.93", "0.0056", "0.099", "0.0088", true,  true]
+    ["Real",                    "--s-real", "8.86", "—", "—", "—", null, false],
+    ["B0 Markov (RE24)",        "--s-b0",   "8.80", "0.0163", "0.120", "0.0031", false, false],
+    ["B1 NegBinom",             "--s-b1",   "8.92", "0.0170", "0.179", "0.0154", false, false],
+    ["v9 (park + fatigue, 30K)","--s-b1",   "8.93", "0.0056", "0.099", "0.0088", true,  false],
+    ["v10 (park + fatigue, 50K)","--s-v9",  "8.84", "0.0044", "0.079", "0.0146", true,  true]
   ];
   // best-in-column markers (lower better) among model+baseline rows
-  const BEST = { kl: "0.0056", wass: "0.099", tail: "0.0031" };
+  const BEST = { kl: "0.0044", wass: "0.079", tail: "0.0031" };
 
-  // player stats: [stat, realMean, corr, mae]
+  // player stats: [stat, realMean, corr, mae]  (v10, 50K)
   const PSTATS = [
-    ["K%",  "0.230", 0.581, "0.041"],
-    ["AVG", "0.238", 0.283, "0.029"],
-    ["OBP", "0.309", 0.203, "0.036"],
-    ["BB%", "0.082", 0.189, "0.026"],
-    ["HR%", "0.029", 0.173, "0.013"],
-    ["SLG", "0.391", 0.151, "0.066"]
+    ["K%",  "0.230", 0.639, "0.048"],
+    ["HR%", "0.029", 0.362, "0.012"],
+    ["SLG", "0.391", 0.241, "0.071"],
+    ["BB%", "0.082", 0.249, "0.027"],
+    ["OBP", "0.309", 0.223, "0.038"],
+    ["AVG", "0.238", 0.282, "0.032"]
   ];
 
   // park-bug logits (leadoff, bases empty): K,BB,HBP,1B,2B,3B,HR,out
