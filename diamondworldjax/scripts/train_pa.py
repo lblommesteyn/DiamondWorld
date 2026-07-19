@@ -27,12 +27,21 @@ TRAIN_SEASONS = list(range(2015, 2023))
 DEFAULT_F_PLAYER = 16
 
 
-def _build_player_table(pitches) -> dict:
+def _build_player_table(pitches, recency_halflife: float | None = None) -> dict:
+    """Build the per-player stat/handedness table.
+
+    recency_halflife (seasons): if set, each PA's contribution to a player's rate
+    stats is weighted 0.5 ** ((max_season - season) / halflife), so recent form
+    dominates. A leakage-free "current-season" prior: the most recent TRAINING
+    season (2022) is weighted highest as the best proxy for 2023-24 talent. None =
+    uniform (pooled 2015-2022), the v6..v11 behavior.
+    """
     import polars as pl
 
     terminal = pitches.filter(pl.col("pa_terminal"))
     pitcher_col = "pitcher_id" if "pitcher_id" in pitches.columns else "pitcher_idx"
     batter_col  = "batter_id"  if "batter_id"  in pitches.columns else "batter_idx"
+    max_season = int(terminal["season"].max()) if "season" in terminal.columns else 0
 
     all_ids = np.unique(np.concatenate([
         pitches[pitcher_col].to_numpy(),
@@ -50,15 +59,19 @@ def _build_player_table(pitches) -> dict:
             bid  = row.get(batter_col, 0)
             bidx = id_to_idx.get(int(bid), 0)
             outcome = row.get("pa_outcome", "")
+            if recency_halflife:
+                w = 0.5 ** ((max_season - int(row.get("season", max_season))) / recency_halflife)
+            else:
+                w = 1.0
             if outcome in ("1B", "2B", "3B", "HR"):
-                stats[bidx, 0] += 1
+                stats[bidx, 0] += w
             if outcome in ("BB", "HBP"):
-                stats[bidx, 1] += 1
+                stats[bidx, 1] += w
             if outcome == "K":
-                stats[bidx, 2] += 1
+                stats[bidx, 2] += w
             if outcome == "HR":
-                stats[bidx, 3] += 1
-            stats[bidx, 4] += 1
+                stats[bidx, 3] += w
+            stats[bidx, 4] += w
 
     pa_count = np.maximum(stats[:, 4:5], 1)
     stats[:, :4] /= pa_count
@@ -191,6 +204,9 @@ def main() -> None:
     parser.add_argument("--platoon", action="store_true",
                         help="Add batter side + pitcher throw hand (real per-PA stand/p_throws) "
                              "to the context (+2 dims). Fresh train (changes context dim).")
+    parser.add_argument("--recency-halflife", type=float, default=None,
+                        help="Recency-weight player rate stats by season (half-life in seasons). "
+                             "Leakage-free current-form prior. Eval scripts must pass the same.")
     parser.add_argument("--tag", type=str, default=None,
                         help="Checkpoint/log dir tag override (e.g. v6).")
     args = parser.parse_args()
@@ -217,7 +233,7 @@ def main() -> None:
     print(f"  {len(pitches):,} pitches loaded.", flush=True)
 
     print("Building player table...", flush=True)
-    player_table_np = _build_player_table(pitches)
+    player_table_np = _build_player_table(pitches, recency_halflife=args.recency_halflife)
     print(f"  {len(player_table_np['all_ids']):,} unique players.", flush=True)
 
     print("Filtering to PA-terminal rows...", flush=True)
