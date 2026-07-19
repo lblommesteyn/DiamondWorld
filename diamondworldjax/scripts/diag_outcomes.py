@@ -43,6 +43,8 @@ def main() -> None:
                              "for pre-v9 checkpoints, which trained on park_idx=0 (all-zeros).")
     parser.add_argument("--platoon", action="store_true",
                         help="Model trained with platoon (batter side + pitcher hand), v11+.")
+    parser.add_argument("--recency-halflife", type=float, default=None,
+                        help="Match a recency-trained model (v12+): same half-life as training.")
     parser.add_argument("--dump-logits", type=Path, default=None,
                         help="Save per-PA (logits, real_outcome) over valid PAs to npz for "
                              "learned calibration (fit_calibration.py).")
@@ -60,7 +62,7 @@ def main() -> None:
         params = pickle.load(f)["params"]
 
     train_pitches = load_seasons(TRAIN, data_root=processed_root())
-    ptab = _build_player_table(train_pitches)
+    ptab = _build_player_table(train_pitches, recency_halflife=args.recency_halflife)
     # Rebuild the park_id -> park_idx map from the training seasons. The processed
     # test parquet has no park_idx column, so build_pa_batch would otherwise fill 0
     # for every PA -- and park index 0 ("unknown park") is out-of-distribution for

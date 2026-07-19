@@ -98,6 +98,7 @@ def simulate(
     model_fn, params, pt, games, rng_key,
     shift=1.0, clock=1.0, recal=False, recal_scale=1.0, recal_vec=RECAL_V6,
     fixed_nine=False, no_bullpen=False, seed=0, platoon=False, recal_temp=1.0,
+    skill_mode="prior",
 ):
     """Vectorized simulation across all games with real game structure.
 
@@ -107,6 +108,19 @@ def simulate(
     import jax
     import jax.numpy as jnp
     import numpyro.handlers as nh
+
+    # Skill handling: the SVI player-skill latent collapsed to the prior
+    # (player_mu ~ 0, player_sigma ~ 1), so by default the model samples it from
+    # N(0,1) at eval (aleatoric noise). "mean" substitutes player_mu (~0),
+    # removing that noise; "sample" draws once from the posterior. Player signal
+    # otherwise lives entirely in the deterministic rate-stat encoder.
+    params = dict(params)
+    if skill_mode in ("mean", "sample") and "player_mu" in params:
+        mu = np.asarray(params["player_mu"])
+        if skill_mode == "sample":
+            sig = np.asarray(params.get("player_sigma", np.ones_like(mu)))
+            mu = mu + sig * np.random.default_rng(seed).standard_normal(mu.shape)
+        params["player_skills"] = jnp.asarray(mu)
 
     G = len(games)
     away_lineup = np.array([g["away_lineup"] for g in games], dtype=np.int64)  # (G,9)
@@ -330,6 +344,11 @@ def main() -> None:
                     help="Array key in --recal-file to use as the recal vector (e.g. b, b_heur).")
     ap.add_argument("--recal-temp", type=float, default=1.0,
                     help="Temperature for learned calibration: logits=(logits+scale*vec)/T.")
+    ap.add_argument("--skill-mode", choices=["prior", "mean", "sample"], default="prior",
+                    help="Latent skill at eval: prior=sample N(0,1) (default, legacy); "
+                         "mean=use posterior mean player_mu; sample=one posterior draw.")
+    ap.add_argument("--recency-halflife", type=float, default=None,
+                    help="Match a recency-trained model (v12+): same half-life as training.")
     ap.add_argument("--fixed-nine", action="store_true",
                     help="Legacy v1 structure: fixed 9 innings, no walk-offs/extras.")
     ap.add_argument("--no-bullpen", action="store_true",
@@ -356,7 +375,7 @@ def main() -> None:
     with open(args.ckpt, "rb") as f:
         params = pickle.load(f)["params"]
     train_pitches = load_seasons(TRAIN, data_root=processed_root())
-    ptab = _build_player_table(train_pitches)
+    ptab = _build_player_table(train_pitches, recency_halflife=args.recency_halflife)
     park_map = _build_park_index(train_pitches) if args.use_park else None
     train_pa = train_pitches.filter(pl.col("pa_terminal"))
     engine = EmpiricalEngine().fit(train_pa)
@@ -406,7 +425,7 @@ def main() -> None:
         model_fn, params, pt, games, jax.random.PRNGKey(args.seed),
         recal=args.recal, recal_scale=args.recal_scale, recal_vec=_recal_vec,
         fixed_nine=args.fixed_nine, no_bullpen=args.no_bullpen, seed=args.seed,
-        platoon=args.platoon, recal_temp=args.recal_temp,
+        platoon=args.platoon, recal_temp=args.recal_temp, skill_mode=args.skill_mode,
     )
     away, home, total = res["away"], res["home"], res["away"] + res["home"]
     G = len(games)

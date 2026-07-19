@@ -81,6 +81,8 @@ def main() -> None:
                              "for pre-v9 checkpoints, which trained on park_idx=0 (all-zeros).")
     parser.add_argument("--platoon", action="store_true",
                         help="Model trained with platoon (batter side + pitcher hand), v11+.")
+    parser.add_argument("--recency-halflife", type=float, default=None,
+                        help="Match a recency-trained model (v12+): same half-life as training.")
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
 
@@ -94,7 +96,7 @@ def main() -> None:
         params = pickle.load(f)["params"]
 
     train_pitches = load_seasons(TRAIN_SEASONS, data_root=processed_root())
-    ptab = _build_player_table(train_pitches)
+    ptab = _build_player_table(train_pitches, recency_halflife=args.recency_halflife)
     # Real park indices (0 = unknown park is OOD for v9+, which collapses to all-K);
     # the test parquet lacks park_idx, so materialise it from the train park map.
     # Opt-in: pre-v9 checkpoints trained on park_idx=0 and must keep seeing it.

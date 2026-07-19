@@ -105,6 +105,11 @@ def main() -> None:
                     help="Games per batched simulate() call (games*replicas rows).")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--lines", type=str, default="6.5,7.5,8.5,9.5,10.5")
+    ap.add_argument("--recal-file", type=Path, default=None,
+                    help="Load fitted recal vector from npz (overrides --recal-version).")
+    ap.add_argument("--recal-key", type=str, default="b")
+    ap.add_argument("--recal-temp", type=float, default=1.0)
+    ap.add_argument("--recency-halflife", type=float, default=None)
     ap.add_argument("--out", type=Path, default=None)
     args = ap.parse_args()
 
@@ -114,7 +119,7 @@ def main() -> None:
     with open(args.ckpt, "rb") as f:
         params = pickle.load(f)["params"]
     train_pitches = load_seasons(TRAIN, data_root=processed_root())
-    ptab = _build_player_table(train_pitches)
+    ptab = _build_player_table(train_pitches, recency_halflife=args.recency_halflife)
     park_map = _build_park_index(train_pitches) if args.use_park else None
     train_pa = train_pitches.filter(pl.col("pa_terminal"))
     engine = EmpiricalEngine().fit(train_pa)
@@ -162,7 +167,10 @@ def main() -> None:
     if args.platoon:
         mkw["platoon"] = True
     model_fn = partial(pa_model, **mkw) if mkw else pa_model
-    recal_vec = RECAL_VECS[args.recal_version]
+    if args.recal_file is not None:
+        recal_vec = np.load(args.recal_file)[args.recal_key].astype(np.float64)
+    else:
+        recal_vec = RECAL_VECS[args.recal_version]
 
     R = args.replicas
     G = len(games)
@@ -178,7 +186,7 @@ def main() -> None:
         res = simulate(
             model_fn, params, pt, rep, jax.random.PRNGKey(args.seed + c0 + 1),
             recal=args.recal, recal_scale=args.recal_scale, recal_vec=recal_vec,
-            seed=args.seed + c0 + 1, platoon=args.platoon,
+            seed=args.seed + c0 + 1, platoon=args.platoon, recal_temp=args.recal_temp,
         )
         a = res["away"].reshape(c1 - c0, R)
         h = res["home"].reshape(c1 - c0, R)
