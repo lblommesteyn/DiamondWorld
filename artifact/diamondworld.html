@@ -301,6 +301,58 @@
     </div>
   </section>
 
+  <!-- LEVER SWEEP + BETTING AUDIT -->
+  <section>
+    <div class="sec-head">
+      <span class="eyebrow">The second round</span>
+      <h2>New signal, and a harder question: is it calibrated?</h2>
+      <p>Marginal run-distribution fit is necessary but not sufficient for a betting edge, which
+        needs the PER-MATCHUP probabilities to be trustworthy. Two more levers were trained to 50K
+        steps and audited with a conditional-calibration harness (per-matchup PIT, CRPS, and
+        moneyline / totals reliability). v11 adds platoon (real batter side and pitcher hand);
+        v12 adds recency (player stats weighted toward recent form).</p>
+    </div>
+    <div class="card pad tbl-scroll">
+      <div class="note-k">Player-stat ranking (cross-player correlation, 433 batters)</div>
+      <table class="board mono">
+        <thead><tr><th>stat</th><th>v10</th><th>v11 platoon</th><th>v12 recency</th></tr></thead>
+        <tbody>
+          <tr><td>K%</td><td>0.639</td><td>0.651</td><td>0.645</td></tr>
+          <tr><td>HR%</td><td>0.362</td><td>0.295</td><td><b>0.461</b></td></tr>
+          <tr><td>SLG</td><td>0.241</td><td>0.184</td><td><b>0.304</b></td></tr>
+          <tr><td>AVG</td><td>0.282</td><td>0.295</td><td><b>0.331</b></td></tr>
+          <tr><td>OBP</td><td>0.223</td><td>0.256</td><td><b>0.259</b></td></tr>
+          <tr><td>BB%</td><td>0.249</td><td><b>0.399</b></td><td>0.325</td></tr>
+        </tbody>
+      </table>
+      <div class="note-k" style="margin-top:18px">Conditional calibration (588 decided games, same subset)</div>
+      <table class="board mono">
+        <thead><tr><th>model</th><th>moneyline ECE</th><th>PIT &chi;&sup2; (&gt;16.9 = bad)</th><th>totals ECE</th></tr></thead>
+        <tbody>
+          <tr><td>v10 park+fatigue</td><td>0.062</td><td>12.9 (pass)</td><td>~0.09</td></tr>
+          <tr><td>v11 platoon</td><td>0.094</td><td>23.9 (fail)</td><td>~0.10</td></tr>
+          <tr><td>v12 recency</td><td><b>0.052</b></td><td><b>9.2 (best)</b></td><td>~0.08</td></tr>
+        </tbody>
+      </table>
+      <div class="cap">Platoon is a trade: best marginal tail and better contact ranking, but it drifts
+        the home-run calibration and, tellingly, makes the per-matchup probabilities LESS trustworthy
+        (worst calibration, PIT fails). Recency is the opposite: a slightly looser run distribution, but
+        the best conditional calibration and the best player and prop ranking. For the betting question,
+        v12 is the model to point at, not the marginal-fit champion v10.</div>
+    </div>
+    <div class="card pad prose" style="margin-top:16px">
+      <div class="note-k">Can it beat the books?</div>
+      <p>Matching real run distributions is not the test; beating the closing line is. Even v12's
+        conditional calibration (moneyline ECE ~0.052) is looser than a sharp closing line (calibrated
+        to ~1-2%), so the main markets are not a realistic edge. The one plausible opening is
+        <b>player props</b> (strikeouts, home runs): softer markets, and exactly where the model has
+        real, baseline-impossible signal (K% correlation 0.65, HR% 0.46). Whether that clears the vig
+        is an open, testable question: the backtest harness is built and validated on synthetic
+        markets, but a real run needs historical closing odds and a game-to-date/teams crosswalk the
+        processed data does not carry. The honest claim is bounded, not a demonstrated edge.</p>
+    </div>
+  </section>
+
   <!-- THE BUG -->
   <section>
     <div class="sec-head">

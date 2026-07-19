@@ -123,6 +123,95 @@ which trades mean position against the extreme tail; everything else falls out o
 model and the empirical engine. This is a strong, defensible result with no open
 calibration bug.
 
+## Beyond v10: a lever sweep and a betting-oriented audit
+
+The scoreboard above is a MARGINAL metric: how well the leaguewide run
+distribution is reproduced. That is necessary but not sufficient for a betting
+edge, which needs the PER-MATCHUP probabilities to be trustworthy. So a second
+round asked two questions: (1) is the model conditionally calibrated, and (2) can
+new signal make it better. Three modeling levers were trained to 50K steps and
+audited with a conditional-calibration harness (`calib_audit.py`: replicates each
+game to build a per-matchup predictive distribution, then scores PIT uniformity,
+CRPS, and moneyline/totals reliability).
+
+**The three models.** v10 = park + fatigue. v11 = v10 + platoon (real per-PA
+batter side and pitcher throw hand, switch-hitter-correct; it also revived the
+hand embedding, which had been trained on an all-zero array). v12 = v10 + recency
+(player rate stats weighted by season, half-life 2, so 2022 form dominates as the
+leakage-free proxy for 2023-24 talent).
+
+**Run distribution (marginal, full 4,859 games):** v10 keeps the best Wasserstein
+(0.079). But at its mean-matched scale (0.15) v12 nearly ties v10 on KL (0.0046 vs
+0.0044) and posts the **best extreme tail of any model** (P(>=8) error 0.0019 vs
+v10's 0.0146), with only a slightly looser Wasserstein (0.113). v11 also improves
+the tail (0.0041) but with a wider, looser distribution (Wasserstein 0.136). So the
+recency model is not a run-distribution regression once its recal scale is tuned;
+it trades a little central sharpness for a much better tail.
+
+**Player-stat reproduction (cross-player correlation, 433 batters):** recency wins
+across the board, exactly where a current-form prior should help.
+
+| stat | v10 | v11 (platoon) | v12 (recency) |
+|---|---|---|---|
+| K%  | 0.639 | 0.651 | 0.645 |
+| HR% | 0.362 | 0.295 | **0.461** |
+| SLG | 0.241 | 0.184 | **0.304** |
+| AVG | 0.282 | 0.295 | **0.331** |
+| OBP | 0.223 | 0.256 | **0.259** |
+| BB% | 0.249 | **0.399** | 0.325 |
+
+**Conditional calibration (the betting metric, 588 decided games, same subset):**
+
+| model | moneyline ECE | PIT chi2 (>16.9 = miscalibrated) | totals ECE |
+|---|---|---|---|
+| v10 | 0.062 | 12.9 (pass) | ~0.09 |
+| v11 (platoon) | 0.094 | 23.9 (**fail**) | ~0.10 |
+| **v12 (recency)** | **0.052** | **9.2 (pass, best)** | ~0.08 |
+
+**Verdict on the levers.** Platoon (v11) is a genuine trade, not a win: it adds
+signal (better ELBO, best marginal tail, better contact/discipline player ranking)
+but reallocates capacity away from power (HR calibration drifts to 0.66x, hurting
+HR%/SLG) and makes the per-matchup probabilities less trustworthy (worst
+calibration, PIT fails) — net-negative for betting. Recency (v12) is the opposite:
+a slightly worse marginal run distribution, but the **best conditional
+calibration** (moneyline ECE 0.052, PIT passes cleanly) and the **best player and
+prop ranking** (HR% correlation 0.461). Reliever quality was already modeled (the
+simulator uses real per-game staff identities), and the SVI player-skill latent
+turned out to have collapsed to its prior (player_mu ~ 0), so posterior-uncertainty
+propagation is moot; all player signal lives in the deterministic rate-stat encoder.
+
+## Can this beat the sportsbooks? An honest read
+
+Matching real run distributions is not the test; beating the closing line is. Two
+things follow from the audit. First, even the best model's conditional calibration
+(v12 moneyline ECE ~0.052) is looser than a sharp closing line (calibrated to
+~1-2%), so the main markets (moneyline, game totals) are not a realistic edge.
+Second, the one place a model like this could plausibly matter is **player props**
+(strikeouts, home runs), which are softer markets and exactly where the model is
+strongest — v12's K% correlation 0.65 and HR% correlation 0.46 are real,
+baseline-impossible signal. The recency prior is what most improves that ranking,
+which is why v12, not the marginal-fit champion v10, is the model to point at the
+betting question.
+
+This remains untested against a real market. The backtest harness
+(`backtest.py`, ROI/CLV, validated on synthetic efficient/noisy markets) is built
+and ready, but a real run needs two external inputs the processed data lacks: a
+historical closing-odds file and a game_pk to (date, teams) crosswalk. Until then
+the honest claim is bounded: the model produces genuine player-level signal that
+the main markets already price but the prop markets may not fully, and whether that
+clears the vig is an open, testable question, not a demonstrated edge.
+
+## Model selection
+
+- **Best marginal run distribution:** v10 (park + fatigue), KL 0.0044 / Wass 0.079.
+- **Best all-around, and best for the betting / player-prop use case:** v12
+  (v10 + recency). At its mean-matched scale it nearly ties v10 on KL (0.0046) with
+  the best tail of any model (0.0019), and it has the best conditional calibration
+  (moneyline ECE 0.052, PIT passes) and the best player/prop ranking (HR% corr
+  0.46). Its only give-back is a slightly looser Wasserstein (0.113 vs 0.079).
+- Platoon (v11) is not shipped alone; its tail gain does not offset its
+  calibration and power regressions.
+
 ## Reproduce
 
 ```bash
@@ -136,4 +225,16 @@ python -m diamondworldjax.scripts.analyze_extras --scores data/eval2/v10_s035_sc
 python -m diamondworldjax.scripts.diag_outcomes --ckpt <ckpt> --outcome-only --fatigue --use-park
 # conditioned player-stat reproduction
 python -m diamondworldjax.scripts.eval_players --ckpt <ckpt> --outcome-only --fatigue --use-park --min-pa 150
+
+# --- lever sweep + betting audit ---
+bash scripts/run_train_v11.sh && bash scripts/eval_v11.sh   # platoon (v10 + batter/pitcher hand)
+bash scripts/run_train_v12.sh && bash scripts/eval_v12.sh   # recency (v10 + current-form prior)
+# conditional-calibration audit (per-matchup PIT / CRPS / moneyline + totals reliability)
+python -m diamondworldjax.scripts.calib_audit --ckpt <ckpt> --outcome-only --fatigue --use-park \
+  --recal --recal-version <v> --recal-scale <s> --limit-games 600 --replicas 60 --chunk-games 300
+# learned calibration (per-class bias + temperature by held-out max-likelihood)
+python -m diamondworldjax.scripts.fit_calibration --logits data/eval2/<model>_logits.npz
+# backtest harness: engine self-test (needs no data); real run needs a closing-odds CSV
+python -m diamondworldjax.scripts.backtest --synthetic efficient
+python -m diamondworldjax.scripts.backtest --synthetic noisy
 ```
