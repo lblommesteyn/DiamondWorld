@@ -296,6 +296,49 @@ profitable bettor.
 - Platoon (v11) is not shipped alone; its tail gain does not offset its
   calibration and power regressions.
 
+## Architecture experiments: transformer and JEPA
+
+The production model predicts each plate appearance independently from a
+hand-crafted context via an MLP head. Does sequence structure (a causal
+transformer over the game's PA stream: times-through-order, fatigue trajectory,
+momentum) or self-supervised representation learning (a JEPA-style latent
+predictor) extract signal the context-MLP misses? To isolate ARCHITECTURE from
+training regime, all three share identical inputs (learned batter/pitcher/park
+embeddings + rate stats + 8 game-state scalars) and the same discriminative loop;
+only the network differs. Per-PA outcome prediction, train 2015-2022, test
+2023-2024 (365,608 PAs; standard error on NLL ~0.001, so the gaps are real):
+
+| model | test NLL | accuracy | marginal-L1 |
+|---|---|---|---|
+| MLP (per-PA baseline) | 1.5705 | 0.441 | 0.192 |
+| Causal transformer | 1.5417 | 0.443 | **0.057** |
+| **JEPA (SSL pretrain + linear probe)** | **1.5109** | **0.458** | — |
+
+Both sequence/representation models beat the per-PA MLP, so architecture does help
+the model here. The transformer's causal attention over prior PAs improves NLL and
+dramatically improves marginal calibration (L1 0.057 vs 0.192; the MLP overfits
+player identity and distorts the marginal). JEPA generalizes best: pretraining the
+representation self-supervised (predict the outcome's latent embedding, VICReg to
+prevent collapse) then freezing it and training only a linear probe avoids the
+overfitting that hurts end-to-end training (which reaches ~1.41 train NLL but
+1.54-1.57 test). A ~0.06 NLL and a large calibration gain over the MLP is a real,
+robust improvement.
+
+Two honest caveats. First, JEPA's edge over the transformer is substantially a
+REGULARIZATION effect (frozen features + a linear probe cannot overfit); a
+well-regularized supervised transformer would likely close much of that gap, so
+the durable finding is "sequence attention and learned representations beat the
+per-PA MLP," not "JEPA is uniquely special." Second, and most important, this does
+NOT change the betting conclusion. A better per-PA predictor is a better baseball
+model, but the market's edge over any of these is INFORMATIONAL, not architectural
+(the CLV-as-loss model, trained specifically to beat the closing line, still
+learned a residual of ~0). Better architecture makes a better model of baseball; it
+does not make a profitable bettor. The natural next step, if the goal is model
+quality rather than betting, is to fold the transformer/JEPA representation back
+into the run-distribution and player-stat pipeline (it currently lives only in the
+per-PA prediction head) and to feed it raw pitch-level Statcast rather than
+aggregated rates, which is where representation learning has the most headroom.
+
 ## Reproduce
 
 ```bash
@@ -318,6 +361,8 @@ python -m diamondworldjax.scripts.calib_audit --ckpt <ckpt> --outcome-only --fat
   --recal --recal-version <v> --recal-scale <s> --limit-games 600 --replicas 60 --chunk-games 300
 # learned calibration (per-class bias + temperature by held-out max-likelihood)
 python -m diamondworldjax.scripts.fit_calibration --logits data/eval2/<model>_logits.npz
+# architecture comparison: MLP vs causal transformer vs JEPA (per-PA prediction)
+bash scripts/run_seq.sh                     # -> data/eval2/seq_{mlp,transformer,jepa}.txt
 # backtest harness: engine self-test (needs no data)
 python -m diamondworldjax.scripts.backtest --synthetic efficient
 python -m diamondworldjax.scripts.backtest --synthetic noisy

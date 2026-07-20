@@ -36,6 +36,36 @@ def consensus(book_lines, which):
     return st.median(hs), st.median(as_)
 
 
+def totals_consensus(book_lines, which):
+    """Median (total line, over odds, under odds) across books."""
+    tl, oo, uo = [], [], []
+    for b in book_lines:
+        ln = b.get(which)
+        if not ln:
+            continue
+        t, o, u = ln.get("total"), ln.get("overOdds"), ln.get("underOdds")
+        if t is not None and o is not None and u is not None and abs(o) >= 100 and abs(u) >= 100:
+            tl.append(t); oo.append(o); uo.append(u)
+    if not tl:
+        return None, None, None
+    return st.median(tl), st.median(oo), st.median(uo)
+
+
+def runline_consensus(book_lines, which):
+    """Median (home spread, home odds, away odds). MLB runline is ~always +-1.5."""
+    hsp, ho, ao = [], [], []
+    for b in book_lines:
+        ln = b.get(which)
+        if not ln:
+            continue
+        s, h, a = ln.get("homeSpread"), ln.get("homeOdds"), ln.get("awayOdds")
+        if s is not None and h is not None and a is not None and abs(h) >= 100 and abs(a) >= 100:
+            hsp.append(s); ho.append(h); ao.append(a)
+    if not hsp:
+        return None, None, None
+    return st.median(hsp), st.median(ho), st.median(ao)
+
+
 def main():
     odds = json.load(open("/tmp/mlb_odds_dataset.json"))
     # crosswalk: (date, home_full, away_full) -> [game_pks]
@@ -57,13 +87,18 @@ def main():
             gv = g["gameView"]
             if gv.get("gameType") not in (None, "REGULAR", "R", "Regular Season"):
                 pass  # keep; gameType label varies
-            ml = g.get("odds", {}).get("moneyline", [])
+            o = g.get("odds", {})
+            ml = o.get("moneyline", [])
             if not ml:
                 continue
             hc, ac = consensus(ml, "currentLine")   # closing
             ho, ao = consensus(ml, "openingLine")    # opening (for CLV)
             if hc is None:
                 continue
+            tot = o.get("totals", [])
+            tl, oo_, uo = totals_consensus(tot, "currentLine") if tot else (None, None, None)
+            psl = o.get("pointspread", [])
+            rsp, rho, rao = runline_consensus(psl, "currentLine") if psl else (None, None, None)
             key = (date, gv["homeTeam"]["fullName"], gv["awayTeam"]["fullName"])
             pks = xwalk.get(key)
             if not pks:
@@ -73,14 +108,17 @@ def main():
                 dup += 1
                 continue  # doubleheader: ambiguous date+teams join, skip
             matched += 1
-            rows.append((pks[0], hc, ac, ho, ao))
+            rows.append((pks[0], hc, ac, ho, ao, tl, oo_, uo, rsp, rho, rao))
 
     out = Path("data/eval2/odds_2023_2024.csv")
     out.parent.mkdir(parents=True, exist_ok=True)
+    def s(v): return "" if v is None else v
     with open(out, "w") as f:
-        f.write("game_pk,ml_home,ml_away,ml_home_open,ml_away_open\n")
-        for pk, hc, ac, ho, ao in rows:
-            f.write(f"{pk},{hc},{ac},{ho if ho is not None else ''},{ao if ao is not None else ''}\n")
+        f.write("game_pk,ml_home,ml_away,ml_home_open,ml_away_open,total_line,over_odds,under_odds,"
+                "rl_home_spread,rl_home_odds,rl_away_odds\n")
+        for r in rows:
+            pk, hc, ac, ho, ao, tl, oo_, uo, rsp, rho, rao = r
+            f.write(f"{pk},{hc},{ac},{s(ho)},{s(ao)},{s(tl)},{s(oo_)},{s(uo)},{s(rsp)},{s(rho)},{s(rao)}\n")
     print(f"matched={matched}  skipped_doubleheader={dup}  no_pk_match={nomatch}")
     print(f"wrote {len(rows)} games -> {out}")
 

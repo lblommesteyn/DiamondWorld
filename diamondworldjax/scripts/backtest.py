@@ -192,6 +192,24 @@ def run_real(args):
         tp, _ = summarize("TOTALS under", 1 - p_model_over, 1 - p_mkt_over, dec_under, ~won_over, m, args.edge, args.kelly, L)
         total_profit += tp
 
+    if args.market in ("runline", "all"):
+        rsp, rho, rao = col("rl_home_spread"), col("rl_home_odds"), col("rl_away_odds")
+        have = ~np.isnan(rsp) & ~np.isnan(rho) & ~np.isnan(rao)
+        ph_v, pa_v = american_to_prob(rho), american_to_prob(rao)
+        p_mkt_hcover, _ = devig_two_way(ph_v, pa_v)
+        dec_h, dec_a = american_to_decimal(rho), american_to_decimal(rao)
+        margin_sim = sim_home[idx] - sim_away[idx]                       # (n, R)
+        p_model_hcover = np.array([(margin_sim[j] + rsp[j] > 0).mean() if have[j] else np.nan
+                                   for j in range(len(idx))])
+        real_margin = real_home[idx] - real_away[idx]
+        push = (real_margin + rsp) == 0
+        won_hcover = (real_margin + rsp) > 0
+        m = have & ~push & ~np.isnan(p_mkt_hcover) & ~np.isnan(dec_h) & ~np.isnan(dec_a)
+        tp, _ = summarize("RUNLINE home", p_model_hcover, p_mkt_hcover, dec_h, won_hcover, m, args.edge, args.kelly, L)
+        total_profit += tp
+        tp, _ = summarize("RUNLINE away", 1 - p_model_hcover, 1 - p_mkt_hcover, dec_a, ~won_hcover, m, args.edge, args.kelly, L)
+        total_profit += tp
+
     L.append("")
     L.append(f"TOTAL profit across selected markets: {total_profit:+.1f}u")
     report = "\n".join(L)
@@ -254,7 +272,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--arrays", type=Path, help="calib_audit *_arrays.npz")
     ap.add_argument("--odds", type=Path, help="closing-odds CSV")
-    ap.add_argument("--market", choices=["moneyline", "totals", "both"], default="both")
+    ap.add_argument("--market", choices=["moneyline", "totals", "runline", "both", "all"], default="both")
     ap.add_argument("--edge", type=float, default=0.03)
     ap.add_argument("--kelly", type=float, default=0.0, help="0=flat 1u; else Kelly multiplier")
     ap.add_argument("--synthetic", choices=["efficient", "noisy"], default=None)
