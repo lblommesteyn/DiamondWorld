@@ -361,6 +361,7 @@ HR% over 434 batters with >= 150 test PAs). Leaderboard:
 | GRU / LSTM | 0.454-0.455 | ~0.20 | ~0.64 | ~0.61 | **1.520** |
 | Transformer (best of 8) | 0.447 | 0.240 | 0.621 | 0.585 | 1.526 |
 | MLP, rate-features only (no player embed) | 0.438 | 0.218 | 0.628 | 0.594 | 1.539 |
+| **SVI + discriminative hybrid (50/50)** | **0.563** | 0.637 | 0.632 | 0.608 | — |
 
 The findings, several of them counterintuitive:
 
@@ -378,22 +379,32 @@ The findings, several of them counterintuitive:
    learned player embedding does help, contra the naive "it just overfits" guess).
 
 3. **The best discriminative config edges out the shipped SVI model on average
-   (0.523 vs 0.475), but they are COMPLEMENTARY.** The SVI model's Bayesian
-   shrinkage dominates strikeouts (K 0.635 vs 0.527); the discriminative model
-   dominates walks (BB 0.641 vs 0.376) and home runs. A per-outcome oracle that
-   picked the better of the two everywhere would reach ~0.56, so the concrete
-   frontier is a hybrid: SVI (or a shrinkage prior) for K, a discriminative
-   rate-feature model for BB/HR. That, not a fancier single network, is the path to
-   "as good as it can get" at the PA level.
+   (0.523 vs 0.475), but they are COMPLEMENTARY, and a hybrid beats both.** The SVI
+   model's Bayesian shrinkage dominates strikeouts (K 0.635); the discriminative
+   model dominates walks (BB 0.641 vs 0.376) and home runs. Averaging the two
+   models' per-batter predicted rates 50/50 (`combine_hybrid.py`) reaches **AVG
+   0.563** (K 0.637, BB 0.632, Hit 0.376, HR 0.608) — the best of any method, above
+   the shipped model's 0.475 and above every single architecture. The blend pulls
+   strikeouts from the SVI and walks/home-runs from the discriminative model, and
+   because the discriminative K estimate is high-variance (one ensemble run scored
+   K 0.527, another 0.063) while the SVI K is stable at 0.635, the blend correctly
+   leans on the SVI there. So the concrete answer to "as good as it can get" at the
+   PA level is a SVI + discriminative HYBRID, not a fancier single network.
 
-4. **We are near the ceiling.** Per-PA NLL is at the entropy floor; player-corr is
-   near the input-feature ceiling for most outcomes (e.g. the batter K-rate feature
-   alone correlates 0.69 with real K-rate, and the SVI model reaches 0.635). The
-   remaining headroom is small and lives in (a) the SVI-plus-discriminative hybrid
-   above, and (b) richer INPUTS — raw pitch-level Statcast instead of aggregated
-   rates — which is a data-pipeline project, not an architecture one. No world-
-   modeling architecture tried here changes the conclusion that the model is already
-   close to the achievable limit for this data.
+4. **We are at the ceiling.** The optimal LINEAR blend of the two models (OLS of
+   each real rate on the two predictions) tops out at AVG 0.569, essentially the
+   50/50 hybrid's 0.563 — there is no more juice in combining them. Per-outcome the
+   ceilings are K 0.64, BB 0.65, HR 0.61 (all near the input-feature ceiling; the
+   batter K-rate feature alone correlates 0.69 with real K-rate), and Hit just 0.39
+   — because batting average on balls in play is dominated by luck and defense and
+   is irreducibly hard to attribute to the batter. Per-PA NLL is likewise at the
+   entropy floor. So the shipped SVI model (0.475) leaves about 0.09 of average
+   player-correlation on the table, recoverable with the hybrid, and beyond that the
+   only remaining headroom is richer INPUTS — raw pitch-level Statcast instead of
+   aggregated rates — which is a data-pipeline project, not an architecture one. No
+   world-modeling architecture tried here (transformer, GRU, LSTM, JEPA, deeper,
+   ensembled) beats a well-regularized MLP blended with the SVI model, and none
+   changes the conclusion that the model is at the achievable limit for this data.
 
 ## Reproduce
 
