@@ -339,6 +339,62 @@ into the run-distribution and player-stat pipeline (it currently lives only in t
 per-PA prediction head) and to feed it raw pitch-level Statcast rather than
 aggregated rates, which is where representation learning has the most headroom.
 
+## Technique sweep: what actually helps, and the ceiling
+
+A broad sweep (18 configs, `wm_sweep.py`) asked how good the PA-level world model
+can get. The first lesson reframes the target: **per-PA NLL is saturated.** The
+marginal outcome entropy is 1.495 nats, and every model (MLP, transformer, GRU,
+LSTM, JEPA) scores 1.52-1.55 — near or above it. A no-skill model that predicts the
+league-average distribution for every PA beats them all on NLL. One plate
+appearance is so noise-dominated that there is almost nothing to predict at that
+level, so NLL cannot separate good models from bad. The metric that matters is
+whether the CONDITIONAL distributions are right: does the model rank players'
+true rates correctly (cross-player correlation of predicted vs real K%, BB%, hit%,
+HR% over 434 batters with >= 150 test PAs). Leaderboard:
+
+| technique | avg player-corr | K | BB | HR | test NLL |
+|---|---|---|---|---|---|
+| **MLP + embed-dropout + ensemble(3)** | **0.523** | 0.527 | **0.641** | **0.587** | 1.531 |
+| MLP + embed-dropout | 0.507 | 0.462 | 0.631 | 0.596 | 1.528 |
+| MLP | 0.500 | 0.439 | 0.630 | 0.591 | 1.536 |
+| Production v12 (SVI, same metric) | 0.475 | **0.635** | 0.376 | 0.520 | ~1.52 |
+| GRU / LSTM | 0.454-0.455 | ~0.20 | ~0.64 | ~0.61 | **1.520** |
+| Transformer (best of 8) | 0.447 | 0.240 | 0.621 | 0.585 | 1.526 |
+| MLP, rate-features only (no player embed) | 0.438 | 0.218 | 0.628 | 0.594 | 1.539 |
+
+The findings, several of them counterintuitive:
+
+1. **Sequence models hurt what matters.** Transformers, GRUs and LSTMs get the best
+   NLL (down to 1.520) but the WORST player differentiation, because their K-corr
+   collapses (~0.18-0.24 vs the MLP's ~0.46). Causal attention lets the model
+   predict strikeouts from the pitcher and in-game context instead of the batter's
+   own K-rate, which lowers per-PA loss but makes the per-batter aggregate track the
+   wrong thing. For a world model whose value is player identity, more architecture
+   is a bad trade: it buys a better fit to noise at the cost of the signal.
+
+2. **The plain MLP wins among learned models,** and mild regularization (embed-
+   dropout) plus a 3-model ensemble (variance reduction on the player estimates)
+   pushes it to the top (0.523). Bigger/deeper hurts; rate-features-only hurts (the
+   learned player embedding does help, contra the naive "it just overfits" guess).
+
+3. **The best discriminative config edges out the shipped SVI model on average
+   (0.523 vs 0.475), but they are COMPLEMENTARY.** The SVI model's Bayesian
+   shrinkage dominates strikeouts (K 0.635 vs 0.527); the discriminative model
+   dominates walks (BB 0.641 vs 0.376) and home runs. A per-outcome oracle that
+   picked the better of the two everywhere would reach ~0.56, so the concrete
+   frontier is a hybrid: SVI (or a shrinkage prior) for K, a discriminative
+   rate-feature model for BB/HR. That, not a fancier single network, is the path to
+   "as good as it can get" at the PA level.
+
+4. **We are near the ceiling.** Per-PA NLL is at the entropy floor; player-corr is
+   near the input-feature ceiling for most outcomes (e.g. the batter K-rate feature
+   alone correlates 0.69 with real K-rate, and the SVI model reaches 0.635). The
+   remaining headroom is small and lives in (a) the SVI-plus-discriminative hybrid
+   above, and (b) richer INPUTS — raw pitch-level Statcast instead of aggregated
+   rates — which is a data-pipeline project, not an architecture one. No world-
+   modeling architecture tried here changes the conclusion that the model is already
+   close to the achievable limit for this data.
+
 ## Reproduce
 
 ```bash
@@ -363,6 +419,9 @@ python -m diamondworldjax.scripts.calib_audit --ckpt <ckpt> --outcome-only --fat
 python -m diamondworldjax.scripts.fit_calibration --logits data/eval2/<model>_logits.npz
 # architecture comparison: MLP vs causal transformer vs JEPA (per-PA prediction)
 bash scripts/run_seq.sh                     # -> data/eval2/seq_{mlp,transformer,jepa}.txt
+# technique sweep by player-stat reproduction (18 configs) + production comparison
+bash scripts/run_wm_sweep.sh && bash scripts/run_wm_sweep2.sh   # -> data/eval2/wm_sweep.txt
+python -m diamondworldjax.scripts.prod_playercorr               # v12 on the same metric
 # backtest harness: engine self-test (needs no data)
 python -m diamondworldjax.scripts.backtest --synthetic efficient
 python -m diamondworldjax.scripts.backtest --synthetic noisy
