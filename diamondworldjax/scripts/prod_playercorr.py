@@ -20,12 +20,23 @@ TRAIN = [2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022]
 
 
 def main():
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--ckpt", default="checkpoints/dwjax_pa_v12/dwjax_step_0050000.pkl")
+    ap.add_argument("--recal", default="data/eval2/v12_cal_params.npz")
+    ap.add_argument("--recency-halflife", type=float, default=2.0)
+    ap.add_argument("--skill-mode", choices=["prior", "mean"], default="mean",
+                    help="mean substitutes the learned player_mu (correct for a non-collapsed "
+                         "latent); prior samples N(0,1) (legacy).")
+    ap.add_argument("--tag", default="v12")
+    args = ap.parse_args()
     import jax, jax.numpy as jnp, numpyro.handlers as nh
-    V12 = "checkpoints/dwjax_pa_v12/dwjax_step_0050000.pkl"
-    params = pickle.load(open(V12, "rb"))["params"]
-    b_heur = np.load("data/eval2/v12_cal_params.npz")["b_heur"].astype(np.float64)
+    params = pickle.load(open(args.ckpt, "rb"))["params"]
+    if args.skill_mode == "mean" and "player_mu" in params:
+        params = {**params, "player_skills": params["player_mu"]}
+    b_heur = np.load(args.recal)["b_heur"].astype(np.float64)
     trp = load_seasons(TRAIN, data_root=processed_root())
-    ptab = _build_player_table(trp, recency_halflife=2.0)
+    ptab = _build_player_table(trp, recency_halflife=args.recency_halflife)
     park_map = _build_park_index(trp); id2i = ptab["id_to_idx"]; del trp
     te = load_seasons([2023, 2024], data_root=processed_root()).filter(
         pl.col("pa_terminal") & pl.col("pa_outcome").is_not_null())
@@ -67,13 +78,13 @@ def main():
     keep = cnt >= 150
     def corr(s, r): return float(np.corrcoef((s[keep] / cnt[keep]), (r[keep] / cnt[keep]))[0, 1])
     cK, cBB, cHit, cHR = corr(sumK, rK), corr(sumBB, rBB), corr(sumHit, rHit), corr(sumHR, rHR)
-    line = (f"PRODUCTION v12 (SVI, conditioned+recal) same metric | "
+    line = (f"{args.tag} (SVI, conditioned+recal, skill={args.skill_mode}) | "
             f"corr K {cK:.3f} BB {cBB:.3f} Hit {cHit:.3f} HR {cHR:.3f} AVG {np.mean([cK,cBB,cHit,cHR]):.3f} "
             f"(np={int(keep.sum())})")
     print(line)
-    open("data/eval2/prod_playercorr.txt", "w").write(line + "\n")
+    open(f"data/eval2/prod_playercorr_{args.tag}.txt", "w").write(line + "\n")
     # save per-batter predicted+real sums (indexed by player idx) for the hybrid
-    np.savez("data/eval2/prod_rates.npz", sumK=sumK, sumBB=sumBB, sumHit=sumHit, sumHR=sumHR,
+    np.savez(f"data/eval2/prod_rates_{args.tag}.npz", sumK=sumK, sumBB=sumBB, sumHit=sumHit, sumHR=sumHR,
              rK=rK, rBB=rBB, rHit=rHit, rHR=rHR, cnt=cnt)
 
 

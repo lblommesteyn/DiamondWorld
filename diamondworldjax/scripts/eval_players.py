@@ -83,6 +83,8 @@ def main() -> None:
                         help="Model trained with platoon (batter side + pitcher hand), v11+.")
     parser.add_argument("--recency-halflife", type=float, default=None,
                         help="Match a recency-trained model (v12+): same half-life as training.")
+    parser.add_argument("--skill-mode", choices=["prior", "mean"], default="prior",
+                        help="mean uses the learned player_mu (v13+ with the KL-scale fix).")
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
 
@@ -94,6 +96,8 @@ def main() -> None:
     print(f"Loading checkpoint {args.ckpt}", flush=True)
     with open(args.ckpt, "rb") as f:
         params = pickle.load(f)["params"]
+    if args.skill_mode == "mean" and "player_mu" in params:
+        params = {**params, "player_skills": params["player_mu"]}
 
     train_pitches = load_seasons(TRAIN_SEASONS, data_root=processed_root())
     ptab = _build_player_table(train_pitches, recency_halflife=args.recency_halflife)
