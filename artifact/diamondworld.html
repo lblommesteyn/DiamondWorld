@@ -366,6 +366,18 @@
         K% 0.65 and HR% 0.46, would apply) remain untested. Bounded honest claim: a good generative
         model of baseball, but as a moneyline bettor it loses to the closing line.</div>
     </div>
+    <div class="card pad prose" style="margin-top:16px">
+      <div class="note-k">Cross-check: a direct deep-learning model, and "CLV as a loss"</div>
+      <p>Is the negative result about the market or the generative approach? A direct discriminative
+        model trained on the same info (fit 2023, test 2024) settles it. Plain feature models (logistic,
+        MLP) do WORSE than the market out of sample (log-loss 0.69 vs 0.67): the stale 2015-2022 rates
+        carry less than the closing line already reflects. The sharp test is a market-anchored net,
+        logit = closing-line logit + MLP(features), trained to predict only where the market is wrong.
+        Its learned residual collapses to <b>~0.002</b>: taken seriously, "beat the closing line" as a
+        loss function learns that the best adjustment is no adjustment. It places no bets above a 2%
+        edge. The textbook signature of an efficient market: the moneyline is not beatable with this
+        information, by the simulator or by deep learning.</p>
+    </div>
   </section>
 
   <!-- THE BUG -->

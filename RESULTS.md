@@ -226,6 +226,35 @@ test. The bounded honest claim: DiamondWorld is a good generative model of baseb
 that reproduces player identity, but as a moneyline bettor it loses to the closing
 line, and nothing here suggests otherwise for the other main markets.
 
+### A direct deep-learning cross-check, and CLV as a loss
+
+To make sure the negative result is about the market and not the generative
+approach, a direct discriminative model was trained on the same information
+(game-level lineup/starter/park rates from 2015-2022), with a strict temporal
+split (fit on 2023, early-stop on a 2023 validation tail, test on 2024). Two
+framings, both settled at the real 2024 closing line (`dl_market_model.py`):
+
+- **Plain models** (logistic and an MLP on features) predict the outcome directly.
+- **Market-anchored ("CLV as a loss")**: logit(home) = closing-line logit +
+  MLP(features). The network can only move the prediction OFF the closing line, so
+  it is trained to predict the residual — literally "where is the market wrong?"
+
+Out-of-sample (2024) log-loss: market 0.670, logistic 0.692, MLP 0.690,
+market-anchored 0.670. The plain models are WORSE than the market (the stale
+2015-2022 rates carry less information than the closing line already reflects). The
+market-anchored model's learned residual collapses to essentially zero
+(mean |p_model - p_market| = 0.002): when a model is trained specifically to beat
+the closing line, out of sample the best adjustment it can find is no adjustment.
+In the backtest the feature models lose 8-14%, and the market-anchored model places
+no bets above a 2% edge because it never meaningfully disagrees with the line. (An
+under-regularized version briefly looked like -2.2%, but that was overfitting; heavy
+L2 plus early stopping removed it.)
+
+This is the textbook signature of an efficient market: the CLV-as-loss objective,
+taken seriously, empirically demonstrates that the moneyline is not beatable with
+this information — neither by the generative simulator nor by a direct deep-learning
+model. The only frontier left untested is player props, which needs paid data.
+
 ## Model selection
 
 - **Best marginal run distribution:** v10 (park + fatigue), KL 0.0044 / Wass 0.079.
