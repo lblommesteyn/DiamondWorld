@@ -217,6 +217,21 @@ value proxy is ~0 (the model's picks do not anticipate line movement). This is
 consistent with the conditional-calibration audit: a ~5% miscalibration is
 overconfidence, not alpha.
 
+**All three game-level markets lose, including totals — the decisive one.** At the
+mean-matched recal (sim run rate 8.86 = real), on the same 4,698 games:
+
+| market | ROI |
+|---|---|
+| Totals over / under | -6.5% / -1.4% |
+| Moneyline (flat) | -3.0% |
+| Runline home / away | -6.7% / -4.3% |
+
+Totals is the test that matters most here: the model directly models the per-game
+run distribution and posts the best KL of any method (0.0044), so if it beat any
+market it would be this one. It does not. The run distribution is priced
+efficiently by the market just like the moneyline. This closes the question across
+every market free data covers.
+
 The one caveat the data forces: free sources carry only game-level markets
 (moneyline, totals), not the player props where the model's real, baseline-
 impossible signal (K% correlation 0.65, HR% 0.46) would actually be brought to
