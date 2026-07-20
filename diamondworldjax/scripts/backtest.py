@@ -45,14 +45,16 @@ import numpy as np
 
 # ---------- odds helpers ----------
 def american_to_prob(a: np.ndarray) -> np.ndarray:
-    """American odds -> implied probability (with vig)."""
+    """American odds -> implied probability (with vig). |a|<100 is invalid -> NaN."""
     a = np.asarray(a, dtype=float)
+    a = np.where(np.abs(a) < 100, np.nan, a)
     p = np.where(a < 0, (-a) / ((-a) + 100.0), 100.0 / (a + 100.0))
     return p
 
 
 def american_to_decimal(a: np.ndarray) -> np.ndarray:
     a = np.asarray(a, dtype=float)
+    a = np.where(np.abs(a) < 100, np.nan, a)
     return np.where(a < 0, 1.0 + 100.0 / (-a), 1.0 + a / 100.0)
 
 
@@ -132,6 +134,7 @@ def run_real(args):
     total_profit = 0.0
     if args.market in ("moneyline", "both"):
         mlh, mla = col("ml_home"), col("ml_away")
+        mlh_open, mla_open = col("ml_home_open"), col("ml_away_open")
         have = ~np.isnan(mlh) & ~np.isnan(mla)
         ph_v, pa_v = american_to_prob(mlh), american_to_prob(mla)
         p_mkt_home, _ = devig_two_way(ph_v, pa_v)
@@ -140,11 +143,37 @@ def run_real(args):
         p_model_home = (sim_home[idx] > sim_away[idx]).mean(axis=1)
         decided = real_home[idx] != real_away[idx]
         won_home = (real_home[idx] > real_away[idx])
-        m = have & decided
+        m = have & decided & ~np.isnan(p_mkt_home) & ~np.isnan(dec_home) & ~np.isnan(dec_away)
         tp, _ = summarize("MONEYLINE home", p_model_home, p_mkt_home, dec_home, won_home, m, args.edge, args.kelly, L)
         total_profit += tp
         tp, _ = summarize("MONEYLINE away", 1 - p_model_home, 1 - p_mkt_home, dec_away, ~won_home, m, args.edge, args.kelly, L)
         total_profit += tp
+
+        # Edge-threshold sweep on the combined moneyline (both sides stacked).
+        # A real edge -> ROI rises with the filter; overconfidence -> it does not.
+        pm = np.concatenate([p_model_home[m], (1 - p_model_home)[m]])
+        pk = np.concatenate([p_mkt_home[m], (1 - p_mkt_home)[m]])
+        dc = np.concatenate([dec_home[m], dec_away[m]])
+        wn = np.concatenate([won_home[m], (~won_home)[m]])
+        L.append("--- moneyline edge sweep (flat 1u, both sides) ---")
+        L.append("  edge   bets   ROI     hit    avg_edge")
+        for e in (0.0, 0.02, 0.04, 0.06, 0.10):
+            b = (pm - pk) > e
+            if b.sum() == 0:
+                L.append(f"  {e:.02f}   0"); continue
+            prof = settle(np.ones(int(b.sum())), dc[b], wn[b])
+            L.append(f"  {e:.02f}  {int(b.sum()):5d}  {prof.sum()/b.sum()*100:+6.1f}%  "
+                     f"{wn[b].mean()*100:4.1f}%  {(pm[b]-pk[b]).mean()*100:+.1f}%")
+        # CLV proxy: did the closing line move toward the model's picks vs opening?
+        if not np.all(np.isnan(mlh_open)):
+            po_home = devig_two_way(american_to_prob(mlh_open), american_to_prob(mla_open))[0]
+            bet_home = (p_model_home - p_mkt_home) > args.edge
+            mv = (p_mkt_home - po_home)[m & bet_home]  # closing minus opening market prob on home bets
+            mv = mv[~np.isnan(mv)]
+            if len(mv):
+                L.append(f"  CLV proxy: on model home-bets, market P(home) moved "
+                         f"{mv.mean()*100:+.2f}% open->close (positive = line moved toward our pick)")
+        L.append("")
 
     if args.market in ("totals", "both"):
         tl, oo, uo = col("total_line"), col("over_odds"), col("under_odds")
