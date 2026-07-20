@@ -197,6 +197,14 @@ def run(cfg):
                 ps.append(pv[a:z].mean()); rs.append(rv[a:z].mean()); ns.append(z-a)
         ps, rs = np.array(ps), np.array(rs)
         return float(np.corrcoef(ps, rs)[0, 1]), len(ps)
+    if cfg.get("save_rates"):
+        sK = np.zeros(P); sBB = np.zeros(P); sHit = np.zeros(P); sHR = np.zeros(P)
+        rrK = np.zeros(P); rrBB = np.zeros(P); rrHit = np.zeros(P); rrHR = np.zeros(P); cc = np.zeros(P)
+        np.add.at(sK, bat, predK); np.add.at(sBB, bat, predBB); np.add.at(sHit, bat, predHit); np.add.at(sHR, bat, predHR)
+        np.add.at(rrK, bat, realK.astype(float)); np.add.at(rrBB, bat, realBB.astype(float))
+        np.add.at(rrHit, bat, realHit.astype(float)); np.add.at(rrHR, bat, realHR.astype(float)); np.add.at(cc, bat, 1.0)
+        np.savez("data/eval2/mlp_rates.npz", sumK=sK, sumBB=sBB, sumHit=sHit, sumHR=sHR,
+                 rK=rrK, rBB=rrBB, rHit=rrHit, rHR=rrHR, cnt=cc)
     cK, nplayers = corr_by_player(predK, realK)
     cBB, _ = corr_by_player(predBB, realBB)
     cHit, _ = corr_by_player(predHit, realHit)
@@ -225,6 +233,7 @@ def main():
     ap.add_argument("--ensemble", type=int, default=1)
     ap.add_argument("--platoon", action="store_true")
     ap.add_argument("--no-player-emb", action="store_true")
+    ap.add_argument("--save-rates", action="store_true")
     ap.add_argument("--cosine", action="store_true")
     ap.add_argument("--steps", type=int, default=6000)
     ap.add_argument("--patience", type=int, default=1200)

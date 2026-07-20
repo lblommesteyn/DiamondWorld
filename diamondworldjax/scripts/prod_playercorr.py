@@ -72,6 +72,9 @@ def main():
             f"(np={int(keep.sum())})")
     print(line)
     open("data/eval2/prod_playercorr.txt", "w").write(line + "\n")
+    # save per-batter predicted+real sums (indexed by player idx) for the hybrid
+    np.savez("data/eval2/prod_rates.npz", sumK=sumK, sumBB=sumBB, sumHit=sumHit, sumHR=sumHR,
+             rK=rK, rBB=rBB, rHit=rHit, rHR=rHR, cnt=cnt)
 
 
 if __name__ == "__main__":
