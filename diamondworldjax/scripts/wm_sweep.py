@@ -29,6 +29,41 @@ HIT_IDX = [3, 4, 5, 6]  # 1B,2B,3B,HR
 BB_IDX = [1, 2]         # BB,HBP
 
 
+def build_statcast(pitches, id2i, P):
+    """Leakage-free per-player Statcast descriptors from ALL training pitches.
+    Batter (5): swing-rate, whiff-rate, mean exit velo, mean launch angle, hard-hit
+    rate. Pitcher (3): mean velocity, mean movement, induced whiff-rate. These
+    quality-of-contact / stuff metrics predict true talent better than outcome
+    rates (xStats thesis). Unknowns filled with the league mean."""
+    bcol = "batter_id" if "batter_id" in pitches.columns else "batter_idx"
+    pcol = "pitcher_id" if "pitcher_id" in pitches.columns else "pitcher_idx"
+    df = pitches.with_columns((pl.col("swing") & ~pl.col("contact")).alias("_whiff"),
+                              (pl.col("pfx_x") ** 2 + pl.col("pfx_z") ** 2).sqrt().alias("_mov"))
+    bb = df.filter(pl.col("launch_speed").is_not_null())
+    bat_sc = np.full((P, 5), np.nan, np.float32)
+    g = df.group_by(bcol).agg([pl.col("swing").mean().alias("sw"),
+        pl.col("_whiff").sum().alias("wh"), pl.col("swing").sum().alias("nsw"), pl.len().alias("n")])
+    gb = bb.group_by(bcol).agg([pl.col("launch_speed").mean().alias("ev"),
+        pl.col("launch_angle").mean().alias("la"), (pl.col("launch_speed") >= 95).mean().alias("hh"),
+        pl.len().alias("nb")]).join(g, on=bcol, how="left")
+    for r in gb.iter_rows(named=True):
+        i = id2i.get(int(r[bcol]))
+        if i is not None and (r["n"] or 0) >= 100:
+            bat_sc[i] = [r["sw"], (r["wh"] or 0) / max(r["nsw"] or 1, 1),
+                         r["ev"], r["la"], r["hh"]]
+    pit_sc = np.full((P, 3), np.nan, np.float32)
+    gp = df.group_by(pcol).agg([pl.col("release_speed").mean().alias("velo"),
+        pl.col("_mov").mean().alias("mov"), pl.col("_whiff").sum().alias("wh"),
+        pl.col("swing").sum().alias("nsw"), pl.len().alias("n")])
+    for r in gp.iter_rows(named=True):
+        i = id2i.get(int(r[pcol]))
+        if i is not None and (r["n"] or 0) >= 100:
+            pit_sc[i] = [r["velo"], r["mov"], (r["wh"] or 0) / max(r["nsw"] or 1, 1)]
+    bat_sc[np.isnan(bat_sc).any(1)] = np.nanmean(bat_sc, 0)
+    pit_sc[np.isnan(pit_sc).any(1)] = np.nanmean(pit_sc, 0)
+    return bat_sc, pit_sc
+
+
 def make_factory(nplayers, arch, layers, dm, heads, dropout, embed_dropout, no_player_emb=False):
     import jax.numpy as jnp, flax.linen as nn
     class Model(nn.Module):
@@ -81,9 +116,15 @@ def run(cfg):
     ptab = _build_player_table(trp)
     park_map = _build_park_index(trp)
     pit = pitcher_rates(trp.filter(pl.col("pa_terminal")), ptab["id_to_idx"], len(ptab["hand"]))
+    bat_sc = pit_sc = None
+    if cfg.get("statcast"):
+        bat_sc, pit_sc = build_statcast(trp, ptab["id_to_idx"], len(ptab["hand"]))
     del trp
     tr = build_seqs(TRAIN, ptab, pit, park_map)
     te = build_seqs(TEST, ptab, pit, park_map)
+    if bat_sc is not None:
+        for d in (tr, te):
+            d["sc"] = np.concatenate([bat_sc[d["bat"]], pit_sc[d["pit"]]], -1).astype(np.float32)
     P = len(ptab["hand"])
     G = tr["y"].shape[0]
     rng_np = np.random.default_rng(0)
@@ -93,7 +134,8 @@ def run(cfg):
     # standardize the continuous features (rate stats + state) on the fit set so the
     # small-magnitude rate stats are not swamped by the ~unit-scale player embeddings.
     vfit = tr["valid"][fit_i].reshape(-1)
-    for key in ("bat_rate", "pit_rate", "state"):
+    std_keys = ["bat_rate", "pit_rate", "state"] + (["sc"] if "sc" in tr else [])
+    for key in std_keys:
         flat = tr[key][fit_i].reshape(-1, tr[key].shape[-1])[vfit]
         mu, sd = flat.mean(0), flat.std(0)
         # floor near-constant features (e.g. shift/clock are constant 0 in 2015-22
@@ -105,6 +147,8 @@ def run(cfg):
     def feats(d, idx, plat=False):
         out = [jnp.array(d["bat"][idx]), jnp.array(d["pit"][idx]), jnp.array(d["park"][idx]),
                jnp.array(d["bat_rate"][idx]), jnp.array(d["pit_rate"][idx]), jnp.array(d["state"][idx])]
+        if "sc" in d:
+            out.append(jnp.array(d["sc"][idx]))   # Statcast features via the model's extra (plat) slot
         return out
 
     def build_one(seed):
@@ -211,7 +255,7 @@ def run(cfg):
     cHR, _ = corr_by_player(predHR, realHR)
     avg_corr = np.mean([cK, cBB, cHit, cHR])
 
-    tag = f"{cfg['arch']}_L{cfg['layers']}_d{cfg['dm']}_dr{cfg['dropout']}_ed{cfg['embed_dropout']}_wd{cfg['wd']}_ls{cfg['label_smooth']}_ens{cfg['ensemble']}" + ("_noPE" if cfg.get("no_player_emb") else "")
+    tag = f"{cfg['arch']}_L{cfg['layers']}_d{cfg['dm']}_dr{cfg['dropout']}_ed{cfg['embed_dropout']}_wd{cfg['wd']}_ls{cfg['label_smooth']}_ens{cfg['ensemble']}" + ("_noPE" if cfg.get("no_player_emb") else "") + ("_SC" if cfg.get("statcast") else "")
     line = (f"{tag:52s} NLL {nll:.4f} acc {acc:.4f} margL1 {margL1:.4f} | "
             f"corr K {cK:.3f} BB {cBB:.3f} Hit {cHit:.3f} HR {cHR:.3f} AVG {avg_corr:.3f} "
             f"(np={nplayers}, {time.time()-t0:.0f}s)")
@@ -233,6 +277,7 @@ def main():
     ap.add_argument("--ensemble", type=int, default=1)
     ap.add_argument("--platoon", action="store_true")
     ap.add_argument("--no-player-emb", action="store_true")
+    ap.add_argument("--statcast", action="store_true", help="Add per-player Statcast stuff/contact features.")
     ap.add_argument("--save-rates", action="store_true")
     ap.add_argument("--cosine", action="store_true")
     ap.add_argument("--steps", type=int, default=6000)

@@ -406,6 +406,31 @@ The findings, several of them counterintuitive:
    ensembled) beats a well-regularized MLP blended with the SVI model, and none
    changes the conclusion that the model is at the achievable limit for this data.
 
+## Richer inputs (Statcast): tested, no gain
+
+The one lever flagged above as "remaining headroom" was richer inputs. Tested
+directly: leakage-free per-player Statcast descriptors were added to the sweep
+(`build_statcast`) — batter swing-rate, whiff-rate, mean exit velocity, launch
+angle and hard-hit rate; pitcher velocity, movement and induced whiff-rate,
+each aggregated from the training pitches. These are the "expected-stats"
+ingredients that are supposed to predict true talent better than noisy outcome
+rates.
+
+They do not help here. On the best config the Statcast features give AVG
+player-correlation 0.525, statistically identical to the 0.523 without them
+(small home-run and contact gains offset by a walk loss; a single MLP alone is
+0.507 with and without). The reason is sample size: the rate stats are aggregated
+over eight seasons, so they are already low-noise estimates of each player's
+talent, and the expected-stats advantage is largest in SMALL samples (a single
+season), not with eight years of pooled data. The one input variant with a
+plausible edge is recency-weighted Statcast (recent exit velocity as a current-
+form signal, which is where xStats beats outcome stats), tied to the recency
+lever that did modestly help v12; but plain aggregated Statcast washing out is
+strong evidence the model is input-saturated, not input-starved. The conclusion
+stands: this world model is at its achievable ceiling for the available data, and
+the remaining gains are in the SVI-plus-discriminative hybrid, not in the inputs
+or the architecture.
+
 ## Reproduce
 
 ```bash
