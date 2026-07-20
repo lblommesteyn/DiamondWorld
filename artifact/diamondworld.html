@@ -341,15 +341,30 @@
         v12 is the model to point at, not the marginal-fit champion v10.</div>
     </div>
     <div class="card pad prose" style="margin-top:16px">
-      <div class="note-k">Can it beat the books?</div>
-      <p>Matching real run distributions is not the test; beating the closing line is. Even v12's
-        conditional calibration (moneyline ECE ~0.052) is looser than a sharp closing line (calibrated
-        to ~1-2%), so the main markets are not a realistic edge. The one plausible opening is
-        <b>player props</b> (strikeouts, home runs): softer markets, and exactly where the model has
-        real, baseline-impossible signal (K% correlation 0.65, HR% 0.46). Whether that clears the vig
-        is an open, testable question: the backtest harness is built and validated on synthetic
-        markets, but a real run needs historical closing odds and a game-to-date/teams crosswalk the
-        processed data does not carry. The honest claim is bounded, not a demonstrated edge.</p>
+      <div class="note-k">Can it beat the books? Tested on real odds: no</div>
+      <p>Matching real run distributions is not the test; beating the closing line is. v12 was
+        backtested on <b>4,698 of the 2023-24 games at the real closing moneyline</b> (free
+        per-book odds joined to game_pk). The result is an unambiguous negative: flat betting loses
+        about 5% (roughly the vig), and ROI gets monotonically WORSE as you filter to the model's
+        most confident disagreements: the opposite of a real edge.</p>
+    </div>
+    <div class="card pad tbl-scroll" style="margin-top:12px">
+      <table class="board mono">
+        <thead><tr><th>edge filter</th><th>bets</th><th>ROI</th><th>hit rate</th></tr></thead>
+        <tbody>
+          <tr><td>&gt; 0%</td><td>4,458</td><td>-5.1%</td><td>46.2%</td></tr>
+          <tr><td>&gt; 2%</td><td>3,935</td><td>-5.0%</td><td>46.0%</td></tr>
+          <tr><td>&gt; 4%</td><td>3,375</td><td>-5.9%</td><td>45.1%</td></tr>
+          <tr><td>&gt; 6%</td><td>2,835</td><td>-6.8%</td><td>44.1%</td></tr>
+          <tr><td>&gt; 10%</td><td>1,892</td><td><b>-7.0%</b></td><td>43.3%</td></tr>
+        </tbody>
+      </table>
+      <div class="cap">The model carries no information the closing line has not already priced; its
+        high-conviction bets are actively anti-predictive (hit 43%), and a closing-line-value proxy is
+        ~0. Consistent with the calibration audit: the ~5% miscalibration is overconfidence, not alpha.
+        Free data only covers game-level markets, so player props (where the model's real signal,
+        K% 0.65 and HR% 0.46, would apply) remain untested. Bounded honest claim: a good generative
+        model of baseball, but as a moneyline bettor it loses to the closing line.</div>
     </div>
   </section>
 

@@ -193,13 +193,38 @@ baseline-impossible signal. The recency prior is what most improves that ranking
 which is why v12, not the marginal-fit champion v10, is the model to point at the
 betting question.
 
-This remains untested against a real market. The backtest harness
-(`backtest.py`, ROI/CLV, validated on synthetic efficient/noisy markets) is built
-and ready, but a real run needs two external inputs the processed data lacks: a
-historical closing-odds file and a game_pk to (date, teams) crosswalk. Until then
-the honest claim is bounded: the model produces genuine player-level signal that
-the main markets already price but the prop markets may not fully, and whether that
-clears the vig is an open, testable question, not a demonstrated edge.
+**Tested against a real market (the moneyline): it does not beat it.** Using free
+historical odds (reactiv/delphi: per-book opening + closing moneyline, joined to
+game_pk via the MLB Stats API schedule), v12 was backtested on 4,698 of the
+2023-24 test games at the real closing consensus line. The result is an
+unambiguous negative:
+
+| edge filter | bets | ROI | hit rate |
+|---|---|---|---|
+| > 0%  | 4,458 | -5.1% | 46.2% |
+| > 2%  | 3,935 | -5.0% | 46.0% |
+| > 4%  | 3,375 | -5.9% | 45.1% |
+| > 6%  | 2,835 | -6.8% | 44.1% |
+| > 10% | 1,892 | -7.0% | 43.3% |
+
+ROI is negative at every threshold and gets monotonically WORSE as the bet filter
+tightens to the model's most confident disagreements — the exact opposite of a real
+edge (which rises with the filter, as the harness's synthetic-market self-test
+confirms). Flat betting loses about 5%, roughly the moneyline vig, meaning the model
+carries no information the closing line has not already priced; its high-conviction
+disagreements are actively anti-predictive (hit rate falls to 43%). A closing-line
+value proxy is ~0 (the model's picks do not anticipate line movement). This is
+consistent with the conditional-calibration audit: a ~5% miscalibration is
+overconfidence, not alpha.
+
+The one caveat the data forces: free sources carry only game-level markets
+(moneyline, totals), not the player props where the model's real, baseline-
+impossible signal (K% correlation 0.65, HR% 0.46) would actually be brought to
+bear. So the demonstrated result is specifically that the model does not beat the
+main market; the prop question is still open, but it needs a paid props dataset to
+test. The bounded honest claim: DiamondWorld is a good generative model of baseball
+that reproduces player identity, but as a moneyline bettor it loses to the closing
+line, and nothing here suggests otherwise for the other main markets.
 
 ## Model selection
 
@@ -234,7 +259,15 @@ python -m diamondworldjax.scripts.calib_audit --ckpt <ckpt> --outcome-only --fat
   --recal --recal-version <v> --recal-scale <s> --limit-games 600 --replicas 60 --chunk-games 300
 # learned calibration (per-class bias + temperature by held-out max-likelihood)
 python -m diamondworldjax.scripts.fit_calibration --logits data/eval2/<model>_logits.npz
-# backtest harness: engine self-test (needs no data); real run needs a closing-odds CSV
+# backtest harness: engine self-test (needs no data)
 python -m diamondworldjax.scripts.backtest --synthetic efficient
 python -m diamondworldjax.scripts.backtest --synthetic noisy
+# REAL moneyline backtest vs 2023-24 closing odds (free data):
+#   1) fetch odds + schedule (see build_odds.py header), then join to game_pk
+python -m diamondworldjax.scripts.build_odds            # -> data/eval2/odds_2023_2024.csv
+#   2) per-game P(home) from replicated sim, then settle vs the closing line
+python -m diamondworldjax.scripts.calib_audit --ckpt <ckpt> ... --limit-games 4859 --replicas 40 \
+  --chunk-games 1000 --out data/eval2/calib_bt.txt       # saves *_arrays.npz
+python -m diamondworldjax.scripts.backtest --arrays data/eval2/calib_bt_arrays.npz \
+  --odds data/eval2/odds_2023_2024.csv --market moneyline --edge 0.03
 ```
