@@ -253,7 +253,37 @@ L2 plus early stopping removed it.)
 This is the textbook signature of an efficient market: the CLV-as-loss objective,
 taken seriously, empirically demonstrates that the moneyline is not beatable with
 this information — neither by the generative simulator nor by a direct deep-learning
-model. The only frontier left untested is player props, which needs paid data.
+model.
+
+### Player props: the necessary signal is absent
+
+Real historical prop odds are paid-only, so a true prop backtest is out of reach.
+But the question that decides whether props are worth paying for is answerable with
+free data: does the model predict a starting pitcher's strikeouts better than the
+naive baseline a book's line sits near? For 4,669 2024 starts, the model's expected
+strikeouts (v12, conditioned + calibrated) were compared to actual strikeouts
+against a baseline of the pitcher's own 2015-2022 K-rate times batters faced.
+
+The model does NOT out-predict the baseline: correlation with actual K is 0.332 for
+the model versus 0.337 for the baseline, and its MAE is slightly worse (1.90 vs
+1.85). A naive backtest against a line set at the baseline appeared to return
++13-22%, but that is an artifact, not an edge: the baseline line is biased high (a
+pitcher's career rate overestimates their current-season form), so betting the
+under on every game with no model at all already returns +5.6%. The model's
+apparent profit is just a harder exploitation of that biased synthetic line, not
+matchup skill. Against a real, unbiased book line the model has no strikeout edge,
+consistent with the moneyline result. The necessary condition for a prop edge,
+incremental predictive skill over the baseline, is absent, so there is no reason to
+expect props to succeed where the main markets failed. (This is the third "too good"
+number in the investigation to dissolve under scrutiny, after a +100% ROI from
+malformed odds and a -2.2% CLV from overfitting; each was caught by insisting on the
+right control.)
+
+The overall conclusion stands and is now well-evidenced from four angles: the
+generative simulator, a direct deep-learning model, the CLV-as-loss objective, and a
+prop-signal test all agree that DiamondWorld does not carry information the betting
+market has not already priced. It is a strong generative model of baseball, not a
+profitable bettor.
 
 ## Model selection
 

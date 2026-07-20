@@ -378,6 +378,18 @@
         edge. The textbook signature of an efficient market: the moneyline is not beatable with this
         information, by the simulator or by deep learning.</p>
     </div>
+    <div class="card pad prose" style="margin-top:16px">
+      <div class="note-k">Player props: the necessary signal is absent</div>
+      <p>Real prop odds are paid-only, so the question is posed with free data: does the model predict a
+        starter's strikeouts better than the baseline a book's line sits near? Across 4,669 2024 starts,
+        no: correlation with actual K is 0.332 for the model vs <b>0.337</b> for the pitcher's own K-rate
+        baseline. A naive backtest looked like +13 to +22%, but that is an artifact: the baseline line is
+        biased high (career rate over-states current form), so betting the under every game with
+        <b>no model at all</b> already returns +5.6%. The model just exploits that biased synthetic line
+        harder. Against a real, unbiased line it has no edge. The necessary condition for a prop edge,
+        incremental skill over the baseline, is absent. (Third "too good" number to dissolve under
+        scrutiny, after the +100% from malformed odds and the -2.2% from overfitting.)</p>
+    </div>
   </section>
 
   <!-- THE BUG -->
