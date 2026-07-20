@@ -207,6 +207,9 @@ def main() -> None:
     parser.add_argument("--recency-halflife", type=float, default=None,
                         help="Recency-weight player rate stats by season (half-life in seasons). "
                              "Leakage-free current-form prior. Eval scripts must pass the same.")
+    parser.add_argument("--no-kl-scale", action="store_true",
+                        help="Disable the minibatch player_skills KL scaling (reproduce the "
+                             "pre-fix v6..v12 latent-collapse behavior).")
     parser.add_argument("--tag", type=str, default=None,
                         help="Checkpoint/log dir tag override (e.g. v6).")
     args = parser.parse_args()
@@ -247,6 +250,12 @@ def main() -> None:
     chunks = [game_ids[i:i + args.batch] for i in range(0, len(game_ids), args.batch)]
     batch_iter = _infinite_batch_iter(pa_df, chunks, player_table_np["id_to_idx"], player_table_np)
 
+    # Minibatch-SVI correction: the global player_skills KL must be scaled to the
+    # minibatch fraction (batch games / total games), else it is ~total/batch times
+    # over-weighted and the latent collapses to the prior. --no-kl-scale disables
+    # it (reproduces the pre-fix v6..v12 behavior).
+    kl_scale = 1.0 if args.no_kl_scale else (args.batch / max(len(game_ids), 1))
+
     print(f"Starting SVI: {args.steps} steps, lr={args.lr}"
           f"{'  [outcome-only v6]' if args.outcome_only else ''}", flush=True)
     t0 = time.time()
@@ -258,7 +267,8 @@ def main() -> None:
         _mkw["fatigue"] = True
     if args.platoon:
         _mkw["platoon"] = True
-    model_fn = partial(pa_model, **_mkw) if _mkw else pa_model
+    _mkw["kl_scale"] = kl_scale
+    model_fn = partial(pa_model, **_mkw)
 
     svi_state, guide, losses = train(
         model            = model_fn,
@@ -275,6 +285,7 @@ def main() -> None:
         ss_warmup_steps  = args.ss_warmup,
         ss_start_step    = 0 if args.resume else 5_000,
         engine_ss        = args.engine_ss,
+        kl_scale         = kl_scale,
     )
 
     elapsed = time.time() - t0

@@ -12,6 +12,7 @@ import jax.numpy as jnp
 import flax.linen as nn
 import numpyro
 import numpyro.distributions as dist
+import numpyro.handlers as _nph
 from numpyro.contrib.module import flax_module
 
 from .embeddings import encode_players_numpyro, SKILL_DIM
@@ -104,15 +105,22 @@ def pa_model(
     outcome_only: bool = False,
     fatigue: bool = False,
     platoon: bool = False,
+    kl_scale: float = 1.0,
 ) -> None:
     B, T = batch["pa_valid"].shape
     P    = player_table["stats"].shape[0]
 
-    # Per-player latent skill vectors
-    player_skills = numpyro.sample(
-        "player_skills",
-        dist.Normal(jnp.zeros((P, SKILL_DIM)), jnp.ones((P, SKILL_DIM))).to_event(2),
-    )
+    # Per-player latent skill vectors. player_skills is a GLOBAL latent over all P
+    # players; the likelihood below is over a minibatch of B games. To keep the ELBO
+    # balanced (an unbiased estimate of the full-data ELBO), its prior KL must be
+    # scaled by kl_scale = batch_games / total_train_games. Without this the global
+    # KL is ~total/batch times over-weighted and the posterior collapses to the
+    # prior (player_mu ~ 0), switching the latent off. See train_pa for the value.
+    with _nph.scale(scale=kl_scale):
+        player_skills = numpyro.sample(
+            "player_skills",
+            dist.Normal(jnp.zeros((P, SKILL_DIM)), jnp.ones((P, SKILL_DIM))).to_event(2),
+        )
 
     # Player embeddings
     pitcher_z, batter_z = encode_players_numpyro(

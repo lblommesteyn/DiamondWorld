@@ -44,7 +44,7 @@ def empty_guide(*args, **kwargs) -> None:
     """No continuous latent variables — guide does nothing."""
 
 
-def make_player_skills_guide(P: int, skill_dim: int = SKILL_DIM):
+def make_player_skills_guide(P: int, skill_dim: int = SKILL_DIM, kl_scale: float = 1.0):
     """Return a variational guide for the per-player latent skill vectors.
 
     Parameterises q(player_skills) = Normal(mu, sigma) with hard constraints:
@@ -67,7 +67,9 @@ def make_player_skills_guide(P: int, skill_dim: int = SKILL_DIM):
             jnp.full((P, skill_dim), 0.3),
             constraint=constraints.interval(0.05, 2.0),
         )
-        numpyro.sample("player_skills", dist.Normal(mu, sigma).to_event(2))
+        # Must match the model's player_skills scale so the ELBO KL is balanced.
+        with nhandlers.scale(scale=kl_scale):
+            numpyro.sample("player_skills", dist.Normal(mu, sigma).to_event(2))
     return guide
 
 
@@ -237,6 +239,7 @@ def train(
     ss_warmup_steps: int  = 25_000, # steps to ramp ss_rate from 0 → ss_max_rate
     ss_start_step: int    = 5_000,  # don't apply SS until model has learned basics
     engine_ss: bool       = False,  # use engine-based (legal) DAgger instead of neural bsa
+    kl_scale: float       = 1.0,    # scale for the global player_skills KL (= batch/total_games)
 ) -> tuple[Any, Any, list[float]]:
     """
     Run SVI training.
@@ -262,7 +265,8 @@ def train(
 
     first_batch, first_player_table = next(batch_iter)
     P = first_player_table["stats"].shape[0]
-    guide = make_player_skills_guide(P)
+    guide = make_player_skills_guide(P, kl_scale=kl_scale)
+    print(f"  player_skills KL scale = {kl_scale:.6g}", flush=True)
 
     svi = SVI(
         model,
