@@ -112,16 +112,35 @@ def make_factory(nplayers, arch, layers, dm, heads, dropout, embed_dropout, no_p
 def run(cfg):
     import jax, jax.numpy as jnp, optax
     t0 = time.time()
-    trp = load_seasons(TRAIN, data_root=processed_root())
-    ptab = _build_player_table(trp)
+    train_seasons = list(range(2015, cfg.get("train_end", 2022) + 1))
+    test_seasons = ([int(x) for x in cfg["test_seasons"].split(",")]
+                    if cfg.get("test_seasons") else TEST)
+    trp = load_seasons(train_seasons, data_root=processed_root())
+    ptab = _build_player_table(trp, recency_halflife=cfg.get("recency_halflife"))
     park_map = _build_park_index(trp)
     pit = pitcher_rates(trp.filter(pl.col("pa_terminal")), ptab["id_to_idx"], len(ptab["hand"]))
     bat_sc = pit_sc = None
     if cfg.get("statcast"):
         bat_sc, pit_sc = build_statcast(trp, ptab["id_to_idx"], len(ptab["hand"]))
     del trp
-    tr = build_seqs(TRAIN, ptab, pit, park_map)
-    te = build_seqs(TEST, ptab, pit, park_map)
+    if cfg.get("mle"):
+        # append rookies (unseen in training) with translated minor-league rate features;
+        # their fresh embedding stays near init (no train PAs) so the prediction rides on
+        # the MLE rate features, de-blanking them instead of the shared unknown slot.
+        mle = np.load(cfg["mle"]); rids = mle["ids"].astype(int); rrates = mle["rates"]
+        id2i = ptab["id_to_idx"]; new = [(r, rr) for r, rr in zip(rids, rrates) if int(r) not in id2i]
+        if new:
+            P0, F = ptab["stats"].shape
+            add = np.zeros((len(new), F), np.float32)
+            for j, (_, rr) in enumerate(new):
+                add[j, 0], add[j, 1], add[j, 2], add[j, 3] = rr; add[j, 4] = 150.0
+            ptab["stats"] = np.concatenate([ptab["stats"], add], 0)
+            for hk in ("hand",):
+                ptab[hk] = np.concatenate([ptab[hk], np.zeros(len(new), ptab[hk].dtype)])
+            for j, (r, _) in enumerate(new):
+                id2i[int(r)] = P0 + j
+    tr = build_seqs(train_seasons, ptab, pit, park_map)
+    te = build_seqs(test_seasons, ptab, pit, park_map)
     if bat_sc is not None:
         for d in (tr, te):
             d["sc"] = np.concatenate([bat_sc[d["bat"]], pit_sc[d["pit"]]], -1).astype(np.float32)
@@ -285,6 +304,17 @@ def main():
     ap.add_argument("--batch", type=int, default=64)
     ap.add_argument("--lr", type=float, default=3e-4)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--train-end", type=int, default=2022,
+                    help="Last training season (inclusive). 2023 folds in the previous "
+                         "season; then test 2024 only. Matches v15 for cross-arch comparison.")
+    ap.add_argument("--test-seasons", default="2023,2024",
+                    help="Comma list of eval seasons; use 2024 when train-end is 2023.")
+    ap.add_argument("--recency-halflife", type=float, default=None,
+                    help="Recency-weight the player rate features (seasons); pass 2.0 to match "
+                         "v15 so the previous season is weighted highest.")
+    ap.add_argument("--mle", default=None,
+                    help="Path to mle_rates.npz; inject translated minor-league rate features "
+                         "for rookies unseen in training.")
     args = ap.parse_args()
     run(vars(args))
 
