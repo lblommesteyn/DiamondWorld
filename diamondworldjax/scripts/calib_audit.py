@@ -111,6 +111,8 @@ def main() -> None:
     ap.add_argument("--recal-temp", type=float, default=1.0)
     ap.add_argument("--recency-halflife", type=float, default=None)
     ap.add_argument("--skill-mode", choices=["prior", "mean", "sample"], default="prior")
+    ap.add_argument("--no-bullpen", action="store_true",
+                    help="Starter pitches all game (no reliever info) - pre-game-only betting eval.")
     ap.add_argument("--out", type=Path, default=None)
     args = ap.parse_args()
 
@@ -188,7 +190,7 @@ def main() -> None:
             model_fn, params, pt, rep, jax.random.PRNGKey(args.seed + c0 + 1),
             recal=args.recal, recal_scale=args.recal_scale, recal_vec=recal_vec,
             seed=args.seed + c0 + 1, platoon=args.platoon, recal_temp=args.recal_temp,
-            skill_mode=args.skill_mode,
+            skill_mode=args.skill_mode, no_bullpen=args.no_bullpen,
         )
         a = res["away"].reshape(c1 - c0, R)
         h = res["home"].reshape(c1 - c0, R)
