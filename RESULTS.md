@@ -232,6 +232,26 @@ market it would be this one. It does not. The run distribution is priced
 efficiently by the market just like the moneyline. This closes the question across
 every market free data covers.
 
+### Re-tested with the fixed model (v13), and a leakage lesson
+
+After the KL-scale fix (v13) made the model materially better, the moneyline was
+re-run to check whether a better model changes the answer. At first it looked like
+it did: v13's moneyline ROI was POSITIVE and rose with the edge filter (+1.8% flat
+to +5.7% at the highest-confidence bets), both sides profitable, with calibrated and
+discriminative P(home) - the textbook signature of a real edge. It was not real. The
+simulator feeds each game its ACTUAL bullpen (the relievers that actually appeared),
+which is post-game information correlated with the outcome (a team that used its
+closer was in a winnable game; mop-up arms mean a blowout loss). Re-running with
+starters only (--no-bullpen, no reliever info) flipped the moneyline from +5.7% back
+to -5.1%, the edge gone entirely. So the apparent edge was reliever look-ahead
+leakage in the betting eval, not model skill; with pre-game-only information v13
+loses ~4-5% like every other configuration, and the CLV proxy stayed ~0 throughout.
+The prior v12 results used the same bullpen but lost anyway, so the market-efficiency
+conclusion is robust and if anything conservative. Two takeaways: an honest betting
+backtest must use pre-game-only inputs (a generic or league-average bullpen, not the
+actual one), and this was the fourth "too good" number in the investigation to
+dissolve under the right control.
+
 The one caveat the data forces: free sources carry only game-level markets
 (moneyline, totals), not the player props where the model's real, baseline-
 impossible signal (K% correlation 0.65, HR% 0.46) would actually be brought to
