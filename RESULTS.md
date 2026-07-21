@@ -454,6 +454,16 @@ calibration also improved (K 1.18x vs v12's 1.30x). v13 is the best model this
 project has produced, and it came from fixing a one-line scaling bug, not from any
 new architecture or input.
 
+A second training bug from the same review was also real and fixed: the pa_outcome
+likelihood was not masked to valid PAs, so ~16% padded positions (labeled class 0 =
+K) were counted as observed strikeouts. But fixing it (v14 = v13 + mask) did NOT
+improve the recalibrated metrics: v14 scored player-corr 0.531 vs v13's 0.556. The
+recal already corrects the marginal K bias the padding caused, so the fix's benefit
+was being captured downstream, and the small delta is within training-run variance.
+The mask fix is kept for correctness, but v13 remains the best-measured model.
+Lesson: not every real bug is a performance lever once a post-hoc calibration layer
+is absorbing its symptom.
+
 ## Richer inputs (Statcast): tested, no gain
 
 The one lever flagged above as "remaining headroom" was richer inputs. Tested
