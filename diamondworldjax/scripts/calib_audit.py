@@ -110,6 +110,7 @@ def main() -> None:
     ap.add_argument("--recal-key", type=str, default="b")
     ap.add_argument("--recal-temp", type=float, default=1.0)
     ap.add_argument("--recency-halflife", type=float, default=None)
+    ap.add_argument("--skill-mode", choices=["prior", "mean", "sample"], default="prior")
     ap.add_argument("--out", type=Path, default=None)
     args = ap.parse_args()
 
@@ -187,6 +188,7 @@ def main() -> None:
             model_fn, params, pt, rep, jax.random.PRNGKey(args.seed + c0 + 1),
             recal=args.recal, recal_scale=args.recal_scale, recal_vec=recal_vec,
             seed=args.seed + c0 + 1, platoon=args.platoon, recal_temp=args.recal_temp,
+            skill_mode=args.skill_mode,
         )
         a = res["away"].reshape(c1 - c0, R)
         h = res["home"].reshape(c1 - c0, R)
