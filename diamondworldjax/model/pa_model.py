@@ -7,6 +7,8 @@ Changes from v1:
 """
 from __future__ import annotations
 
+import contextlib
+
 import jax
 import jax.numpy as jnp
 import flax.linen as nn
@@ -164,15 +166,17 @@ def pa_model(
         pa_head   = flax_module("pa_outcome_head_v6", PAOutcomeHeadV6(), context)
         pa_logits = pa_head(context)
         with numpyro.plate("games", B, dim=-2), numpyro.plate("pas", T, dim=-1):
-            pa_obs = None
             if teacher_force:
+                # Mask padded PAs out of the likelihood. Padded positions carry
+                # pa_outcome=-1, remapped to 0 (=K); without this mask they were
+                # counted as observed strikeouts (~16% of positions), inflating the
+                # model's K rate. Only applied when observing (teacher_force); at
+                # eval the site stays a plain Categorical so .logits is accessible.
                 pa_obs = jnp.where(batch["pa_outcome"] == -1, 0, batch["pa_outcome"])
-            # Mask padded PAs out of the likelihood. Padded positions carry
-            # pa_outcome=-1, remapped to 0 (=K) above; without this mask they were
-            # counted as observed strikeouts (~16% of positions), inflating the
-            # model's K rate and forcing a large K recal at eval.
-            with _nph.mask(mask=batch["pa_valid"]):
-                numpyro.sample("pa_outcome", dist.Categorical(logits=pa_logits), obs=pa_obs)
+                with _nph.mask(mask=batch["pa_valid"]):
+                    numpyro.sample("pa_outcome", dist.Categorical(logits=pa_logits), obs=pa_obs)
+            else:
+                numpyro.sample("pa_outcome", dist.Categorical(logits=pa_logits), obs=None)
         return
 
     pa_head   = flax_module("pa_outcome_head",       PAOutcomeHead(),      context)
@@ -181,36 +185,37 @@ def pa_model(
 
     pa_logits = pa_head(context)  # (B, T, 9)
 
-    with numpyro.plate("games", B, dim=-2), numpyro.plate("pas", T, dim=-1):
+    # Mask padded PAs out of the observed likelihood, but only when teacher-forcing
+    # (observing); at eval the sites stay plain Categoricals so .logits is readable.
+    _pctx = _nph.mask(mask=batch["pa_valid"]) if teacher_force else contextlib.nullcontext()
+    with numpyro.plate("games", B, dim=-2), numpyro.plate("pas", T, dim=-1), _pctx:
 
         # PA outcome
         pa_obs = None
         if teacher_force:
             pa_obs = jnp.where(batch["pa_outcome"] == -1, 0, batch["pa_outcome"])
 
-        # Mask padded PAs out of every observed likelihood (see outcome-only path).
-        with _nph.mask(mask=batch["pa_valid"]):
-            pa_outcome = numpyro.sample(
-                "pa_outcome", dist.Categorical(logits=pa_logits), obs=pa_obs,
+        pa_outcome = numpyro.sample(
+            "pa_outcome", dist.Categorical(logits=pa_logits), obs=pa_obs,
+        )
+
+        pa_oh = jax.nn.one_hot(pa_outcome, N_PA_OUTCOMES)  # (B, T, 9)
+
+        # Runs scored with upweighting for non-zero events
+        runs_logits = runs_head(context, pa_oh)
+        runs_obs    = jnp.clip(batch["runs_scored"], 0, MAX_RUNS) if teacher_force else None
+        numpyro.sample("runs_scored", dist.Categorical(logits=runs_logits), obs=runs_obs)
+
+        if teacher_force:
+            # Add extra log-prob weight for non-zero run PAs so the model
+            # can't minimise loss by always predicting 0.
+            extra_lp = dist.Categorical(logits=runs_logits).log_prob(runs_obs)
+            numpyro.factor(
+                "runs_upweight",
+                jnp.where(runs_obs > 0, RUNS_UPWEIGHT * extra_lp, 0.0),
             )
 
-            pa_oh = jax.nn.one_hot(pa_outcome, N_PA_OUTCOMES)  # (B, T, 9)
-
-            # Runs scored with upweighting for non-zero events
-            runs_logits = runs_head(context, pa_oh)
-            runs_obs    = jnp.clip(batch["runs_scored"], 0, MAX_RUNS) if teacher_force else None
-            numpyro.sample("runs_scored", dist.Categorical(logits=runs_logits), obs=runs_obs)
-
-            if teacher_force:
-                # Add extra log-prob weight for non-zero run PAs so the model
-                # can't minimise loss by always predicting 0.
-                extra_lp = dist.Categorical(logits=runs_logits).log_prob(runs_obs)
-                numpyro.factor(
-                    "runs_upweight",
-                    jnp.where(runs_obs > 0, RUNS_UPWEIGHT * extra_lp, 0.0),
-                )
-
-            # Base state after PA
-            bs_logits = bs_head(context, pa_oh)
-            bs_obs    = batch["base_state_after"] if teacher_force else None
-            numpyro.sample("base_state_after", dist.Categorical(logits=bs_logits), obs=bs_obs)
+        # Base state after PA
+        bs_logits = bs_head(context, pa_oh)
+        bs_obs    = batch["base_state_after"] if teacher_force else None
+        numpyro.sample("base_state_after", dist.Categorical(logits=bs_logits), obs=bs_obs)
