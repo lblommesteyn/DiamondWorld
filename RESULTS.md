@@ -421,6 +421,39 @@ The findings, several of them counterintuitive:
    ensembled) beats a well-regularized MLP blended with the SVI model, and none
    changes the conclusion that the model is at the achievable limit for this data.
 
+## The training-setup fix (v13): the dead latent, revived
+
+A code review flagged a mistake in the training setup, and it was real. The
+per-player `player_skills` latent is a GLOBAL prior over all ~3,260 players, but
+the likelihood plate covers only a minibatch of 64 games with no subsample scaling.
+So the ELBO's player-skill KL was over-weighted by roughly total/batch = 17,904/64
+≈ 280x, and the optimizer drove it to zero — the posterior collapsed onto the prior
+(measured `player_mu` ≈ 0.007, `player_sigma` ≈ 1.09 = N(0,1)). The stochastic skill
+vector has been switched off in every model back to v6; only the deterministic
+rate-stat encoder was doing player work.
+
+The fix is the textbook minibatch-SVI correction: scale the player-skill KL by
+`batch/total_games` in both model and guide. v13 is v12's recipe with the fix. The
+latent immediately came alive — `player_mu` mean|·| 0.007 → 0.25, `player_sigma`
+1.09 → 0.66 (an informative posterior) — and it improved the model materially
+(cross-player rate correlation, `--skill-mode mean` so the learned posterior is
+actually read):
+
+| model | K | BB | Hit | HR | AVG |
+|---|---|---|---|---|---|
+| v12 (collapsed latent) | 0.651 | 0.387 | 0.374 | 0.523 | 0.484 |
+| **v13 (fixed latent)** | 0.652 | **0.615** | 0.351 | **0.607** | **0.556** |
+
+Player differentiation rose +0.072 (+15%), almost all of it in walks (0.39 → 0.62)
+and home runs (0.52 → 0.61) — the exact outcomes where the SVI model had previously
+trailed the discriminative MLP. That gap was the dead latent, not a limitation of
+the approach. Two consequences: **v13 as a single model (0.556) nearly matches the
+old best SVI-plus-discriminative hybrid (0.563)** — the fix folds the hybrid's edge
+into one model — and blending v13 with the MLP nudges the ceiling to 0.565. Raw
+calibration also improved (K 1.18x vs v12's 1.30x). v13 is the best model this
+project has produced, and it came from fixing a one-line scaling bug, not from any
+new architecture or input.
+
 ## Richer inputs (Statcast): tested, no gain
 
 The one lever flagged above as "remaining headroom" was richer inputs. Tested
