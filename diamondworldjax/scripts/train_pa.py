@@ -212,9 +212,16 @@ def main() -> None:
                              "pre-fix v6..v12 latent-collapse behavior).")
     parser.add_argument("--tag", type=str, default=None,
                         help="Checkpoint/log dir tag override (e.g. v6).")
+    parser.add_argument("--train-end", type=int, default=2022,
+                        help="Last season included in training (inclusive). Default 2022 "
+                             "(v6..v13). Set 2023 to fold in the previous season: the "
+                             "recency-weighted rate features then weight 2023 highest, the "
+                             "single most valuable prior for 2024 (see prev_season_ablation). "
+                             "Eval must then test 2024 only (2023 becomes in-sample).")
     args = parser.parse_args()
 
-    global _CKPT_DIR, _LOG_PATH
+    global _CKPT_DIR, _LOG_PATH, TRAIN_SEASONS
+    TRAIN_SEASONS = list(range(2015, args.train_end + 1))
     if args.tag:
         _CKPT_DIR = checkpoints_root() / f"dwjax_pa_{args.tag}"
         _LOG_PATH = results_root() / f"dwjax_pa_{args.tag}_elbo.json"

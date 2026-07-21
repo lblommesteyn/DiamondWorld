@@ -29,7 +29,18 @@ def main():
                     help="mean substitutes the learned player_mu (correct for a non-collapsed "
                          "latent); prior samples N(0,1) (legacy).")
     ap.add_argument("--tag", default="v12")
+    ap.add_argument("--train-end", type=int, default=2022,
+                    help="Last training season for the player table (must match the checkpoint's "
+                         "--train-end). 2023 folds in the previous season; then test 2024 only.")
+    ap.add_argument("--test-seasons", default="2023,2024",
+                    help="Comma list of eval seasons. Use 2024 when the table includes 2023.")
+    ap.add_argument("--mle", default=None,
+                    help="Path to mle_rates.npz (ids, rates=[hit,bb,k,hr]); injects translated "
+                         "minor-league rate features for rookies unseen in training, de-blanking "
+                         "them instead of collapsing to the shared unknown slot.")
     args = ap.parse_args()
+    TRAIN = list(range(2015, args.train_end + 1))
+    test_seasons = [int(x) for x in args.test_seasons.split(",")]
     import jax, jax.numpy as jnp, numpyro.handlers as nh
     params = pickle.load(open(args.ckpt, "rb"))["params"]
     if args.skill_mode == "mean" and "player_mu" in params:
@@ -38,7 +49,33 @@ def main():
     trp = load_seasons(TRAIN, data_root=processed_root())
     ptab = _build_player_table(trp, recency_halflife=args.recency_halflife)
     park_map = _build_park_index(trp); id2i = ptab["id_to_idx"]; del trp
-    te = load_seasons([2023, 2024], data_root=processed_root()).filter(
+
+    n_rookie = 0
+    if args.mle:
+        # Append rookies (unseen in training) with translated minor-league rate features.
+        # New index per rookie; the skill latent gets the prior mean (0) since we have no
+        # MLB posterior for them, so the prediction rides on the MLE rate features.
+        mle = np.load(args.mle); rids = mle["ids"].astype(int); rrates = mle["rates"]
+        new = [(rid, rr) for rid, rr in zip(rids, rrates) if int(rid) not in id2i]
+        if new:
+            P0 = ptab["stats"].shape[0]; F = ptab["stats"].shape[1]
+            add = np.zeros((len(new), F), np.float32)
+            for j, (_, rr) in enumerate(new):
+                add[j, 0], add[j, 1], add[j, 2], add[j, 3] = rr  # hit, bb, k, hr rates
+                add[j, 4] = 150.0                                # nominal PA weight
+            ptab["stats"] = np.concatenate([ptab["stats"], add], 0)
+            ptab["league"] = np.concatenate([ptab["league"], np.zeros(len(new), np.int32)])
+            ptab["hand"] = np.concatenate([ptab["hand"], np.zeros(len(new), np.int32)])
+            for hk in ("bat_hand", "pit_hand"):
+                ptab[hk] = np.concatenate([ptab[hk], np.full(len(new), 0.5, np.float32)])
+            sk = np.asarray(params["player_skills"])
+            params = {**params, "player_skills": np.concatenate(
+                [sk, np.zeros((len(new), sk.shape[1]), sk.dtype)], 0)}
+            for j, (rid, _) in enumerate(new):
+                id2i[int(rid)] = P0 + j
+            n_rookie = len(new)
+
+    te = load_seasons(test_seasons, data_root=processed_root()).filter(
         pl.col("pa_terminal") & pl.col("pa_outcome").is_not_null())
     te = apply_park_idx(te, park_map)
     pt = {"stats": jnp.array(ptab["stats"]), "league": jnp.array(ptab["league"]),
@@ -78,9 +115,11 @@ def main():
     keep = cnt >= 150
     def corr(s, r): return float(np.corrcoef((s[keep] / cnt[keep]), (r[keep] / cnt[keep]))[0, 1])
     cK, cBB, cHit, cHR = corr(sumK, rK), corr(sumBB, rBB), corr(sumHit, rHit), corr(sumHR, rHR)
-    line = (f"{args.tag} (SVI, conditioned+recal, skill={args.skill_mode}) | "
+    rookie_kept = int((keep[-n_rookie:]).sum()) if n_rookie else 0
+    line = (f"{args.tag} (SVI, conditioned+recal, skill={args.skill_mode}, "
+            f"train<= {args.train_end}, test {args.test_seasons}, mle={bool(args.mle)}) | "
             f"corr K {cK:.3f} BB {cBB:.3f} Hit {cHit:.3f} HR {cHR:.3f} AVG {np.mean([cK,cBB,cHit,cHR]):.3f} "
-            f"(np={int(keep.sum())})")
+            f"(np={int(keep.sum())}, rookies_injected={n_rookie}, rookies_kept={rookie_kept})")
     print(line)
     open(f"data/eval2/prod_playercorr_{args.tag}.txt", "w").write(line + "\n")
     # save per-batter predicted+real sums (indexed by player idx) for the hybrid

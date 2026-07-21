@@ -72,7 +72,27 @@ distribution:
 
 ## 4. Win probability with full uncertainty
 
-<!-- WP_UNCERTAINTY_PLACEHOLDER -->
+Most win-probability models return a single number. A generative model returns a
+distribution, and it separates two kinds of uncertainty: *aleatoric* (the game could
+play out many ways) and *epistemic* (we are not certain how good the rosters are). We
+draw K=4 realizations from the fitted player-skill posterior and simulate R=100
+replicas of each, over 30 real 2024 games:
+
+- **Epistemic spread (roster uncertainty) = 4.9% WP, versus aleatoric SE = 4.8% WP.**
+  The uncertainty about *how good the players are* is as large as single-game
+  sampling noise. A point win probability throws away half the story: two games that
+  both read "0.60" can have very different credible bands (e.g. [0.52, 0.66] vs
+  [0.66, 0.70]) depending on how well-pinned the rosters are.
+- Example bands: WP 0.69 [0.47, 0.67], WP 0.50 [0.51, 0.66]. The interval, not the
+  point, is the honest output for downstream decisions (bet sizing, leverage).
+
+Calibration caveat, stated plainly: on this particular 30-game slice the point
+estimate is over-confident toward the home team (home teams went ~0.35 when the
+model averaged ~0.58), but the slice is small and home-unlucky, so this is a
+directional flag for a full-season calibration pass, not a headline result. The
+contribution here is the *uncertainty decomposition*, not a calibrated betting price
+(which, as documented separately, additionally requires pre-game-only bullpen
+information).
 
 ## Benchmark: is the underlying player model any good?
 
