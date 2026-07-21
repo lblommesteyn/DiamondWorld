@@ -64,7 +64,7 @@ class ContinuousHead(nn.Module):
         params = nn.Dense(2)(h)               # (..., 2)
         mu        = params[..., 0]
         log_sigma = params[..., 1]
-        sigma = jax.nn.softplus(log_sigma) + 1e-2
+        sigma = jax.nn.softplus(log_sigma) + 5e-2
         return mu, sigma
 
 
