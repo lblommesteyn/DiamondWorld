@@ -167,7 +167,12 @@ def pa_model(
             pa_obs = None
             if teacher_force:
                 pa_obs = jnp.where(batch["pa_outcome"] == -1, 0, batch["pa_outcome"])
-            numpyro.sample("pa_outcome", dist.Categorical(logits=pa_logits), obs=pa_obs)
+            # Mask padded PAs out of the likelihood. Padded positions carry
+            # pa_outcome=-1, remapped to 0 (=K) above; without this mask they were
+            # counted as observed strikeouts (~16% of positions), inflating the
+            # model's K rate and forcing a large K recal at eval.
+            with _nph.mask(mask=batch["pa_valid"]):
+                numpyro.sample("pa_outcome", dist.Categorical(logits=pa_logits), obs=pa_obs)
         return
 
     pa_head   = flax_module("pa_outcome_head",       PAOutcomeHead(),      context)
@@ -183,27 +188,29 @@ def pa_model(
         if teacher_force:
             pa_obs = jnp.where(batch["pa_outcome"] == -1, 0, batch["pa_outcome"])
 
-        pa_outcome = numpyro.sample(
-            "pa_outcome", dist.Categorical(logits=pa_logits), obs=pa_obs,
-        )
-
-        pa_oh = jax.nn.one_hot(pa_outcome, N_PA_OUTCOMES)  # (B, T, 9)
-
-        # Runs scored with upweighting for non-zero events
-        runs_logits = runs_head(context, pa_oh)
-        runs_obs    = jnp.clip(batch["runs_scored"], 0, MAX_RUNS) if teacher_force else None
-        numpyro.sample("runs_scored", dist.Categorical(logits=runs_logits), obs=runs_obs)
-
-        if teacher_force:
-            # Add extra log-prob weight for non-zero run PAs so the model
-            # can't minimise loss by always predicting 0.
-            extra_lp = dist.Categorical(logits=runs_logits).log_prob(runs_obs)
-            numpyro.factor(
-                "runs_upweight",
-                jnp.where(runs_obs > 0, RUNS_UPWEIGHT * extra_lp, 0.0),
+        # Mask padded PAs out of every observed likelihood (see outcome-only path).
+        with _nph.mask(mask=batch["pa_valid"]):
+            pa_outcome = numpyro.sample(
+                "pa_outcome", dist.Categorical(logits=pa_logits), obs=pa_obs,
             )
 
-        # Base state after PA
-        bs_logits = bs_head(context, pa_oh)
-        bs_obs    = batch["base_state_after"] if teacher_force else None
-        numpyro.sample("base_state_after", dist.Categorical(logits=bs_logits), obs=bs_obs)
+            pa_oh = jax.nn.one_hot(pa_outcome, N_PA_OUTCOMES)  # (B, T, 9)
+
+            # Runs scored with upweighting for non-zero events
+            runs_logits = runs_head(context, pa_oh)
+            runs_obs    = jnp.clip(batch["runs_scored"], 0, MAX_RUNS) if teacher_force else None
+            numpyro.sample("runs_scored", dist.Categorical(logits=runs_logits), obs=runs_obs)
+
+            if teacher_force:
+                # Add extra log-prob weight for non-zero run PAs so the model
+                # can't minimise loss by always predicting 0.
+                extra_lp = dist.Categorical(logits=runs_logits).log_prob(runs_obs)
+                numpyro.factor(
+                    "runs_upweight",
+                    jnp.where(runs_obs > 0, RUNS_UPWEIGHT * extra_lp, 0.0),
+                )
+
+            # Base state after PA
+            bs_logits = bs_head(context, pa_oh)
+            bs_obs    = batch["base_state_after"] if teacher_force else None
+            numpyro.sample("base_state_after", dist.Categorical(logits=bs_logits), obs=bs_obs)
