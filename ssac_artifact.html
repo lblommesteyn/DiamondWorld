@@ -1,0 +1,357 @@
+<title>DiamondWorld — A Generative Game Simulator for Counterfactual Baseball</title>
+<style>
+  :root{
+    --bg:#F3F5F1; --surface:#FFFFFF; --surface-2:#EEF1EC;
+    --ink:#17211C; --muted:#5A665F; --faint:#8A968E;
+    --line:#DCE2DB; --line-strong:#C6D0C6;
+    --accent:#AF4A2C; --accent-ink:#8F3A20; --accent-soft:rgba(175,74,44,.10);
+    --field:#2C6E52; --good:#2C6E52; --bad:#AF4A2C;
+    --shadow:0 1px 2px rgba(22,32,28,.05),0 8px 30px rgba(22,32,28,.06);
+    --serif:Georgia,'Iowan Old Style','Times New Roman',serif;
+    --sans:system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
+    --mono:ui-monospace,'SF Mono','SFMono-Regular',Menlo,Consolas,monospace;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --bg:#0F1613; --surface:#151E1A; --surface-2:#1B241F;
+      --ink:#E9EEE9; --muted:#96A39B; --faint:#6E7B73;
+      --line:#232E28; --line-strong:#2E3A32;
+      --accent:#DD7549; --accent-ink:#E88A63; --accent-soft:rgba(221,117,73,.14);
+      --field:#5BB893; --good:#5BB893; --bad:#DD7549;
+      --shadow:0 1px 2px rgba(0,0,0,.3),0 10px 34px rgba(0,0,0,.35);
+    }
+  }
+  :root[data-theme="light"]{
+    --bg:#F3F5F1; --surface:#FFFFFF; --surface-2:#EEF1EC;
+    --ink:#17211C; --muted:#5A665F; --faint:#8A968E;
+    --line:#DCE2DB; --line-strong:#C6D0C6;
+    --accent:#AF4A2C; --accent-ink:#8F3A20; --accent-soft:rgba(175,74,44,.10);
+    --field:#2C6E52; --good:#2C6E52; --bad:#AF4A2C;
+    --shadow:0 1px 2px rgba(22,32,28,.05),0 8px 30px rgba(22,32,28,.06);
+  }
+  :root[data-theme="dark"]{
+    --bg:#0F1613; --surface:#151E1A; --surface-2:#1B241F;
+    --ink:#E9EEE9; --muted:#96A39B; --faint:#6E7B73;
+    --line:#232E28; --line-strong:#2E3A32;
+    --accent:#DD7549; --accent-ink:#E88A63; --accent-soft:rgba(221,117,73,.14);
+    --field:#5BB893; --good:#5BB893; --bad:#DD7549;
+    --shadow:0 1px 2px rgba(0,0,0,.3),0 10px 34px rgba(0,0,0,.35);
+  }
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{background:var(--bg);color:var(--ink);font-family:var(--sans);
+    line-height:1.62;margin:0;font-size:17px;
+    -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+  .wrap{max-width:820px;margin:0 auto;padding:0 24px}
+  section{padding:14px 0}
+  p{margin:0 0 16px;max-width:66ch}
+  a{color:var(--accent-ink);text-underline-offset:2px}
+  strong{font-weight:650}
+  .eyebrow{font-family:var(--mono);font-size:12px;letter-spacing:.16em;
+    text-transform:uppercase;color:var(--accent-ink);margin:0 0 14px;font-weight:600}
+  h1{font-family:var(--serif);font-weight:600;font-size:clamp(2.1rem,5.4vw,3.35rem);
+    line-height:1.06;letter-spacing:-.015em;margin:0 0 22px;text-wrap:balance}
+  h2{font-family:var(--serif);font-weight:600;font-size:clamp(1.5rem,3.2vw,1.95rem);
+    line-height:1.14;letter-spacing:-.01em;margin:0 0 8px;text-wrap:balance}
+  h3{font-family:var(--sans);font-weight:640;font-size:1.06rem;margin:0 0 6px;letter-spacing:-.005em}
+  .lede{font-size:clamp(1.12rem,2.1vw,1.32rem);line-height:1.5;color:var(--ink);
+    max-width:60ch;font-family:var(--serif)}
+  .sec-tag{font-family:var(--mono);font-size:11.5px;letter-spacing:.14em;text-transform:uppercase;
+    color:var(--accent-ink);font-weight:600;display:inline-block;margin-bottom:10px;
+    padding:3px 9px;border:1px solid var(--line-strong);border-radius:100px;background:var(--accent-soft)}
+  /* ---- hero ---- */
+  header.hero{padding:72px 0 26px}
+  .rule{height:1px;background:var(--line);border:0;margin:0}
+  .rule-field{height:3px;border:0;margin:0;
+    background:repeating-linear-gradient(90deg,var(--field) 0 22px,transparent 22px 30px)}
+  .byline{color:var(--muted);font-size:15px;margin-top:20px}
+  .byline b{color:var(--ink);font-weight:600}
+  /* ---- stat strip ---- */
+  .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--line);
+    border:1px solid var(--line);border-radius:14px;overflow:hidden;margin:34px 0 6px}
+  .stat{background:var(--surface);padding:18px 16px}
+  .stat .n{font-family:var(--serif);font-size:clamp(1.5rem,3.4vw,2.15rem);font-weight:600;
+    line-height:1;letter-spacing:-.02em;color:var(--accent-ink);font-variant-numeric:tabular-nums}
+  .stat .l{font-size:12.5px;color:var(--muted);margin-top:8px;line-height:1.35}
+  @media(max-width:640px){.stats{grid-template-columns:repeat(2,1fr)}}
+  /* ---- section frame ---- */
+  .band{border-top:1px solid var(--line);margin-top:20px;padding-top:34px}
+  .capgrid{display:grid;grid-template-columns:1fr;gap:0}
+  /* ---- tables ---- */
+  .twrap{overflow-x:auto;border:1px solid var(--line);border-radius:12px;margin:18px 0;
+    box-shadow:var(--shadow);background:var(--surface)}
+  table{border-collapse:collapse;width:100%;font-size:14.5px;min-width:440px}
+  caption{caption-side:bottom;text-align:left;color:var(--faint);font-size:12.5px;
+    padding:10px 14px 2px;font-family:var(--mono)}
+  th,td{padding:10px 14px;text-align:right;font-variant-numeric:tabular-nums;
+    border-bottom:1px solid var(--line)}
+  th:first-child,td:first-child{text-align:left;font-variant-numeric:normal}
+  thead th{font-family:var(--mono);font-weight:600;font-size:11.5px;letter-spacing:.06em;
+    text-transform:uppercase;color:var(--muted);background:var(--surface-2);border-bottom:1px solid var(--line-strong)}
+  tbody tr:last-child td{border-bottom:0}
+  tr.hi td{background:var(--accent-soft);font-weight:600}
+  td .win{color:var(--good);font-weight:640}
+  td .lose{color:var(--bad);font-weight:640}
+  .mono{font-family:var(--mono)}
+  /* ---- callout ---- */
+  .callout{background:var(--surface);border:1px solid var(--line);border-left:3px solid var(--accent);
+    border-radius:10px;padding:20px 22px;margin:22px 0;box-shadow:var(--shadow)}
+  .callout h3{color:var(--accent-ink)}
+  .callout p:last-child{margin-bottom:0}
+  .verdict{background:#22503C;color:#EFF3EE;border-radius:14px;padding:28px 28px;margin:26px 0;
+    box-shadow:var(--shadow)}
+  .verdict h2{color:#FFFFFF;margin-bottom:10px}
+  .verdict p{color:#EFF3EE;opacity:.95;margin-bottom:0;max-width:64ch}
+  /* ---- footnote/meta ---- */
+  .kicker{font-family:var(--mono);font-size:12px;color:var(--faint);letter-spacing:.04em}
+  ul.clean{list-style:none;padding:0;margin:16px 0}
+  ul.clean li{padding:11px 0 11px 26px;border-bottom:1px solid var(--line);position:relative;color:var(--muted);max-width:66ch}
+  ul.clean li:before{content:"";position:absolute;left:2px;top:20px;width:9px;height:9px;
+    border:1.5px solid var(--field);border-radius:2px;transform:rotate(45deg)}
+  ul.clean li b{color:var(--ink);font-weight:600}
+  footer{border-top:1px solid var(--line);margin-top:40px;padding:28px 0 60px;color:var(--faint);font-size:13.5px}
+  footer .mono{color:var(--muted)}
+  .small{font-size:14px;color:var(--muted)}
+  @media(prefers-reduced-motion:no-preference){
+    .stat,.twrap,.callout{transition:none}
+  }
+</style>
+
+<div class="wrap">
+  <header class="hero">
+    <p class="eyebrow">MIT Sloan Sports Analytics · Research Submission</p>
+    <h1>A generative game simulator for counterfactual baseball</h1>
+    <p class="lede">Projection systems answer <em>how good is a player</em>. They cannot
+      answer <em>what happens in this game</em>, because a game is a correlated sequence of
+      plate appearances, not a sum of independent rates. DiamondWorld plays the game out, one
+      plate appearance at a time.</p>
+    <p class="byline"><b>DiamondWorld</b> — a plate-appearance-level generative model (JAX / NumPyro SVI),
+      an empirical rules engine, and a full game simulator. Trained 2015&ndash;2023, evaluated on 2024.</p>
+    <div class="stats" role="list">
+      <div class="stat" role="listitem"><div class="n">0.594</div><div class="l">cross-player rate correlation (v15, 2024) — on par with Marcel</div></div>
+      <div class="stat" role="listitem"><div class="n">1.98&times;</div><div class="l">within-game run overdispersion a summed projection misses</div></div>
+      <div class="stat" role="listitem"><div class="n">+11pts</div><div class="l">win probability from swapping one bat, causally measured</div></div>
+      <div class="stat" role="listitem"><div class="n">63%</div><div class="l">of 2024 games with all key players in-sample</div></div>
+    </div>
+    <p class="kicker" style="margin-top:14px">All simulations use v15 · park + fatigue + recency · KL-corrected SVI · read at the learned player-skill posterior.</p>
+  </header>
+
+  <hr class="rule-field">
+
+  <section class="band">
+    <span class="sec-tag">What-if</span>
+    <h2>1 · Counterfactual analysis</h2>
+    <p>Hold a real 2024 game fixed, change one input, and re-simulate. These are causal
+      estimates from replaying the same game, not correlations from a season of noise.</p>
+    <div class="twrap">
+      <table>
+        <caption>One competitive 2024 game (baseline win prob near 0.5), R = 400 replicas per scenario.</caption>
+        <thead><tr><th>Intervention</th><th>Home win prob.</th><th>Change</th><th>Exp. home runs</th></tr></thead>
+        <tbody>
+          <tr><td>Baseline</td><td>0.443</td><td>&mdash;</td><td>4.49</td></tr>
+          <tr><td>Home starter &rarr; ace (Ohtani)</td><td>0.540</td><td><span class="win">+9.8 pts</span></td><td>4.35</td></tr>
+          <tr><td>Home starter &rarr; replacement (Pelfrey)</td><td>0.480</td><td>+3.7 pts*</td><td>4.86</td></tr>
+          <tr class="hi"><td>Weakest hitter &rarr; star bat (Judge)</td><td>0.555</td><td><span class="win">+11.3 pts</span></td><td>5.39 (+0.90)</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>An ace lifts this game about 10 points of win probability; a single elite bat is worth
+      about 11 points and nearly a full run. The replacement-starter row (*) sits within
+      simulation noise of the baseline, because the actual home starter was already a fringe arm,
+      so a lateral downgrade has little to move &mdash; the causal estimate tracks the real talent gap,
+      not the label. The same machinery answers roster and trade-deadline questions, lineup-card
+      decisions, and injury-replacement impact: change the input, replay the game, read the effect.</p>
+  </section>
+
+  <section class="band">
+    <span class="sec-tag">Lineup</span>
+    <h2>2 · Lineup construction by simulation</h2>
+    <p>Given a fixed set of nine hitters, batting order is a real but small lever sabermetrics
+      has long argued over. We simulate 40 candidate orders and read expected runs directly.</p>
+    <div class="twrap">
+      <table>
+        <caption>Home nine, same players, 40 orders simulated (R = 400 each).</caption>
+        <thead><tr><th>Batting order</th><th>Runs / game</th><th>Win prob.</th></tr></thead>
+        <tbody>
+          <tr><td>Actual order used</td><td>4.60</td><td>0.510</td></tr>
+          <tr class="hi"><td>Best found</td><td>4.87</td><td>0.525</td></tr>
+          <tr><td>Worst found</td><td>4.38</td><td>&mdash;</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>Re-ordering the <em>same nine players</em> moves expected runs by about <strong>0.48 across the
+      40 orders</strong>, and the best beats the order actually used by <strong>+0.27 runs/game</strong>.
+      Small, as sabermetrics has long held, but real and free: over a season it is a win or two from a
+      decision that costs nothing. A smarter optimizer plugs into the same simulator.</p>
+  </section>
+
+  <section class="band">
+    <span class="sec-tag">Tail risk</span>
+    <h2>3 · Correlated tail-risk</h2>
+    <p>A game is not the sum of independent player outcomes; runs cluster (a walk, a single,
+      a homer in one inning). Per-player systems, even summed, model the <em>mean</em> but not
+      the <em>shape</em>. From the baseline game's full simulated distribution:</p>
+    <div class="twrap">
+      <table>
+        <caption>Full outcome distribution, one game, from the generative simulator.</caption>
+        <thead><tr><th>Quantity</th><th>Value</th></tr></thead>
+        <tbody>
+          <tr><td>Mean total runs</td><td>9.52</td></tr>
+          <tr><td>P(total &ge; 10)</td><td>0.465</td></tr>
+          <tr><td>P(total &le; 5)</td><td>0.185</td></tr>
+          <tr><td>P(shutout by either side)</td><td>0.083</td></tr>
+          <tr><td>P(blowout, margin &ge; 5)</td><td>0.250</td></tr>
+          <tr class="hi"><td>Game-total variance vs independent-Poisson</td><td>18.85 vs 9.52 &nbsp;(1.98&times;)</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>That <strong>1.98&times; overdispersion</strong> is exactly the within-game correlation a
+      summed-projection model misses. It matters for anything tail-sensitive: bullpen deployment,
+      blowout and leverage planning, distribution-aware win expectancy.</p>
+  </section>
+
+  <section class="band">
+    <span class="sec-tag">Uncertainty</span>
+    <h2>4 · Win probability with honest uncertainty</h2>
+    <p>Most win-probability models return one number. A generative model returns a distribution,
+      and separates two kinds of uncertainty: <em>aleatoric</em> (the game could play out many ways)
+      and <em>epistemic</em> (how sure we are about the rosters). We draw K = 4 realizations from the
+      fitted player-skill posterior and simulate R = 100 replicas of each, over 30 real 2024 games.</p>
+    <div class="twrap">
+      <table>
+        <caption>Decomposed uncertainty in pre-game win probability (v15).</caption>
+        <thead><tr><th>Source</th><th>Spread (WP)</th></tr></thead>
+        <tbody>
+          <tr><td>Epistemic — roster / skill uncertainty</td><td>4.2%</td></tr>
+          <tr><td>Aleatoric — single-game randomness (R = 100)</td><td>4.9%</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>Roster uncertainty is <strong>comparable to single-game sampling noise</strong>, so a point win
+      probability throws away half the story: two games reading &ldquo;0.62&rdquo; can carry very different
+      credible bands. The interval, not the point, is the honest output for bet sizing and leverage.</p>
+    <div class="callout">
+      <h3>Stated plainly</h3>
+      <p>On this particular 30-game slice the point estimate is over-confident toward the home team
+        (home teams went well under the model's average), but the slice is small and home-unlucky.
+        The contribution here is the <em>uncertainty decomposition</em>, not a calibrated betting price.</p>
+    </div>
+  </section>
+
+  <section class="band">
+    <span class="sec-tag">Grounding</span>
+    <h2>Are the players any good?</h2>
+    <p>For the game-level analyses to mean anything, the players inside the simulator have to be
+      realistic. We benchmark against Marcel, the reproducible public baseline that Steamer, ZiPS,
+      and THE BAT are themselves measured against. Cross-player correlation of predicted vs actual
+      2024 rates, all on the same test set:</p>
+    <div class="twrap">
+      <table>
+        <caption>Higher is better. Marcel column is the 2021&ndash;2023 weighted baseline.</caption>
+        <thead><tr><th>Rate</th><th>Marcel</th><th>DiamondWorld v15</th><th>v13 (prior)</th></tr></thead>
+        <tbody>
+          <tr><td>Strikeout %</td><td>0.791</td><td>0.741</td><td>0.641</td></tr>
+          <tr><td>Walk %</td><td>0.689</td><td>0.645</td><td>0.570</td></tr>
+          <tr><td>Hit %</td><td>0.418</td><td>0.411</td><td>0.280</td></tr>
+          <tr><td>Home-run %</td><td>0.610</td><td>0.580</td><td>0.522</td></tr>
+          <tr class="hi"><td>Average</td><td>0.627</td><td>0.594</td><td>0.503</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>With v15, DiamondWorld's players are <strong>on par with a real projection system</strong>:
+      within 0.033 of Marcel on average (v13 trailed by 0.124), essentially tied on hit rate and
+      close on home runs. It does not claim to out-project a dedicated system, and Steamer / ZiPS /
+      THE BAT in turn sit a few points above Marcel. The point is that the players are realistic
+      enough that the simulator's counterfactual, lineup, tail, and uncertainty results are grounded.</p>
+    <p class="small">The single largest lever was data, not architecture: retraining through 2023 so
+      the recency-weighted features carry the previous season lifted player correlation from 0.503 to
+      0.594 (+18%) and raised in-sample roster coverage from 13% to 63% of 2024 games. A direct
+      head-to-head against Steamer / ZiPS / THE BAT is bounded rather than run because their 2024
+      <em>preseason</em> numbers are archival and gated; Marcel is the reproducible anchor.</p>
+  </section>
+
+  <section class="band">
+    <span class="sec-tag">Methods</span>
+    <h2>Why the obvious metric misleads</h2>
+    <p>Building this surfaced a lesson worth stating on its own. The natural metric for a
+      per-plate-appearance model is held-out log-likelihood. It is the wrong yardstick, and
+      following it selects the wrong model. One plate appearance is near maximum entropy
+      (~1.495 nats), so every model scores near the floor; log-likelihood rewards getting the
+      league-average distribution right and barely moves on whether the model tells
+      <em>individual players apart</em> &mdash; which is the whole job of a world model.</p>
+    <div class="twrap">
+      <table>
+        <caption>Same 2024 test. JEPA has the best likelihood and the worst world model.</caption>
+        <thead><tr><th>Model</th><th>Per-PA NLL</th><th>Player-corr (avg)</th></tr></thead>
+        <tbody>
+          <tr class="hi"><td>JEPA (self-supervised + frozen probe)</td><td>1.49 <span class="win">best</span></td><td>0.10 <span class="lose">worst</span></td></tr>
+          <tr><td>Causal transformer</td><td>1.50</td><td>0.574</td></tr>
+          <tr><td>GRU</td><td>1.49</td><td>0.578</td></tr>
+          <tr><td>MLP ensemble</td><td>1.49</td><td>0.577</td></tr>
+          <tr><td>DiamondWorld v15 (SVI)</td><td>&mdash;</td><td>0.594</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>JEPA has the best likelihood and best raw accuracy of any model, and near-zero player
+      differentiation: its self-supervised objective and frozen probe model the marginal dynamics
+      and discard player identity. Best likelihood and worst world model are two views of one fact.
+      Once differentiation is measured correctly, architecture barely matters (transformer, GRU,
+      and MLP all land near 0.577; the generative SVI leads); the lever that moves the number is
+      features, not a fancier network.</p>
+  </section>
+
+  <section class="band">
+    <span class="sec-tag">Honesty</span>
+    <h2>Does it beat the market?</h2>
+    <p>No, and that is the honest result. The best player model we have (v15) was run through a
+      pre-game-only backtest on 2,355 real 2024 games with closing lines. Every market loses across
+      the full edge sweep, the ROI does not improve as more edge is demanded (the opposite of a real
+      signal), and the closing-line-value proxy is about zero.</p>
+    <div class="twrap">
+      <table>
+        <caption>ROI %, pre-game (no look-ahead bullpen). Two rows per market are the two sides.</caption>
+        <thead><tr><th>Market</th><th>edge 0%</th><th>2%</th><th>4%</th><th>6%</th><th>10%</th></tr></thead>
+        <tbody>
+          <tr><td>Moneyline</td><td class="lose">-9.6 / -4.5</td><td>-10.6 / -4.1</td><td>-9.6 / -7.0</td><td>-7.2 / -4.4</td><td>-9.5 / -4.8</td></tr>
+          <tr><td>Totals</td><td class="lose">-5.9 / -1.7</td><td>-5.4 / -4.2</td><td>-4.2 / -4.1</td><td>-5.6 / -3.1</td><td>-6.1 / +0.8</td></tr>
+          <tr><td>Runline</td><td class="lose">-9.0 / -3.9</td><td>-8.8 / -4.9</td><td>-8.2 / -6.0</td><td>-7.8 / -5.5</td><td>-10.0 / -6.7</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>Weighting the stake by confidence does not help and cannot: Kelly staking returns the identical
+      ROI at 0.25&times;, 0.5&times;, and 1.0&times;, because sizing scales risk, not expected value. The
+      model reports a large average &ldquo;edge&rdquo; (+8.7% to +18%) while hitting only ~48% &mdash; that
+      confidence is miscalibration, not signal. Game lines are efficiently priced; a better <em>player</em>
+      model adds no <em>game-level</em> information the market lacks. Its real gain lives in player props,
+      which free data cannot test.</p>
+  </section>
+
+  <div class="verdict">
+    <h2>The contribution</h2>
+    <p>Not &ldquo;we built a good model,&rdquo; but a generative object that answers counterfactual and
+      distributional questions about baseball games no projection system can touch &mdash; roster what-ifs,
+      lineup optimization, correlated tail-risk, uncertainty-aware win probability &mdash; with players now as
+      realistic as a standard projection baseline, and a methods finding about why the natural evaluation
+      metric misleads.</p>
+  </div>
+
+  <section class="band">
+    <span class="sec-tag">Limitations</span>
+    <h2>What this is not</h2>
+    <ul class="clean">
+      <li><b>Roster coverage.</b> v15 sees through 2023, so 63% of 2024 games have all key players in-sample (up from 13%); demos use known-roster games, and minor-league priors extend to most debuts.</li>
+      <li><b>Bullpen timing.</b> The simulator uses realistic hook distributions but generic timing; the betting evaluation uses pre-game-only bullpen information, since the actual relievers are look-ahead leakage.</li>
+      <li><b>Uncertainty scope.</b> The bands are the fitted player-skill posterior plus game randomness; they do not include model-structure uncertainty.</li>
+      <li><b>Projection head-to-head.</b> Steamer / ZiPS / THE BAT are bounded via Marcel rather than compared directly, because their 2024 preseason numbers are archival and gated.</li>
+    </ul>
+  </section>
+
+  <footer>
+    <p class="mono">DiamondWorld · plate-appearance generative model + empirical rules engine + full game simulator</p>
+    <p>Reproduce: <span class="mono">scenario_sim.py</span> (v15 simulator) ·
+      <span class="mono">ssac_analyses.py</span> (what-if / lineup / tail) ·
+      <span class="mono">wp_uncertainty.py</span> (win probability) ·
+      <span class="mono">marcel_compare.py</span> + <span class="mono">prev_season_ablation.py</span> (benchmark, previous-season lever) ·
+      <span class="mono">wm_sweep.py</span> / <span class="mono">seq_models.py</span> (architecture &amp; JEPA).</p>
+  </footer>
+</div>
