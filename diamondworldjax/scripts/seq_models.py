@@ -130,6 +130,31 @@ def make_models():
     return jax, jnp, nn, SeqMLP, SeqTransformer, Tokenizer, DM
 
 
+# Authoritative class encoding (rules_engine.PA_OUTCOMES): 0=K 1=BB 2=HBP 3=1B 4=2B 5=3B 6=HR 7=out 8=E
+KIDX, HRIDX, HIT_IDX, BB_IDX = 0, 6, [3, 4, 5, 6], [1, 2]
+
+
+def player_corr(bat, probs, y, tag, out_path):
+    """Cross-player rate correlation (predicted vs real K/BB/hit/HR), the world-model
+    metric: does the model rank hitters correctly. Batters with >=150 test PAs."""
+    m = (y >= 0)
+    bat, probs, yi = bat[m], probs[m], np.clip(y[m], 0, NOUT - 1)
+    P = int(bat.max()) + 1
+    acc = {k: np.zeros(P) for k in ("pK", "pBB", "pHit", "pHR", "rK", "rBB", "rHit", "rHR", "n")}
+    np.add.at(acc["pK"], bat, probs[:, KIDX]); np.add.at(acc["pHR"], bat, probs[:, HRIDX])
+    np.add.at(acc["pBB"], bat, probs[:, BB_IDX].sum(1)); np.add.at(acc["pHit"], bat, probs[:, HIT_IDX].sum(1))
+    np.add.at(acc["rK"], bat, (yi == KIDX)); np.add.at(acc["rHR"], bat, (yi == HRIDX))
+    np.add.at(acc["rBB"], bat, np.isin(yi, BB_IDX)); np.add.at(acc["rHit"], bat, np.isin(yi, HIT_IDX))
+    np.add.at(acc["n"], bat, 1.0)
+    keep = acc["n"] >= 150
+    def c(a, b): return float(np.corrcoef(acc[a][keep] / acc["n"][keep], acc[b][keep] / acc["n"][keep])[0, 1])
+    cK, cBB, cHit, cHR = c("pK", "rK"), c("pBB", "rBB"), c("pHit", "rHit"), c("pHR", "rHR")
+    line = (f"{tag} | corr K {cK:.3f} BB {cBB:.3f} Hit {cHit:.3f} HR {cHR:.3f} "
+            f"AVG {np.mean([cK,cBB,cHit,cHR]):.3f} (np={int(keep.sum())})")
+    print(line, flush=True); open(out_path, "a").write(line + "\n")
+    return line
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--arch", choices=["mlp", "transformer", "jepa"], default="transformer")
@@ -137,19 +162,27 @@ def main():
     ap.add_argument("--batch", type=int, default=64)
     ap.add_argument("--lr", type=float, default=3e-4)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--train-end", type=int, default=2022,
+                    help="Last training season (2023 folds in the previous season; test 2024).")
+    ap.add_argument("--test-seasons", default="2023,2024")
+    ap.add_argument("--recency-halflife", type=float, default=None,
+                    help="Recency-weight rate features (pass 2.0 to match v15).")
+    ap.add_argument("--tag", default=None)
     args = ap.parse_args()
+    train_seasons = list(range(2015, args.train_end + 1))
+    test_seasons = [int(x) for x in args.test_seasons.split(",")]
 
     jax, jnp, nn, SeqMLP, SeqTransformer, Tokenizer, DM = make_models()
     import optax
 
     print("Building player table + sequences...", flush=True)
-    train_pitches = load_seasons(TRAIN, data_root=processed_root())
-    ptab = _build_player_table(train_pitches)
+    train_pitches = load_seasons(train_seasons, data_root=processed_root())
+    ptab = _build_player_table(train_pitches, recency_halflife=args.recency_halflife)
     park_map = _build_park_index(train_pitches)
     pit = pitcher_rates(train_pitches.filter(pl.col("pa_terminal")), ptab["id_to_idx"], len(ptab["hand"]))
     del train_pitches
-    tr = build_seqs(TRAIN, ptab, pit, park_map)
-    te = build_seqs(TEST, ptab, pit, park_map)
+    tr = build_seqs(train_seasons, ptab, pit, park_map)
+    te = build_seqs(test_seasons, ptab, pit, park_map)
     P = len(ptab["hand"])
     print(f"  train games {tr['y'].shape[0]}  test games {te['y'].shape[0]}  players {P}", flush=True)
 
@@ -316,6 +349,7 @@ def run_jepa(args, jax, jnp, nn, Tokenizer, DM, tr, te, P, optax):
     # eval probe on test
     nll = n = corr = 0.0
     Gte = te["y"].shape[0]
+    bat_all, y_all, p_all = [], [], []
     for i in range(0, Gte, 128):
         idx = np.arange(i, min(i + 128, Gte))
         z = feats_repr(te, idx)
@@ -323,9 +357,14 @@ def run_jepa(args, jax, jnp, nn, Tokenizer, DM, tr, te, P, optax):
         p = np.exp(logits - logits.max(-1, keepdims=True)); p /= p.sum(-1, keepdims=True)
         m = v & (y >= 0); yi = np.clip(y, 0, NOUT - 1)
         nll += -np.log(np.clip(p[m, yi[m]], 1e-7, 1)).sum(); corr += (p[m].argmax(-1) == yi[m]).sum(); n += m.sum()
+        bat_all.append(te["bat"][idx].reshape(-1)); y_all.append(y.reshape(-1))
+        p_all.append(p.reshape(-1, NOUT))
     print(f"\n=== JEPA (probe) TEST ({int(n)} PAs) ===", flush=True)
     print(f"  per-PA NLL {nll/n:.4f}   accuracy {corr/n:.4f}   (production ~1.52)", flush=True)
-    open("data/eval2/seq_jepa.txt", "w").write(f"jepa-probe test NLL {nll/n:.4f} acc {corr/n:.4f} n {int(n)}\n")
+    open("data/eval2/seq_jepa.txt", "a").write(f"jepa-probe test NLL {nll/n:.4f} acc {corr/n:.4f} n {int(n)}\n")
+    tag = args.tag or f"jepa train<={args.train_end}"
+    player_corr(np.concatenate(bat_all), np.concatenate(p_all), np.concatenate(y_all),
+                tag, "data/eval2/arch_newfeatures.txt")
 
 
 if __name__ == "__main__":

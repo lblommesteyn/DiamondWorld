@@ -22,11 +22,13 @@ from diamondworldjax.scripts.train_pa import _build_player_table, _build_park_in
 from diamondworldjax.data.pipeline import load_seasons
 from diamondworldjax.paths import processed_root
 
+# Authoritative class encoding (rules_engine.PA_OUTCOMES / pa_outcome_idx):
+#   0=K  1=BB  2=HBP  3=1B  4=2B  5=3B  6=HR  7=out  8=E
+# (Prior versions set KIDX=2, which is HBP, not K — the K column was mislabeled.)
 NOUT = 9
-K, BBs, HRs = 2, (1,), 6  # class indices: K=2, BB=1(+HBP=2? no) ... use masks below
-KIDX, BBIDX, HBP, HRIDX = 2, 1, 2, 6
+KIDX, HRIDX = 0, 6
 HIT_IDX = [3, 4, 5, 6]  # 1B,2B,3B,HR
-BB_IDX = [1, 2]         # BB,HBP
+BB_IDX = [1, 2]         # BB,HBP (the free-pass bucket)
 
 
 def build_statcast(pitches, id2i, P):
