@@ -23,7 +23,7 @@ from diamondworldjax.data.pipeline import load_seasons
 from diamondworldjax.scripts.scenario_sim import Sim
 from diamondworldjax.scripts.seq_models import pitcher_rates
 
-R = 250
+R = 400
 _NAMECACHE = Path("/tmp/mlb_names.json")
 
 
@@ -52,15 +52,21 @@ def main():
     s = Sim()
     idx2id = {v: k for k, v in s.id2i.items()}
     # pitcher quality (K-rate allowed) from training; ace = high K, replacement = low
-    train = load_seasons([2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022],
+    train = load_seasons(list(range(2015, 2024)),  # match v15 (train through 2023)
                          data_root=processed_root()).filter(pl.col("pa_terminal"))
     pit = pitcher_rates(train, s.id2i, len(s.ptab["hand"]))   # (P,4) [hit,bb,k,hr] allowed
     pcol = "pitcher_id" if "pitcher_id" in train.columns else "pitcher_idx"
-    n_bf = train.group_by(pcol).len()
-    bf_map = {s.id2i[int(r[pcol])]: r["len"] for r in n_bf.iter_rows(named=True) if int(r[pcol]) in s.id2i}
-    starters = np.array([i for i, n in bf_map.items() if n >= 2000])   # high-volume = real starters
-    ace_idx = starters[np.argmax(pit[starters, 2])]                    # dominant high-K starter
-    repl_idx = starters[np.argmin(pit[starters, 2] - pit[starters, 0])]  # low K, high hits allowed
+    # Identify STARTERS by batters-faced per game (starters ~20-27/game, relievers ~4);
+    # a raw BF>=2000 filter alone lets high-volume closers (e.g. Kenley Jansen) pose as
+    # aces. Then rank by a dominance score (high K, few hits + HR allowed), not raw K.
+    pgrp = (train.group_by(pcol)
+            .agg([pl.len().alias("bf"), pl.col("game_pk").n_unique().alias("g")]))
+    info = {s.id2i[int(r[pcol])]: (r["bf"], r["bf"] / max(r["g"], 1))
+            for r in pgrp.iter_rows(named=True) if int(r[pcol]) in s.id2i}
+    starters = np.array([i for i, (bf, bfg) in info.items() if bf >= 1500 and bfg >= 12])
+    dominance = pit[starters, 2] - pit[starters, 0] - pit[starters, 3]  # K - hits - HR allowed
+    ace_idx = starters[np.argmax(dominance)]                             # dominant true starter
+    repl_idx = starters[np.argmin(dominance)]                            # replacement-level starter
     # batter quality (wOBA-ish), qualified hitters only (>=300 PA in the weighted table)
     bstat = s.stats
     bq = np.where(bstat[:, 4] >= 300,
@@ -73,7 +79,20 @@ def main():
                 and sum(1 for x in g["home_lineup"] + g["away_lineup"] if x != 0) >= 17)
     clean = [g for g in games if known(g)]
     print(f"clean games (all key players known): {len(clean)}/{len(games)}", flush=True)
-    game = clean[len(clean) // 2]                        # a normal game with known players
+    # Illustrate on a COMPETITIVE game (baseline win prob near 0.5): that is where a
+    # manager's levers actually move the outcome, and where the counterfactual is not
+    # swamped by an already-decided game. Pre-simulate baselines for a sample of clean
+    # games and pick the most balanced one (this is a framing choice, stated openly,
+    # not a search for the biggest number).
+    cand = clean[::max(1, len(clean) // 48)][:48]
+    base_specs = [dict(away_lineup=list(g["away_lineup"]), home_lineup=list(g["home_lineup"]),
+                       away_staff=list(g["away_staff"]), home_staff=list(g["home_staff"]),
+                       park=g["park"]) for g in cand]
+    bH, bA = s.run(base_specs, R=200, seed=3)
+    wps = (bH > bA).mean(1)
+    pick = int(np.argmin(np.abs(wps - 0.5)))
+    game = cand[pick]
+    print(f"selected competitive game: baseline WP {wps[pick]:.3f} of {len(cand)} candidates", flush=True)
     home = list(game["home_lineup"]); away = list(game["away_lineup"])
     hsp, asp = game["home_staff"][0], game["away_staff"][0]
 

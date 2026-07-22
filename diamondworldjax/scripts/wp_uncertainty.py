@@ -32,12 +32,12 @@ def main():
     ale = np.sqrt(wp_point * (1 - wp_point) / R)  # aleatoric SE of the point estimate
 
     # real outcomes for calibration
-    arr = np.load("data/eval2/calib_v13_bt_arrays.npz")
+    arr = np.load("data/eval2/calib_v15_bt_arrays.npz")
     real = {int(pk): int(h > a) for pk, h, a in zip(arr["game_pk"], arr["real_home"], arr["real_away"])}
     y = np.array([real.get(int(g["game_pk"]), -1) for g in games])
     m = y >= 0
 
-    out = ["PRE-GAME WIN PROBABILITY WITH FULL UNCERTAINTY (v13)",
+    out = ["PRE-GAME WIN PROBABILITY WITH FULL UNCERTAINTY (v15)",
            f"  {NGAMES} games, {K_DRAWS} posterior skill draws x {R} replicas each", ""]
     out.append(f"  mean epistemic spread (roster uncertainty) = {epi.mean()*100:.1f}% WP")
     out.append(f"  mean aleatoric SE (game randomness at R={R}) = {ale.mean()*100:.1f}% WP")

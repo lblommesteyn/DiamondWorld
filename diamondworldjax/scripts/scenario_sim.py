@@ -22,16 +22,20 @@ from diamondworldjax.scripts.train_pa import _build_player_table, _build_park_in
 from diamondworldjax.scripts.simulate_games import simulate, TRAIN, TEST
 
 V13 = "checkpoints/dwjax_pa_v13/dwjax_step_0050000.pkl"
+V15 = "checkpoints/dwjax_pa_v15/dwjax_step_0035000.pkl"
 RECAL = "data/eval2/v13_cal_params.npz"
 
 
 class Sim:
-    def __init__(self, ckpt=V13, recal=RECAL, recency_hl=2.0, scale=0.18,
-                 skill_mode="mean", recal_key="b_heur"):
+    def __init__(self, ckpt=V15, recal=RECAL, recency_hl=2.0, scale=0.18,
+                 skill_mode="mean", recal_key="b_heur", train_end=2023):
+        # v15 (default) is trained through 2023, so its player embeddings are index-locked
+        # to a 2015-2023 table; train_end must match the checkpoint (2022 for v13).
         import jax, jax.numpy as jnp
         self.jax = jax
         self.params = pickle.load(open(ckpt, "rb"))["params"]
-        train = load_seasons(TRAIN, data_root=processed_root())
+        train_seasons = list(range(2015, train_end + 1))
+        train = load_seasons(train_seasons, data_root=processed_root())
         self.ptab = _build_player_table(train, recency_halflife=recency_hl)
         self.park_map = _build_park_index(train)
         tp = train.filter(pl.col("pa_terminal"))
