@@ -110,6 +110,14 @@ def main() -> None:
     ap.add_argument("--recal-key", type=str, default="b")
     ap.add_argument("--recal-temp", type=float, default=1.0)
     ap.add_argument("--recency-halflife", type=float, default=None)
+    ap.add_argument("--train-end", type=int, default=2022,
+                    help="Last training season for the player table (must match the checkpoint). "
+                         "2023 for v15; then --test-seasons 2024 (2023 becomes in-sample).")
+    ap.add_argument("--test-seasons", default="",
+                    help="Comma list of eval seasons (default = simulate_games.TEST). Use 2024 for v15.")
+    ap.add_argument("--skill-mode", choices=["prior", "mean", "sample"], default="prior")
+    ap.add_argument("--no-bullpen", action="store_true",
+                    help="Starter pitches all game (no reliever info) - pre-game-only betting eval.")
     ap.add_argument("--out", type=Path, default=None)
     args = ap.parse_args()
 
@@ -118,7 +126,9 @@ def main() -> None:
 
     with open(args.ckpt, "rb") as f:
         params = pickle.load(f)["params"]
-    train_pitches = load_seasons(TRAIN, data_root=processed_root())
+    train_seasons = list(range(2015, args.train_end + 1))
+    test_seasons = [int(x) for x in args.test_seasons.split(",")] if args.test_seasons else TEST
+    train_pitches = load_seasons(train_seasons, data_root=processed_root())
     ptab = _build_player_table(train_pitches, recency_halflife=args.recency_halflife)
     park_map = _build_park_index(train_pitches) if args.use_park else None
     train_pa = train_pitches.filter(pl.col("pa_terminal"))
@@ -126,7 +136,7 @@ def main() -> None:
     hook_dists = fit_hook_dists(train_pa)
     del train_pitches, train_pa
 
-    test_pa = load_seasons(TEST, data_root=processed_root()).filter(pl.col("pa_terminal"))
+    test_pa = load_seasons(test_seasons, data_root=processed_root()).filter(pl.col("pa_terminal"))
     keep = test_pa["game_pk"].unique().sort().to_numpy()[:args.limit_games]
     test_pa = test_pa.filter(pl.col("game_pk").is_in(keep.tolist()))
 
@@ -187,6 +197,7 @@ def main() -> None:
             model_fn, params, pt, rep, jax.random.PRNGKey(args.seed + c0 + 1),
             recal=args.recal, recal_scale=args.recal_scale, recal_vec=recal_vec,
             seed=args.seed + c0 + 1, platoon=args.platoon, recal_temp=args.recal_temp,
+            skill_mode=args.skill_mode, no_bullpen=args.no_bullpen,
         )
         a = res["away"].reshape(c1 - c0, R)
         h = res["home"].reshape(c1 - c0, R)

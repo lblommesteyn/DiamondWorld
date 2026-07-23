@@ -232,6 +232,26 @@ market it would be this one. It does not. The run distribution is priced
 efficiently by the market just like the moneyline. This closes the question across
 every market free data covers.
 
+### Re-tested with the fixed model (v13), and a leakage lesson
+
+After the KL-scale fix (v13) made the model materially better, the moneyline was
+re-run to check whether a better model changes the answer. At first it looked like
+it did: v13's moneyline ROI was POSITIVE and rose with the edge filter (+1.8% flat
+to +5.7% at the highest-confidence bets), both sides profitable, with calibrated and
+discriminative P(home) - the textbook signature of a real edge. It was not real. The
+simulator feeds each game its ACTUAL bullpen (the relievers that actually appeared),
+which is post-game information correlated with the outcome (a team that used its
+closer was in a winnable game; mop-up arms mean a blowout loss). Re-running with
+starters only (--no-bullpen, no reliever info) flipped the moneyline from +5.7% back
+to -5.1%, the edge gone entirely. So the apparent edge was reliever look-ahead
+leakage in the betting eval, not model skill; with pre-game-only information v13
+loses ~4-5% like every other configuration, and the CLV proxy stayed ~0 throughout.
+The prior v12 results used the same bullpen but lost anyway, so the market-efficiency
+conclusion is robust and if anything conservative. Two takeaways: an honest betting
+backtest must use pre-game-only inputs (a generic or league-average bullpen, not the
+actual one), and this was the fourth "too good" number in the investigation to
+dissolve under the right control.
+
 The one caveat the data forces: free sources carry only game-level markets
 (moneyline, totals), not the player props where the model's real, baseline-
 impossible signal (K% correlation 0.65, HR% 0.46) would actually be brought to
@@ -300,8 +320,50 @@ prop-signal test all agree that DiamondWorld does not carry information the bett
 market has not already priced. It is a strong generative model of baseball, not a
 profitable bettor.
 
+### The best-ever player model (v15) still does not beat the lines, and Kelly does not rescue it
+
+v15 (the previous-season retrain, our best model at player differentiation, cross-player
+rate correlation 0.594 vs v13's 0.503 on 2024) was run through the same backtest with
+the honest pre-game-only setup (`--no-bullpen`, skill-mode mean) on 2,355 real 2024
+games with closing lines. Every market loses across the full edge sweep:
+
+| market | edge 0% | 2% | 4% | 6% | 10% |
+|---|---|---|---|---|---|
+| moneyline | -9.6 / -4.5 | -10.6 / -4.1 | -9.6 / -7.0 | -7.2 / -4.4 | -9.5 / -4.8 |
+| totals | -5.9 / -1.7 | -5.4 / -4.2 | -4.2 / -4.1 | -5.6 / -3.1 | -6.1 / +0.8 |
+| runline | -9.0 / -3.9 | -8.8 / -4.9 | -8.2 / -6.0 | -7.8 / -5.5 | -10.0 / -6.7 |
+
+(Two rows per cell are the two sides of the market. ROI in percent.) The results are
+negative everywhere, the ROI does not improve as more edge is demanded (the opposite of
+a real signal), and the closing-line-value proxy is about zero (the line moves +0.19%
+to -0.01% toward the model's picks across the sweep). The single +0.8% cell is one side
+of one market at the highest filter, 516 bets, and it does not survive as anything but
+noise. So even a materially better player model carries no game-level pricing edge:
+moneyline, totals, and runline are efficiently priced, and better hitter-by-hitter
+ranking does not add information the market lacks. This is the fifth model to reach the
+same verdict.
+
+**Does weighting the stake by confidence (Kelly) help? No, and it cannot.** Sizing bets
+by the model's edge was tested directly. The return per unit staked is identical at
+every Kelly multiplier (moneyline -5.8% / -4.7% at 0.25x, 0.5x, and 1.0x alike), because
+staking scales how much is risked, not the sign of the expected value. A staking rule
+manages the growth and variance of an edge that already exists; it cannot manufacture
+one from negative-expectation bets. Worse, the model reports a large average edge
+(+8.7% to +18%) while hitting only about 48%, below breakeven: that "confidence" is
+miscalibration, not signal, so betting proportionally to it concentrates stakes on
+exactly the games the model is most wrongly certain about. The edge-threshold sweep is
+the cleaner form of the same test: if the high-confidence bets were the profitable ones,
+ROI would rise with the threshold; it does not.
+
 ## Model selection
 
+- **Best player model overall:** v15 (v13's KL-fixed recipe retrained through 2023, so
+  the recency-weighted rate features finally include the previous season). Cross-player
+  rate correlation 0.594 on 2024 vs v13's 0.503 on the same test, +18%, improving every
+  rate, and it covers 383 in-sample batters vs 332 because 2023 debuts are no longer
+  blanks. The previous season was the single largest lever found: it lifts every
+  architecture (see the architecture section), more than any architecture change does.
+  v15 does not change the betting verdict (see above).
 - **Best marginal run distribution:** v10 (park + fatigue), KL 0.0044 / Wass 0.079.
 - **Best all-around, and best for the betting / player-prop use case:** v12
   (v10 + recency). At its mean-matched scale it nearly ties v10 on KL (0.0046) with
