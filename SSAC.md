@@ -129,11 +129,29 @@ are now as realistic as a standard projection baseline, so the game-level analys
 are grounded, while the simulator delivers the counterfactual, lineup, tail, and
 uncertainty capabilities no projection system can.
 
-A direct head-to-head against Steamer / ZiPS / THE BAT's own numbers would sharpen this,
-but their 2024 *preseason* projections are archival and gated (the live FanGraphs
-leaderboards behind Cloudflare serve only the current season). Marcel is used as the
-reproducible anchor, and the well-documented Marcel-to-professional gap (a few points of
-correlation) bounds where those systems sit: on par with, to a few points above, v15.
+That last claim used to rest on the published folklore that professional systems beat
+Marcel "by a few points." It is now measured. Steamer's actual preseason-2024 hitter
+projections were recovered from a Wayback capture of Razzball's public mirror and scored
+on the identical metric and test set:
+
+| stat | Marcel | **Steamer** | DiamondWorld v15 |
+|---|---|---|---|
+| K%  | 0.790 | **0.820** | 0.741 |
+| BB% | 0.685 | **0.702** | 0.645 |
+| Hit% | 0.420 | **0.510** | 0.411 |
+| HR% | 0.609 | **0.651** | 0.580 |
+| **avg** | **0.626** | **0.671** | **0.594** |
+
+Steamer beats Marcel by 0.045 of average correlation, which confirms the "few points"
+figure with a number, and v15 sits 0.077 below Steamer. The largest single gap is hit
+rate (0.510 vs 0.411), the component most dependent on batted-ball modelling and the one
+we already flag as BABIP-limited; on strikeouts and walks v15 trails by about 0.06.
+Marcel and Steamer are scored on the 376 batters both cover, v15 on its own larger set,
+but restricting Marcel to the common set moves it by less than 0.001, so the sets are the
+same population and the comparison transfers. ZiPS and THE BAT are not included because
+no usable preseason-2024 capture of either exists; rather than estimate them, we report
+only what can be sourced. Reproduce with `fetch_projections.py` and
+`projection_headtohead.py`.
 
 ## A methods note: why the obvious metric misleads
 
