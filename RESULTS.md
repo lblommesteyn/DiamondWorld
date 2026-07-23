@@ -551,6 +551,47 @@ stands: this world model is at its achievable ceiling for the available data, an
 the remaining gains are in the SVI-plus-discriminative hybrid, not in the inputs
 or the architecture.
 
+## Correction: the inputs were not saturated, the construction was wrong
+
+The section above concluded the model is "input-saturated, not input-starved" and
+"at its achievable ceiling for the available data." That conclusion is too strong,
+and `projection_levers.py` shows why, using the same raw columns already on disk.
+
+The failed test added Statcast **summary descriptors** (mean exit velocity, hard-hit
+rate, mean launch angle) as extra features sitting alongside the noisy outcome rates,
+aggregated over eight pooled seasons. Two things were wrong with that. It asked the
+model to rediscover the exit-velocity-to-hit mapping from a scalar mean, and pooling
+eight seasons removes most of the noise that expected stats exist to fix, so by
+construction there was nothing left to gain.
+
+Building the feature the way xBA is actually built gives a different answer. Bin every
+batted ball by (exit velocity, launch angle), take the league hit and HR frequency in
+each bin, and score a batter by the expected outcome of the contact they made rather
+than by what happened to fall in. Then regress that, in a 3-year Marcel window where
+BABIP noise is still large. On 2024, cross-player rate correlation:
+
+| variant | K | BB | Hit | HR | AVG |
+|---|---|---|---|---|---|
+| Marcel (REG=1200, as shipped) | 0.791 | 0.688 | 0.418 | 0.608 | 0.626 |
+| + per-stat tuned regression | 0.794 | 0.677 | 0.428 | 0.608 | 0.627 |
+| + contact quality (xBA-style) | 0.794 | 0.677 | **0.497** | **0.641** | **0.652** |
+| Steamer (measured) | 0.820 | 0.702 | 0.510 | 0.651 | 0.671 |
+| DiamondWorld v15 | 0.741 | 0.645 | 0.411 | 0.580 | 0.594 |
+
+Hit rate moves 0.418 to 0.497, which is nearly the whole 0.09 hit-rate deficit against
+Steamer, and the two levers together recover 58% of the Marcel-to-Steamer gap. The
+tuned regression constants are themselves the diagnostic: K stabilizes at 200 PA of
+regression, BB at 400, hit and HR at 2200. A single REG=1200 for all four stats, which
+is what we shipped, is badly wrong at both ends.
+
+Two caveats, stated plainly. This is measured on a Marcel-style projection, not inside
+v15, so it establishes that the information exists and is usable in the form we need,
+not that v15 gains 0.026 when fed the same thing. And it does not close the gap: 0.019
+of average correlation remains to Steamer, which is where age curves and minor-league
+translation for all players (not just rookies) would have to come from. The honest
+revision is that the ceiling claim was premature: the limit we hit was our feature
+construction, not the data.
+
 ## Reproduce
 
 ```bash
