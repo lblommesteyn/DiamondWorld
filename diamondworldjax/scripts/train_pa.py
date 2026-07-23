@@ -27,7 +27,74 @@ TRAIN_SEASONS = list(range(2015, 2023))
 DEFAULT_F_PLAYER = 16
 
 
-def _build_player_table(pitches, recency_halflife: float | None = None) -> dict:
+EV_BIN, LA_BIN = 2.0, 3.0        # exit-velo (mph) and launch-angle (deg) bin widths
+MIN_BIN_N = 25                   # bins thinner than this are not trusted
+
+
+def _contact_quality(terminal, batter_col, id_to_idx, P, weights):
+    """Expected hit / HR rate per batter from contact quality (the xBA idea).
+
+    Columns 0..3 of the stat table are outcome rates, so a batter's hit rate
+    carries a season of BABIP luck: where the ball landed and who was standing
+    there. This scores the batter on the contact they MADE instead. Bin every
+    batted ball by (exit velocity, launch angle), take the league hit/HR frequency
+    in that bin, and average over the batter's PAs. Strikeouts and walks contribute
+    zero expected hits, so the result is directly comparable to the observed rate.
+
+    projection_levers.py measured this construction lifting hit-rate correlation
+    0.418 -> 0.497 and HR 0.608 -> 0.641 on a Marcel-style projection, which is
+    why it is worth a feature slot here.
+
+    The bin table is built from the TRAINING seasons only (`terminal` is already
+    filtered), so no test-season information leaks in.
+    """
+    import polars as pl
+
+    d = terminal.filter(pl.col("pa_outcome").is_not_null()).with_columns([
+        pl.col("pa_outcome").is_in(["1B", "2B", "3B", "HR"]).cast(pl.Float64).alias("f_hit"),
+        (pl.col("pa_outcome") == "HR").cast(pl.Float64).alias("f_hr"),
+    ])
+    hit_bb = d.filter(pl.col("launch_speed").is_not_null() & pl.col("launch_angle").is_not_null())
+    if len(hit_bb) < 1000:
+        return None
+    binned = hit_bb.with_columns([
+        (pl.col("launch_speed") / EV_BIN).floor().alias("ev_b"),
+        (pl.col("launch_angle") / LA_BIN).floor().alias("la_b"),
+    ])
+    tbl = (binned.group_by(["ev_b", "la_b"])
+           .agg([pl.col("f_hit").mean().alias("p_hit"),
+                 pl.col("f_hr").mean().alias("p_hr"),
+                 pl.len().alias("n")])
+           .filter(pl.col("n") >= MIN_BIN_N)
+           .select(["ev_b", "la_b", "p_hit", "p_hr"]))
+
+    d = (d.with_columns([
+            (pl.col("launch_speed") / EV_BIN).floor().alias("ev_b"),
+            (pl.col("launch_angle") / LA_BIN).floor().alias("la_b")])
+         .join(tbl, on=["ev_b", "la_b"], how="left"))
+    # No launch data, or a bin too thin to trust: fall back to what actually
+    # happened, so those PAs are neither credited nor penalised.
+    d = d.with_columns([
+        pl.col("p_hit").fill_null(pl.col("f_hit")).alias("x_hit"),
+        pl.col("p_hr").fill_null(pl.col("f_hr")).alias("x_hr"),
+        pl.Series("w", weights),
+    ])
+    agg = (d.group_by(batter_col).agg([
+        (pl.col("x_hit") * pl.col("w")).sum().alias("xh"),
+        (pl.col("x_hr") * pl.col("w")).sum().alias("xhr"),
+        pl.col("w").sum().alias("wpa")]))
+
+    x = np.zeros((P, 2), dtype=np.float32)
+    for row in agg.iter_rows(named=True):
+        i = id_to_idx.get(int(row[batter_col]))
+        if i is not None and row["wpa"] > 0:
+            x[i, 0] = row["xh"] / row["wpa"]
+            x[i, 1] = row["xhr"] / row["wpa"]
+    return x
+
+
+def _build_player_table(pitches, recency_halflife: float | None = None,
+                        contact_quality: bool = False) -> dict:
     """Build the per-player stat/handedness table.
 
     recency_halflife (seasons): if set, each PA's contribution to a player's rate
@@ -35,6 +102,11 @@ def _build_player_table(pitches, recency_halflife: float | None = None) -> dict:
     dominates. A leakage-free "current-season" prior: the most recent TRAINING
     season (2022) is weighted highest as the best proxy for 2023-24 talent. None =
     uniform (pooled 2015-2022), the v6..v11 behavior.
+
+    contact_quality: fill stat columns 5 and 6 with expected hit / HR rates built
+    from launch speed and angle rather than from what fell in (see
+    _contact_quality). Off by default: it changes the model's input distribution,
+    so a checkpoint trained without it must be evaluated without it.
     """
     import polars as pl
 
@@ -75,6 +147,16 @@ def _build_player_table(pitches, recency_halflife: float | None = None) -> dict:
 
     pa_count = np.maximum(stats[:, 4:5], 1)
     stats[:, :4] /= pa_count
+
+    if contact_quality and {"launch_speed", "launch_angle"}.issubset(terminal.columns):
+        tnn = terminal.filter(pl.col("pa_outcome").is_not_null())
+        if recency_halflife and "season" in tnn.columns:
+            w = 0.5 ** ((max_season - tnn["season"].to_numpy()) / recency_halflife)
+        else:
+            w = np.ones(len(tnn))
+        xq = _contact_quality(terminal, batter_col, id_to_idx, P, w.astype(np.float64))
+        if xq is not None:
+            stats[:, 5:7] = xq
 
     # Per-player modal handedness for the simulator + the hand embedding.
     # bat_hand: modal batting side (stand); pit_hand: modal throw hand (p_throws).
@@ -191,6 +273,11 @@ def main() -> None:
                         help="Steps to ramp ss_rate from 0 to ss_max_rate")
     parser.add_argument("--cosine-alpha", type=float, default=0.0,
                         help="Cosine LR floor as fraction of init LR (0=decay to 0, 0.1=decay to 10%%)")
+    parser.add_argument("--contact-quality", action="store_true",
+                        help="Fill player stat columns 5-6 with expected hit/HR rates from "
+                             "launch speed and angle (xBA-style) instead of relying only on "
+                             "outcome rates, which carry BABIP luck. Changes the input "
+                             "distribution: eval must pass the same flag. Fresh train.")
     parser.add_argument("--outcome-only", action="store_true",
                         help="Train the outcome-only model (v6): single pa_outcome head, "
                              "runs + base_state handled by the rules engine at eval.")
@@ -243,7 +330,8 @@ def main() -> None:
     print(f"  {len(pitches):,} pitches loaded.", flush=True)
 
     print("Building player table...", flush=True)
-    player_table_np = _build_player_table(pitches, recency_halflife=args.recency_halflife)
+    player_table_np = _build_player_table(pitches, recency_halflife=args.recency_halflife,
+                                          contact_quality=args.contact_quality)
     print(f"  {len(player_table_np['all_ids']):,} unique players.", flush=True)
 
     print("Filtering to PA-terminal rows...", flush=True)

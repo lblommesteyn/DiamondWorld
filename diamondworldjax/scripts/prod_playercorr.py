@@ -25,6 +25,9 @@ def main():
     ap.add_argument("--ckpt", default="checkpoints/dwjax_pa_v12/dwjax_step_0050000.pkl")
     ap.add_argument("--recal", default="data/eval2/v12_cal_params.npz")
     ap.add_argument("--recency-halflife", type=float, default=2.0)
+    ap.add_argument("--contact-quality", action="store_true",
+                    help="Build the player table with xBA-style expected hit/HR columns. "
+                         "Must match how the checkpoint was trained (v16+).")
     ap.add_argument("--skill-mode", choices=["prior", "mean"], default="mean",
                     help="mean substitutes the learned player_mu (correct for a non-collapsed "
                          "latent); prior samples N(0,1) (legacy).")
@@ -47,7 +50,8 @@ def main():
         params = {**params, "player_skills": params["player_mu"]}
     b_heur = np.load(args.recal)["b_heur"].astype(np.float64)
     trp = load_seasons(TRAIN, data_root=processed_root())
-    ptab = _build_player_table(trp, recency_halflife=args.recency_halflife)
+    ptab = _build_player_table(trp, recency_halflife=args.recency_halflife,
+                               contact_quality=args.contact_quality)
     park_map = _build_park_index(trp); id2i = ptab["id_to_idx"]; del trp
 
     n_rookie = 0
