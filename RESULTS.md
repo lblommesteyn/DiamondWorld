@@ -357,13 +357,16 @@ ROI would rise with the threshold; it does not.
 
 ## Model selection
 
-- **Best player model overall:** v15 (v13's KL-fixed recipe retrained through 2023, so
-  the recency-weighted rate features finally include the previous season). Cross-player
-  rate correlation 0.594 on 2024 vs v13's 0.503 on the same test, +18%, improving every
-  rate, and it covers 383 in-sample batters vs 332 because 2023 debuts are no longer
-  blanks. The previous season was the single largest lever found: it lifts every
-  architecture (see the architecture section), more than any architecture change does.
-  v15 does not change the betting verdict (see above).
+- **Best player model overall:** v16 (v15 + contact-quality features), cross-player rate
+  correlation 0.611 on 2024, see the v16 section below. It supersedes v15 (0.594), which
+  in turn supersedes v13 (0.503). None of them change the betting verdict.
+- **Previous best, and the reference recipe:** v15 (v13's KL-fixed recipe retrained
+  through 2023, so the recency-weighted rate features finally include the previous
+  season). Cross-player rate correlation 0.594 on 2024 vs v13's 0.503 on the same test,
+  +18%, improving every rate, and it covers 383 in-sample batters vs 332 because 2023
+  debuts are no longer blanks. The previous season was the single largest data lever
+  before contact quality: it lifts every architecture more than any architecture change
+  does.
 - **Best marginal run distribution:** v10 (park + fatigue), KL 0.0044 / Wass 0.079.
 - **Best all-around, and best for the betting / player-prop use case:** v12
   (v10 + recency). At its mean-matched scale it nearly ties v10 on KL (0.0046) with
@@ -591,6 +594,36 @@ of average correlation remains to Steamer, which is where age curves and minor-l
 translation for all players (not just rookies) would have to come from. The honest
 revision is that the ceiling claim was premature: the limit we hit was our feature
 construction, not the data.
+
+## v16: the contact-quality features, tested inside the model
+
+The first caveat above is now resolved. v16 is v15's exact recipe with one change:
+`--contact-quality`, which fills player-table columns 5-6 with the xBA-style expected
+hit/HR rates instead of leaving the prior to the outcome rates alone. Scored on the
+identical settings v15 used (recency 2, skill-mode mean, train through 2023, test 2024,
+same v13 recal, same 383 batters):
+
+| stat | v15 | v16 | change |
+|---|---|---|---|
+| K%  | 0.741 | 0.769 | +0.028 |
+| BB% | 0.645 | 0.645 | +0.000 |
+| Hit% | 0.411 | 0.422 | +0.011 |
+| HR% | 0.580 | 0.607 | +0.027 |
+| **avg** | **0.594** | **0.611** | **+0.017** |
+
+So the model does exploit the information, worth +0.017 of average correlation, about
+two thirds of the +0.026 the Marcel-level test predicted. The gains land where the
+feature acts: HR clearly up, hit up modestly. BB is flat, exactly as it should be with
+no walk feature added, which is a small confirmation the effect is the feature and not
+noise. K rising +0.028 was not predicted; the most likely explanation is that replacing
+the luck-laden hit column with a cleaner signal lets the shared latent stop absorbing
+BABIP noise and fit strikeouts better. v16 is now the best player model in the project.
+
+This does not overturn the market-efficiency verdict (a better player model still adds
+no game-level information the lines lack) and it does not reach Steamer's 0.671; the
+remaining 0.060 is the age and minor-league levers we cannot build from pitch data. But
+"input-saturated" is now decisively false: one correctly constructed feature moved the
+best model by more than the entire v13-to-v15 previous-season retrain moved hit rate.
 
 ## Reproduce
 
