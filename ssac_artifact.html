@@ -128,7 +128,7 @@
     <p class="byline"><b>DiamondWorld</b> — a plate-appearance-level generative model (JAX / NumPyro SVI),
       an empirical rules engine, and a full game simulator. Trained 2015&ndash;2023, evaluated on 2024.</p>
     <div class="stats" role="list">
-      <div class="stat" role="listitem"><div class="n">0.594</div><div class="l">cross-player rate correlation (v15, 2024) — on par with Marcel</div></div>
+      <div class="stat" role="listitem"><div class="n">0.594</div><div class="l">cross-player rate correlation (v15, 2024) — vs Marcel 0.626, Steamer 0.671</div></div>
       <div class="stat" role="listitem"><div class="n">1.98&times;</div><div class="l">within-game run overdispersion a summed projection misses</div></div>
       <div class="stat" role="listitem"><div class="n">+11pts</div><div class="l">win probability from swapping one bat, causally measured</div></div>
       <div class="stat" role="listitem"><div class="n">63%</div><div class="l">of 2024 games with all key players in-sample</div></div>
@@ -242,32 +242,72 @@
     <span class="sec-tag">Grounding</span>
     <h2>Are the players any good?</h2>
     <p>For the game-level analyses to mean anything, the players inside the simulator have to be
-      realistic. We benchmark against Marcel, the reproducible public baseline that Steamer, ZiPS,
-      and THE BAT are themselves measured against. Cross-player correlation of predicted vs actual
-      2024 rates, all on the same test set:</p>
+      realistic. We benchmark against Marcel, the reproducible public baseline, and against
+      <strong>Steamer's actual preseason-2024 projections</strong>, recovered from a public archive.
+      Cross-player correlation of predicted vs actual 2024 rates, all on the same test set:</p>
     <div class="twrap">
       <table>
-        <caption>Higher is better. Marcel column is the 2021&ndash;2023 weighted baseline.</caption>
-        <thead><tr><th>Rate</th><th>Marcel</th><th>DiamondWorld v15</th><th>v13 (prior)</th></tr></thead>
+        <caption>Higher is better. Marcel is the 2021&ndash;2023 weighted baseline; Steamer is its
+          real preseason-2024 release.</caption>
+        <thead><tr><th>Rate</th><th>Marcel</th><th>Steamer</th><th>DiamondWorld v15</th><th>v13 (prior)</th></tr></thead>
         <tbody>
-          <tr><td>Strikeout %</td><td>0.791</td><td>0.741</td><td>0.641</td></tr>
-          <tr><td>Walk %</td><td>0.689</td><td>0.645</td><td>0.570</td></tr>
-          <tr><td>Hit %</td><td>0.418</td><td>0.411</td><td>0.280</td></tr>
-          <tr><td>Home-run %</td><td>0.610</td><td>0.580</td><td>0.522</td></tr>
-          <tr class="hi"><td>Average</td><td>0.627</td><td>0.594</td><td>0.503</td></tr>
+          <tr><td>Strikeout %</td><td>0.790</td><td>0.820</td><td>0.741</td><td>0.641</td></tr>
+          <tr><td>Walk %</td><td>0.685</td><td>0.702</td><td>0.645</td><td>0.570</td></tr>
+          <tr><td>Hit %</td><td>0.420</td><td>0.510</td><td>0.411</td><td>0.280</td></tr>
+          <tr><td>Home-run %</td><td>0.609</td><td>0.651</td><td>0.580</td><td>0.522</td></tr>
+          <tr class="hi"><td>Average</td><td>0.626</td><td>0.671</td><td>0.594</td><td>0.503</td></tr>
         </tbody>
       </table>
     </div>
-    <p>With v15, DiamondWorld's players are <strong>on par with a real projection system</strong>:
-      within 0.033 of Marcel on average (v13 trailed by 0.124), essentially tied on hit rate and
-      close on home runs. It does not claim to out-project a dedicated system, and Steamer / ZiPS /
-      THE BAT in turn sit a few points above Marcel. The point is that the players are realistic
-      enough that the simulator's counterfactual, lineup, tail, and uncertainty results are grounded.</p>
-    <p class="small">The single largest lever was data, not architecture: retraining through 2023 so
-      the recency-weighted features carry the previous season lifted player correlation from 0.503 to
-      0.594 (+18%) and raised in-sample roster coverage from 13% to 63% of 2024 games. A direct
-      head-to-head against Steamer / ZiPS / THE BAT is bounded rather than run because their 2024
-      <em>preseason</em> numbers are archival and gated; Marcel is the reproducible anchor.</p>
+    <p>This replaces an estimate with a measurement. The claim that professional systems beat Marcel
+      "by a few points" is folklore we previously had to lean on; it is worth exactly
+      <strong>0.045</strong> of average correlation. v15 sits 0.032 below Marcel and 0.077 below
+      Steamer, and its largest single deficit is hit rate. The players are realistic enough that the
+      simulator's counterfactual, lineup, tail, and uncertainty results are grounded, but they are not
+      a match for a dedicated projection system, and we no longer have to guess by how much.</p>
+    <p class="small">Marcel and Steamer are scored on the 376 batters both cover, v15 on its own
+      larger set; restricting Marcel to the common set moves it by less than 0.001, so the populations
+      are the same and the comparison transfers. ZiPS and THE BAT are absent because no usable
+      preseason-2024 capture of either exists. Rather than estimate them, we report only what can be
+      sourced.</p>
+
+    <h3>Where the remaining gap lives</h3>
+    <p>Because architecture barely matters here (every discriminative net lands near 0.577), the gap
+      has to be inputs. v15's entire player prior is five numbers per batter: recency-weighted
+      strikeout, walk, hit and home-run rates, plus a plate-appearance count. That is Marcel's
+      information set without Marcel's tuning. Two levers, built from raw data already on disk,
+      recover most of the difference:</p>
+    <div class="twrap">
+      <table>
+        <caption>Levers applied to a Marcel-style projection, 2024 test set.</caption>
+        <thead><tr><th>Variant</th><th>Hit %</th><th>HR %</th><th>Average</th></tr></thead>
+        <tbody>
+          <tr><td>Marcel, one regression constant for all stats</td><td>0.418</td><td>0.608</td><td>0.626</td></tr>
+          <tr><td>+ per-stat tuned regression</td><td>0.428</td><td>0.608</td><td>0.627</td></tr>
+          <tr class="hi"><td>+ contact quality (xBA-style)</td><td>0.497</td><td>0.641</td><td>0.652</td></tr>
+          <tr><td>Steamer</td><td>0.510</td><td>0.651</td><td>0.671</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>A hit rate built from outcomes carries a season of ball-in-play luck. Scoring a batter on the
+      contact they <em>made</em> instead, by binning every batted ball on exit velocity and launch
+      angle and taking the league hit frequency in that bin, moves hit-rate correlation from 0.418 to
+      0.497, nearly the entire deficit against Steamer. The tuned regression constants are their own
+      diagnostic: strikeouts stabilise at 200 plate appearances of regression, walks at 400, hits and
+      home runs at 2200. A single constant for all four, which is what we shipped, is wrong at both
+      ends. Together the levers recover <strong>58%</strong> of the Marcel-to-Steamer gap; the
+      remaining 0.019 is age curves and minor-league translation, neither derivable from pitch data.</p>
+    <p class="small">This is measured on a Marcel-style projection, not inside v15, so it establishes
+      that the information exists and is usable in the form we need, not that v15 gains 0.026 when fed
+      it. A retrain testing exactly that is running. It also retracts an earlier conclusion of ours
+      that the model was "input-saturated": that test fed summary descriptors such as mean exit
+      velocity alongside the noisy rates, pooled over eight seasons, which removes the very noise
+      expected statistics exist to correct. The ceiling we hit was our feature construction, not the
+      data.</p>
+    <p class="small">The single largest lever so far was still data, not architecture: retraining
+      through 2023 so the recency-weighted features carry the previous season lifted player
+      correlation from 0.503 to 0.594 (+18%) and raised in-sample roster coverage from 13% to 63% of
+      2024 games.</p>
   </section>
 
   <section class="band">
@@ -330,9 +370,9 @@
     <h2>The contribution</h2>
     <p>Not &ldquo;we built a good model,&rdquo; but a generative object that answers counterfactual and
       distributional questions about baseball games no projection system can touch &mdash; roster what-ifs,
-      lineup optimization, correlated tail-risk, uncertainty-aware win probability &mdash; with players now as
-      realistic as a standard projection baseline, and a methods finding about why the natural evaluation
-      metric misleads.</p>
+      lineup optimization, correlated tail-risk, uncertainty-aware win probability &mdash; with players
+      measured directly against a standard baseline and against Steamer rather than assumed realistic,
+      and a methods finding about why the natural evaluation metric misleads.</p>
   </div>
 
   <section class="band">
@@ -342,7 +382,8 @@
       <li><b>Roster coverage.</b> v15 sees through 2023, so 63% of 2024 games have all key players in-sample (up from 13%); demos use known-roster games, and minor-league priors extend to most debuts.</li>
       <li><b>Bullpen timing.</b> The simulator uses realistic hook distributions but generic timing; the betting evaluation uses pre-game-only bullpen information, since the actual relievers are look-ahead leakage.</li>
       <li><b>Uncertainty scope.</b> The bands are the fitted player-skill posterior plus game randomness; they do not include model-structure uncertainty.</li>
-      <li><b>Projection head-to-head.</b> Steamer / ZiPS / THE BAT are bounded via Marcel rather than compared directly, because their 2024 preseason numbers are archival and gated.</li>
+      <li><b>Projection head-to-head.</b> Steamer is now compared directly, from its real preseason-2024 release. ZiPS and THE BAT are not: no usable preseason-2024 capture of either exists, and we would rather omit them than estimate them.</li>
+      <li><b>The contact-quality result.</b> Measured on a Marcel-style projection, not inside v15. It shows the information is usable, not that v15 gains from it; the retrain testing that is still running.</li>
     </ul>
   </section>
 
@@ -352,6 +393,8 @@
       <span class="mono">ssac_analyses.py</span> (what-if / lineup / tail) ·
       <span class="mono">wp_uncertainty.py</span> (win probability) ·
       <span class="mono">marcel_compare.py</span> + <span class="mono">prev_season_ablation.py</span> (benchmark, previous-season lever) ·
+      <span class="mono">fetch_projections.py</span> + <span class="mono">projection_headtohead.py</span> (Steamer head-to-head) ·
+      <span class="mono">projection_levers.py</span> (where the gap lives) ·
       <span class="mono">wm_sweep.py</span> / <span class="mono">seq_models.py</span> (architecture &amp; JEPA).</p>
   </footer>
 </div>
