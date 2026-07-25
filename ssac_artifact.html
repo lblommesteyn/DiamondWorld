@@ -128,12 +128,12 @@
     <p class="byline"><b>DiamondWorld</b> — a plate-appearance-level generative model (JAX / NumPyro SVI),
       an empirical rules engine, and a full game simulator. Trained 2015&ndash;2023, evaluated on 2024.</p>
     <div class="stats" role="list">
-      <div class="stat" role="listitem"><div class="n">0.594</div><div class="l">cross-player rate correlation (v15, 2024) — vs Marcel 0.626, Steamer 0.671</div></div>
+      <div class="stat" role="listitem"><div class="n">0.611</div><div class="l">cross-player rate correlation (v16, 2024) — vs Marcel 0.626, Steamer 0.671</div></div>
       <div class="stat" role="listitem"><div class="n">1.98&times;</div><div class="l">within-game run overdispersion a summed projection misses</div></div>
       <div class="stat" role="listitem"><div class="n">+11pts</div><div class="l">win probability from swapping one bat, causally measured</div></div>
       <div class="stat" role="listitem"><div class="n">63%</div><div class="l">of 2024 games with all key players in-sample</div></div>
     </div>
-    <p class="kicker" style="margin-top:14px">All simulations use v15 · park + fatigue + recency · KL-corrected SVI · read at the learned player-skill posterior.</p>
+    <p class="kicker" style="margin-top:14px">Player model v16 · contact quality + park + fatigue + recency · KL-corrected SVI · read at the learned player-skill posterior. The game demonstrations below illustrate simulator capability on one mean-calibrated game; the v15-to-v16 change is in the player rates, not the simulator mechanics.</p>
   </header>
 
   <hr class="rule-field">
@@ -216,13 +216,14 @@
     <p>Most win-probability models return one number. A generative model returns a distribution,
       and separates two kinds of uncertainty: <em>aleatoric</em> (the game could play out many ways)
       and <em>epistemic</em> (how sure we are about the rosters). We draw K = 4 realizations from the
-      fitted player-skill posterior and simulate R = 100 replicas of each, over 30 real 2024 games.</p>
+      fitted player-skill posterior and simulate R = 100 replicas of each; the decomposition below is
+      over 200 games, the calibration over all 2,376 completed 2024 games.</p>
     <div class="twrap">
       <table>
-        <caption>Decomposed uncertainty in pre-game win probability (v15).</caption>
+        <caption>Decomposed uncertainty in pre-game win probability.</caption>
         <thead><tr><th>Source</th><th>Spread (WP)</th></tr></thead>
         <tbody>
-          <tr><td>Epistemic — roster / skill uncertainty</td><td>4.2%</td></tr>
+          <tr><td>Epistemic — roster / skill uncertainty</td><td>4.6%</td></tr>
           <tr><td>Aleatoric — single-game randomness (R = 100)</td><td>4.9%</td></tr>
         </tbody>
       </table>
@@ -231,10 +232,13 @@
       probability throws away half the story: two games reading &ldquo;0.62&rdquo; can carry very different
       credible bands. The interval, not the point, is the honest output for bet sizing and leverage.</p>
     <div class="callout">
-      <h3>Stated plainly</h3>
-      <p>On this particular 30-game slice the point estimate is over-confident toward the home team
-        (home teams went well under the model's average), but the slice is small and home-unlucky.
-        The contribution here is the <em>uncertainty decomposition</em>, not a calibrated betting price.</p>
+      <h3>Is the point estimate calibrated? Now measured over the full season.</h3>
+      <p>An earlier 30-game slice looked over-confident toward the home team, but it was small and
+        home-unlucky. Over all 2,376 completed 2024 games the point win probability is
+        <strong>well calibrated: ECE 0.039, Brier 0.247</strong> (vs a 0.250 always-base-rate
+        reference), and the model's mean win probability (0.518) matches the actual home-win base
+        rate (0.521) almost exactly &mdash; with only a mild residual over-confidence on strong home
+        favorites (0.596 predicted vs 0.565 observed). The reliability curve hugs the diagonal.</p>
     </div>
   </section>
 
@@ -249,24 +253,25 @@
       <table>
         <caption>Higher is better. Marcel is the 2021&ndash;2023 weighted baseline; Steamer is its
           real preseason-2024 release.</caption>
-        <thead><tr><th>Rate</th><th>Marcel</th><th>Steamer</th><th>DiamondWorld v15</th><th>v13 (prior)</th></tr></thead>
+        <thead><tr><th>Rate</th><th>Marcel</th><th>Steamer</th><th>DiamondWorld v16</th><th>v15 (prior)</th></tr></thead>
         <tbody>
-          <tr><td>Strikeout %</td><td>0.790</td><td>0.820</td><td>0.741</td><td>0.641</td></tr>
-          <tr><td>Walk %</td><td>0.685</td><td>0.702</td><td>0.645</td><td>0.570</td></tr>
-          <tr><td>Hit %</td><td>0.420</td><td>0.510</td><td>0.411</td><td>0.280</td></tr>
-          <tr><td>Home-run %</td><td>0.609</td><td>0.651</td><td>0.580</td><td>0.522</td></tr>
-          <tr class="hi"><td>Average</td><td>0.626</td><td>0.671</td><td>0.594</td><td>0.503</td></tr>
+          <tr><td>Strikeout %</td><td>0.790</td><td>0.820</td><td>0.769</td><td>0.741</td></tr>
+          <tr><td>Walk %</td><td>0.685</td><td>0.702</td><td>0.645</td><td>0.645</td></tr>
+          <tr><td>Hit %</td><td>0.420</td><td>0.510</td><td>0.422</td><td>0.411</td></tr>
+          <tr><td>Home-run %</td><td>0.609</td><td>0.651</td><td>0.607</td><td>0.580</td></tr>
+          <tr class="hi"><td>Average</td><td>0.626</td><td>0.671</td><td>0.611</td><td>0.594</td></tr>
         </tbody>
       </table>
     </div>
     <p>This replaces an estimate with a measurement. The claim that professional systems beat Marcel
       "by a few points" is folklore we previously had to lean on; it is worth exactly
-      <strong>0.045</strong> of average correlation. v15 sits 0.032 below Marcel and 0.077 below
-      Steamer, and its largest single deficit is hit rate. The players are realistic enough that the
-      simulator's counterfactual, lineup, tail, and uncertainty results are grounded, but they are not
-      a match for a dedicated projection system, and we no longer have to guess by how much.</p>
-    <p class="small">Marcel and Steamer are scored on the 376 batters both cover, v15 on its own
-      larger set; restricting Marcel to the common set moves it by less than 0.001, so the populations
+      <strong>0.045</strong> of average correlation. v16 sits <strong>0.015 below Marcel and 0.060
+      below Steamer</strong>, its largest single deficit still hit rate. The players are realistic
+      enough that the simulator's counterfactual, lineup, tail, and uncertainty results are grounded,
+      but they are not a match for a dedicated projection system, and we no longer have to guess by how
+      much. (v16 is v15 plus the contact-quality feature developed below.)</p>
+    <p class="small">Marcel and Steamer are scored on the 376 batters both cover, DiamondWorld on its
+      own larger set; restricting Marcel to the common set moves it by less than 0.001, so the populations
       are the same and the comparison transfers. ZiPS and THE BAT are absent because no usable
       preseason-2024 capture of either exists. Rather than estimate them, we report only what can be
       sourced.</p>
@@ -297,13 +302,14 @@
       home runs at 2200. A single constant for all four, which is what we shipped, is wrong at both
       ends. Together the levers recover <strong>58%</strong> of the Marcel-to-Steamer gap; the
       remaining 0.019 is age curves and minor-league translation, neither derivable from pitch data.</p>
-    <p class="small">This is measured on a Marcel-style projection, not inside v15, so it establishes
-      that the information exists and is usable in the form we need, not that v15 gains 0.026 when fed
-      it. A retrain testing exactly that is running. It also retracts an earlier conclusion of ours
-      that the model was "input-saturated": that test fed summary descriptors such as mean exit
-      velocity alongside the noisy rates, pooled over eight seasons, which removes the very noise
-      expected statistics exist to correct. The ceiling we hit was our feature construction, not the
-      data.</p>
+    <p class="small">This was first measured on a Marcel-style projection, establishing the
+      information exists and is usable. We then shipped it: <strong>v16 = v15 with the contact-quality
+      feature reaches 0.611</strong> (+0.017), about two thirds of what the projection-level test
+      predicted, with the gain landing in hit and home runs exactly as designed. So the model does
+      exploit the signal. It also retracts an earlier conclusion of ours that the model was
+      "input-saturated": that test fed summary descriptors such as mean exit velocity alongside the
+      noisy rates, pooled over eight seasons, which removes the very noise expected statistics exist to
+      correct. The ceiling we hit was our feature construction, not the data.</p>
     <p class="small">The single largest lever so far was still data, not architecture: retraining
       through 2023 so the recency-weighted features carry the previous season lifted player
       correlation from 0.503 to 0.594 (+18%) and raised in-sample roster coverage from 13% to 63% of
@@ -328,7 +334,7 @@
           <tr><td>Causal transformer</td><td>1.50</td><td>0.574</td></tr>
           <tr><td>GRU</td><td>1.49</td><td>0.578</td></tr>
           <tr><td>MLP ensemble</td><td>1.49</td><td>0.577</td></tr>
-          <tr><td>DiamondWorld v15 (SVI)</td><td>&mdash;</td><td>0.594</td></tr>
+          <tr><td>DiamondWorld v16 (SVI)</td><td>&mdash;</td><td>0.611</td></tr>
         </tbody>
       </table>
     </div>
@@ -338,13 +344,21 @@
       Once differentiation is measured correctly, architecture barely matters (transformer, GRU,
       and MLP all land near 0.577; the generative SVI leads); the lever that moves the number is
       features, not a fancier network.</p>
+    <p class="small">We pushed on JEPA to be sure the collapse was the probe and not the network.
+      Fine-tuning JEPA's own encoder end-to-end lifts player-corr from <strong>0.06 to 0.54</strong>
+      (about eight-fold), and training the identical encoder supervised from random init does
+      marginally better still (0.56). So the collapse was the frozen self-supervised probe, and the
+      self-supervised pretraining itself adds nothing here &mdash; it is a slightly worse starting
+      point than random. The best-likelihood mode is still the worst world model, now shown within a
+      single architecture family by changing only frozen versus fine-tuned.</p>
   </section>
 
   <section class="band">
     <span class="sec-tag">Honesty</span>
     <h2>Does it beat the market?</h2>
-    <p>No, and that is the honest result. The best player model we have (v15) was run through a
-      pre-game-only backtest on 2,355 real 2024 games with closing lines. Every market loses across
+    <p>No, and that is the honest result. Our strongest game-level model (v15) was run through a
+      pre-game-only backtest on 2,355 real 2024 games with closing lines (v16 improves player rates,
+      not the game-level verdict). Every market loses across
       the full edge sweep, the ROI does not improve as more edge is demanded (the opposite of a real
       signal), and the closing-line-value proxy is about zero.</p>
     <div class="twrap">
@@ -379,17 +393,17 @@
     <span class="sec-tag">Limitations</span>
     <h2>What this is not</h2>
     <ul class="clean">
-      <li><b>Roster coverage.</b> v15 sees through 2023, so 63% of 2024 games have all key players in-sample (up from 13%); demos use known-roster games, and minor-league priors extend to most debuts.</li>
+      <li><b>Roster coverage.</b> The model sees through 2023, so 63% of 2024 games have all key players in-sample (up from 13%); demos use known-roster games, and minor-league priors extend to most debuts.</li>
       <li><b>Bullpen timing.</b> The simulator uses realistic hook distributions but generic timing; the betting evaluation uses pre-game-only bullpen information, since the actual relievers are look-ahead leakage.</li>
       <li><b>Uncertainty scope.</b> The bands are the fitted player-skill posterior plus game randomness; they do not include model-structure uncertainty.</li>
       <li><b>Projection head-to-head.</b> Steamer is now compared directly, from its real preseason-2024 release. ZiPS and THE BAT are not: no usable preseason-2024 capture of either exists, and we would rather omit them than estimate them.</li>
-      <li><b>The contact-quality result.</b> Measured on a Marcel-style projection, not inside v15. It shows the information is usable, not that v15 gains from it; the retrain testing that is still running.</li>
+      <li><b>The contact-quality result.</b> First measured on a Marcel-style projection, then shipped and confirmed inside the model: v16 (v15 + contact quality) reaches 0.611, +0.017.</li>
     </ul>
   </section>
 
   <footer>
     <p class="mono">DiamondWorld · plate-appearance generative model + empirical rules engine + full game simulator</p>
-    <p>Reproduce: <span class="mono">scenario_sim.py</span> (v15 simulator) ·
+    <p>Reproduce: <span class="mono">scenario_sim.py</span> (simulator, v16 player model) ·
       <span class="mono">ssac_analyses.py</span> (what-if / lineup / tail) ·
       <span class="mono">wp_uncertainty.py</span> (win probability) ·
       <span class="mono">marcel_compare.py</span> + <span class="mono">prev_season_ablation.py</span> (benchmark, previous-season lever) ·

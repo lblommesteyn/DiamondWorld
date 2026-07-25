@@ -20,7 +20,7 @@ import urllib.request
 
 from diamondworldjax.paths import processed_root
 from diamondworldjax.data.pipeline import load_seasons
-from diamondworldjax.scripts.scenario_sim import Sim
+from diamondworldjax.scripts.scenario_sim import Sim, V16
 from diamondworldjax.scripts.seq_models import pitcher_rates
 
 R = 400
@@ -49,7 +49,15 @@ def wp(home, away):  # per-spec win prob for the HOME team
 
 
 def main():
-    s = Sim()
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--v16", action="store_true",
+                    help="Run the analyses on the v16 player model (contact-quality features). "
+                         "Default is v15, which the documented SSAC illustration uses. Note v16's "
+                         "balanced-game picker lands on a different game (see RESULTS/SSAC notes).")
+    args = ap.parse_args()
+    # v16 must build the player table with contact_quality=True to match how it was trained.
+    s = Sim(ckpt=V16, contact_quality=True) if args.v16 else Sim()
     idx2id = {v: k for k, v in s.id2i.items()}
     # pitcher quality (K-rate allowed) from training; ace = high K, replacement = low
     train = load_seasons(list(range(2015, 2024)),  # match v15 (train through 2023)
