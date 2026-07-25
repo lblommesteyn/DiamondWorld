@@ -96,12 +96,20 @@ replicas of each, over 30 real 2024 games:
 - Example bands: WP 0.65 [0.47, 0.66], WP 0.48 [0.41, 0.69]. The interval, not the
   point, is the honest output for downstream decisions (bet sizing, leverage).
 
-Calibration caveat, stated plainly: on this particular 30-game slice the point
-estimate is over-confident toward the home team (home teams went well under the
-model's average), but the slice is small and home-unlucky, so this is a directional
-flag for a full-season calibration pass, not a headline result. The contribution here
-is the *uncertainty decomposition*, not a calibrated betting price (which, as
-documented separately, additionally requires pre-game-only bullpen information).
+Calibration, now measured on the full season: the earlier 30-game slice looked
+over-confident toward the home team, but the slice was small and home-unlucky. Run
+over all 2376 completed 2024 games, the point win probability is **well calibrated:
+ECE 0.039, Brier 0.247** (vs a 0.250 always-base-rate reference), and the model's
+mean win probability (0.518) matches the actual home-win base rate (0.521) almost
+exactly. The reliability curve is close to the diagonal across the whole range, with
+only a mild residual over-confidence on strong home favorites (predicted 0.596 vs
+observed 0.565 when WP > 0.5). The uncertainty decomposition holds on the full season
+too: epistemic (roster) spread 4.6% WP versus aleatoric SE 4.9% WP, so roster
+uncertainty really is comparable to single-game noise, and a point estimate hides it.
+The contribution remains the *uncertainty decomposition*, not a calibrated betting
+price (which additionally requires pre-game-only bullpen information; a fitted hook
+model now supplies exactly that). Reproduce with `wp_uncertainty.py` (full season,
+reliability curve saved to `data/eval2/wp_reliability.png`).
 
 ## Benchmark: is the underlying player model any good?
 
