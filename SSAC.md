@@ -191,15 +191,19 @@ masked PA's latent, VICReg anti-collapse, then a frozen linear probe). Scored on
 JEPA has the best NLL and best raw accuracy of any model, and near-zero player
 differentiation. Its self-supervised objective and frozen probe model the marginal
 dynamics cleanly (the saturated part) and discard player identity (the part that matters).
-Best NLL and worst world model are two views of the same fact. Two further findings
+Best NLL and worst world model are two views of the same fact. Three further findings
 reinforce the lesson: (1) once player differentiation is measured correctly, architecture
 barely matters, the transformer, GRU, and MLP all land at about 0.577, and the generative
 SVI (v15, 0.594) leads; the lever that actually moves the number is *features* (adding the
 previous season lifts every architecture by 0.05 to 0.09), not a fancier network. (2) A
 subtle class-index bug had previously made sequence models look far worse than they are
 (a mislabeled strikeout column); once corrected, attention models rank strikeouts fine.
-The takeaway for anyone building a generative sports model: pick the evaluation that
-matches the use, or the best-scoring model will be the wrong one.
+(3) The collapse is the frozen probe, not the network: fine-tuning JEPA's own encoder
+end-to-end lifts player-corr from 0.06 to 0.54, and training the same encoder supervised
+from scratch does marginally better still (0.56), so the self-supervised representation
+adds nothing here, it is a slightly worse starting point than random. The takeaway for
+anyone building a generative sports model: pick the evaluation that matches the use, or
+the best-scoring model will be the wrong one.
 
 ## Honesty and limitations
 

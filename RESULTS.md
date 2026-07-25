@@ -419,6 +419,36 @@ into the run-distribution and player-stat pipeline (it currently lives only in t
 per-PA prediction head) and to feed it raw pitch-level Statcast rather than
 aggregated rates, which is where representation learning has the most headroom.
 
+## Why JEPA collapses on player-corr, and what fixes it
+
+The methods finding was that JEPA gets the best held-out likelihood of any model and
+the worst player differentiation (near-zero cross-player correlation). That left an
+obvious question: is the collapse the architecture, or the frozen self-supervised
+probe? Three modes of the same causal-transformer encoder, on the same +prev-season
+features and 2024 test set (383 batters), answer it:
+
+| JEPA mode | player-corr AVG | per-PA NLL | accuracy |
+|---|---|---|---|
+| frozen (SSL pretrain + frozen linear probe) | **0.064** | **1.492** (best) | **0.463** (best) |
+| finetune (SSL pretrain, then fine-tune end-to-end) | 0.539 | 1.535 | 0.432 |
+| scratch (no SSL, same encoder trained supervised) | **0.555** | 1.511 | 0.443 |
+
+Two conclusions. **Fine-tuning recovers the collapse**: 0.064 to 0.539, roughly an
+eight-fold jump, landing the encoder next to the other discriminative nets (~0.577).
+So the collapse was never the architecture; it was the frozen probe on a
+representation the SSL objective built to model the marginal (the saturated part) and
+discard player identity (the part that matters). **And the self-supervised
+pretraining is worthless here**: training the identical encoder supervised from
+random init (scratch, 0.555) slightly beats SSL-pretrain-then-finetune (0.539), so
+the SSL representation is not a useful starting point for player differentiation, it
+is a marginally worse one. The whole value proposition of JEPA, a reusable
+self-supervised representation, buys nothing on this problem.
+
+It also sharpens the metric lesson rather than softening it: the mode with the best
+NLL and best accuracy (frozen) is still the worst world model, now demonstrated
+inside a single architecture family by changing only frozen versus fine-tuned.
+Reproduce with `seq_models.py --arch jepa --jepa-mode {frozen,finetune,scratch}`.
+
 ## Technique sweep: what actually helps, and the ceiling
 
 A broad sweep (18 configs, `wm_sweep.py`) asked how good the PA-level world model

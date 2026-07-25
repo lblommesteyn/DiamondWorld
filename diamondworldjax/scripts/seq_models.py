@@ -167,6 +167,10 @@ def main():
     ap.add_argument("--test-seasons", default="2023,2024")
     ap.add_argument("--recency-halflife", type=float, default=None,
                     help="Recency-weight rate features (pass 2.0 to match v15).")
+    ap.add_argument("--jepa-mode", choices=["frozen", "finetune", "scratch"], default="frozen",
+                    help="frozen: SSL pretrain + frozen linear probe (the collapse baseline). "
+                         "finetune: SSL pretrain, then fine-tune the encoder end-to-end. "
+                         "scratch: no SSL pretrain, same encoder trained supervised (control).")
     ap.add_argument("--tag", default=None)
     args = ap.parse_args()
     train_seasons = list(range(2015, args.train_end + 1))
@@ -320,51 +324,88 @@ def run_jepa(args, jax, jnp, nn, Tokenizer, DM, tr, te, P, optax):
                 jnp.array(d["bat_rate"][idx]), jnp.array(d["pit_rate"][idx]), jnp.array(d["state"][idx]))
 
     rng2 = np.random.default_rng(args.seed); G = tr["y"].shape[0]; t0 = time.time()
-    print("JEPA pretrain...", flush=True)
+    if args.jepa_mode != "scratch":
+        print(f"JEPA pretrain ({args.jepa_mode})...", flush=True)
+        for i in range(args.steps):
+            idx = rng2.integers(0, G, args.batch)
+            params, ost, l = jstep(params, ost, bf(tr, idx), jnp.array(tr["y"][idx]),
+                                   jnp.array(tr["valid"][idx], bool))
+            if i % 500 == 0:
+                print(f"  step {i}  jepa-loss {float(l):.4f}  {time.time()-t0:.0f}s", flush=True)
+    else:
+        print("JEPA scratch: no SSL pretrain (supervised control on the same encoder)", flush=True)
+
+    def _eval_and_report(logits_fn, mode_tag):
+        nll = n = corr = 0.0
+        Gte = te["y"].shape[0]
+        bat_all, y_all, p_all = [], [], []
+        for i in range(0, Gte, 128):
+            idx = np.arange(i, min(i + 128, Gte))
+            logits = logits_fn(idx); y = te["y"][idx]; v = te["valid"][idx]
+            p = np.exp(logits - logits.max(-1, keepdims=True)); p /= p.sum(-1, keepdims=True)
+            m = v & (y >= 0); yi = np.clip(y, 0, NOUT - 1)
+            nll += -np.log(np.clip(p[m, yi[m]], 1e-7, 1)).sum()
+            corr += (p[m].argmax(-1) == yi[m]).sum(); n += m.sum()
+            bat_all.append(te["bat"][idx].reshape(-1)); y_all.append(y.reshape(-1))
+            p_all.append(p.reshape(-1, NOUT))
+        print(f"\n=== JEPA ({mode_tag}) TEST ({int(n)} PAs) ===", flush=True)
+        print(f"  per-PA NLL {nll/n:.4f}   accuracy {corr/n:.4f}", flush=True)
+        open("data/eval2/seq_jepa.txt", "a").write(
+            f"jepa-{mode_tag} test NLL {nll/n:.4f} acc {corr/n:.4f} n {int(n)}\n")
+        tag = args.tag or f"jepa-{mode_tag} train<={args.train_end}"
+        player_corr(np.concatenate(bat_all), np.concatenate(p_all), np.concatenate(y_all),
+                    tag, "data/eval2/arch_newfeatures.txt")
+
+    if args.jepa_mode == "frozen":
+        # linear probe on the FROZEN context repr: the collapse baseline (~0.10)
+        print("Linear probe on frozen features...", flush=True)
+        def feats_repr(d, idx):
+            return np.array(ctx.apply(params["ctx"], *bf(d, idx)))
+        Wj = jnp.zeros((DM, NOUT)); bj = jnp.zeros(NOUT)
+        popt = optax.adam(1e-2); pst = popt.init((Wj, bj))
+        def ploss(Wb, z, y, v):
+            W_, b_ = Wb; logits = z @ W_ + b_
+            ll = optax.softmax_cross_entropy_with_integer_labels(logits, jnp.clip(y, 0, NOUT - 1))
+            return (ll * v).sum() / v.sum()
+        pgrad = jax.jit(jax.value_and_grad(ploss))
+        for i in range(1500):
+            idx = rng2.integers(0, G, args.batch)
+            z = jnp.array(feats_repr(tr, idx))
+            y = jnp.array(tr["y"][idx]); v = jnp.array(tr["valid"][idx] & (tr["y"][idx] >= 0), jnp.float32)
+            l, g = pgrad((Wj, bj), z, y, v); upd, pst = popt.update(g, pst)
+            Wj, bj = optax.apply_updates((Wj, bj), upd)
+        _eval_and_report(lambda idx: np.array(feats_repr(te, idx) @ Wj + bj), "frozen")
+        return
+
+    # finetune / scratch: train the encoder end-to-end with a linear outcome head.
+    # finetune starts from the SSL-pretrained encoder; scratch from random init. This
+    # isolates whether the frozen-probe collapse is the SSL objective (recoverable by
+    # fine-tuning) and whether SSL pretraining helps over plain supervised training.
+    head = nn.Dense(NOUT)
+    z0 = ctx.apply(params["ctx"], *bf(tr, np.arange(min(4, G))))
+    sup = {"ctx": params["ctx"], "head": head.init(rng, z0)}
+    sopt = optax.adamw(args.lr, weight_decay=1e-4); sst = sopt.init(sup)
+    def sloss(sp, feats, y, valid):
+        logits = head.apply(sp["head"], ctx.apply(sp["ctx"], *feats))
+        v = (valid & (y >= 0)).reshape(-1).astype(jnp.float32)
+        ll = optax.softmax_cross_entropy_with_integer_labels(
+            logits.reshape(-1, NOUT), jnp.clip(y, 0, NOUT - 1).reshape(-1))
+        return (ll * v).sum() / (v.sum() + 1e-6)
+    @jax.jit
+    def sstep(sp, sst, feats, y, valid):
+        l, g = jax.value_and_grad(sloss)(sp, feats, y, valid)
+        upd, sst = sopt.update(g, sst, sp)
+        return optax.apply_updates(sp, upd), sst, l
+    print(f"JEPA {args.jepa_mode}: fine-tuning encoder end-to-end...", flush=True)
     for i in range(args.steps):
         idx = rng2.integers(0, G, args.batch)
-        params, ost, l = jstep(params, ost, bf(tr, idx), jnp.array(tr["y"][idx]),
-                               jnp.array(tr["valid"][idx], bool))
+        sup, sst, l = sstep(sup, sst, bf(tr, idx), jnp.array(tr["y"][idx]),
+                            jnp.array(tr["valid"][idx], bool))
         if i % 500 == 0:
-            print(f"  step {i}  jepa-loss {float(l):.4f}  {time.time()-t0:.0f}s", flush=True)
-
-    # linear probe: frozen context repr -> outcome logits (train probe on 2015-22)
-    print("Linear probe on frozen features...", flush=True)
-    def feats_repr(d, idx):
-        return np.array(ctx.apply(params["ctx"], *bf(d, idx)))
-    W = np.zeros((DM, NOUT)); blin = np.zeros(NOUT)
-    Wj = jnp.array(W); bj = jnp.array(blin)
-    popt = optax.adam(1e-2); pst = popt.init((Wj, bj))
-    def ploss(Wb, z, y, v):
-        W_, b_ = Wb; logits = z @ W_ + b_
-        ll = optax.softmax_cross_entropy_with_integer_labels(logits, jnp.clip(y, 0, NOUT - 1))
-        return (ll * v).sum() / v.sum()
-    pgrad = jax.jit(jax.value_and_grad(ploss))
-    for i in range(1500):
-        idx = rng2.integers(0, G, args.batch)
-        z = jnp.array(feats_repr(tr, idx))
-        y = jnp.array(tr["y"][idx]); v = jnp.array(tr["valid"][idx] & (tr["y"][idx] >= 0), jnp.float32)
-        l, g = pgrad((Wj, bj), z, y, v); upd, pst = popt.update(g, pst); Wj, bj = optax.apply_updates((Wj, bj), upd)
-
-    # eval probe on test
-    nll = n = corr = 0.0
-    Gte = te["y"].shape[0]
-    bat_all, y_all, p_all = [], [], []
-    for i in range(0, Gte, 128):
-        idx = np.arange(i, min(i + 128, Gte))
-        z = feats_repr(te, idx)
-        logits = np.array(z @ Wj + bj); y = te["y"][idx]; v = te["valid"][idx]
-        p = np.exp(logits - logits.max(-1, keepdims=True)); p /= p.sum(-1, keepdims=True)
-        m = v & (y >= 0); yi = np.clip(y, 0, NOUT - 1)
-        nll += -np.log(np.clip(p[m, yi[m]], 1e-7, 1)).sum(); corr += (p[m].argmax(-1) == yi[m]).sum(); n += m.sum()
-        bat_all.append(te["bat"][idx].reshape(-1)); y_all.append(y.reshape(-1))
-        p_all.append(p.reshape(-1, NOUT))
-    print(f"\n=== JEPA (probe) TEST ({int(n)} PAs) ===", flush=True)
-    print(f"  per-PA NLL {nll/n:.4f}   accuracy {corr/n:.4f}   (production ~1.52)", flush=True)
-    open("data/eval2/seq_jepa.txt", "a").write(f"jepa-probe test NLL {nll/n:.4f} acc {corr/n:.4f} n {int(n)}\n")
-    tag = args.tag or f"jepa train<={args.train_end}"
-    player_corr(np.concatenate(bat_all), np.concatenate(p_all), np.concatenate(y_all),
-                tag, "data/eval2/arch_newfeatures.txt")
+            print(f"  ft step {i}  ce {float(l):.4f}  {time.time()-t0:.0f}s", flush=True)
+    _eval_and_report(
+        lambda idx: np.array(head.apply(sup["head"], ctx.apply(sup["ctx"], *bf(te, idx)))),
+        args.jepa_mode)
 
 
 if __name__ == "__main__":
