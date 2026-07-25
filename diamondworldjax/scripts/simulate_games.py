@@ -58,6 +58,7 @@ from diamondworldjax.sim.game_extract import (
     extract_games,
     fit_hook_dists,
     pad_staffs,
+    starter_pull_prob,
 )
 from diamondworldjax.scripts.train_pa import _build_player_table, _build_park_index
 
@@ -98,7 +99,7 @@ def simulate(
     model_fn, params, pt, games, rng_key,
     shift=1.0, clock=1.0, recal=False, recal_scale=1.0, recal_vec=RECAL_V6,
     fixed_nine=False, no_bullpen=False, seed=0, platoon=False, recal_temp=1.0,
-    skill_mode="prior", crn_keys=None,
+    skill_mode="prior", crn_keys=None, hook_model=None,
 ):
     """Vectorized simulation across all games with real game structure.
 
@@ -165,13 +166,22 @@ def simulate(
 
     # Per-staff pitcher state: current index into staff, PAs faced by the
     # current pitcher, and the hook threshold (PAs) for the current pitcher.
+    # With a fitted hazard model the starter is governed by P(pull|state), so its
+    # threshold is unused (set to inf); relievers still use a sampled PAs threshold.
     def _staff_state():
+        if no_bullpen:
+            hook0 = np.full(G, np.inf)
+        elif hook_model is not None:
+            hook0 = np.full(G, np.inf)  # starter: hazard-driven, not threshold
+        elif crn:
+            hook0 = np.array([hook_rng[g].choice(starter_pas) for g in range(G)], np.float64)
+        else:
+            hook0 = rng_np.choice(starter_pas, size=G).astype(np.float64)
         return {
             "cur": np.zeros(G, dtype=np.int64),
             "pa": np.zeros(G, dtype=np.float64),
-            "hook": (np.full(G, np.inf) if no_bullpen
-                     else (np.array([hook_rng[g].choice(starter_pas) for g in range(G)], np.float64)
-                           if crn else rng_np.choice(starter_pas, size=G).astype(np.float64))),
+            "ra": np.zeros(G, dtype=np.float64),   # runs allowed by the current pitcher
+            "hook": hook0,
         }
 
     home_ps = _staff_state()  # home staff state (faces away lineup)
@@ -213,13 +223,30 @@ def simulate(
                 break
             idx = np.where(active)[0]
 
-            # Pitching change: hook reached and a fresh arm available.
+            # Pitching change: decide who is pulled, then bring in a fresh arm.
             if not no_bullpen:
-                need = idx[(ps["pa"][idx] >= ps["hook"][idx])
-                           & (ps["cur"][idx] + 1 < staff_len[idx])]
+                a = idx
+                can = ps["cur"][a] + 1 < staff_len[a]
+                if hook_model is not None:
+                    # Starter governed by the fitted state hazard; relievers keep the
+                    # sampled PAs threshold. TTO proxied from PAs faced (~9 per turn).
+                    is_starter = ps["cur"][a] == 0
+                    pas_a = ps["pa"][a]
+                    tto_a = np.minimum(pas_a // 9 + 1, 3)
+                    p_pull = starter_pull_prob(pas_a, np.full(len(a), inning), tto_a,
+                                               ps["ra"][a], hook_model)
+                    u_pull = (np.array([hook_rng[g].random() for g in a]) if crn
+                              else rng_np.random(len(a)))
+                    starter_fire = is_starter & (pas_a >= 1) & (u_pull < p_pull)
+                    reliever_fire = (~is_starter) & (ps["pa"][a] >= ps["hook"][a])
+                    fire = (starter_fire | reliever_fire) & can
+                else:
+                    fire = (ps["pa"][a] >= ps["hook"][a]) & can
+                need = a[fire]
                 if len(need):
                     ps["cur"][need] += 1
                     ps["pa"][need] = 0.0
+                    ps["ra"][need] = 0.0
                     ps["hook"][need] = (np.array([hook_rng[g].choice(reliever_pas) for g in need])
                                         if crn else rng_np.choice(reliever_pas, size=len(need)))
                     cyc[need, :] = 0  # new pitcher: batting team TTO resets
@@ -291,6 +318,7 @@ def simulate(
             outs[idx] = new_outs
             ptr[idx] = (slot + 1) % 9
             ps["pa"][idx] += 1
+            ps["ra"][idx] += runs   # runs allowed by the current fielding pitcher
             still = new_outs < 3
             if walkoff:
                 won = bat_score[idx] > fld_score[idx]

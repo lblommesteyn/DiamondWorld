@@ -30,6 +30,94 @@ def fit_hook_dists(train_pa: pl.DataFrame) -> tuple[np.ndarray, np.ndarray]:
     return starters, relievers
 
 
+# PAs-faced, times-through-order, and runs-allowed. Inning is deliberately excluded:
+# it is near-collinear with PAs faced (~9 batters per turn), and keeping both drives
+# the runs-allowed coefficient to an uninterpretable ~0. Dropping it lets each stay
+# interpretable (pas +, ra +) at no cost to held-out accuracy.
+HOOK_FEATS = ("pas", "tto", "ra")
+
+
+def _fit_logistic(X, y, iters=30, l2=1.0):
+    """Regularized IRLS logistic fit (no sklearn). X includes the intercept col."""
+    beta = np.zeros(X.shape[1])
+    ridge = l2 * np.eye(X.shape[1])
+    ridge[0, 0] = 0.0  # don't regularize the intercept
+    for _ in range(iters):
+        p = 1.0 / (1.0 + np.exp(-np.clip(X @ beta, -30, 30)))
+        w = np.clip(p * (1 - p), 1e-6, None)
+        XtWX = (X.T * w) @ X + ridge
+        grad = X.T @ (y - p) - ridge @ beta
+        try:
+            beta = beta + np.linalg.solve(XtWX, grad)
+        except np.linalg.LinAlgError:
+            break
+    return beta
+
+
+def fit_hook_model(train_pa: pl.DataFrame) -> dict:
+    """State-dependent starter-pull hazard: P(pulled after this PA | state).
+
+    The marginal hook (fit_hook_dists) draws a fixed PAs-faced threshold up front,
+    so a shelled starter is as likely to stay as a cruising one. This fits the real
+    managerial decision instead: a discrete-time hazard over the starter's PAs, with
+    state = (PAs faced so far, inning, times-through-order, runs allowed so far).
+    Each starter PA is one row, labelled 1 only on the PA after which the starter was
+    actually replaced (game/half with >1 pitcher), else 0. Applied in the simulator,
+    it makes bullpen usage endogenous to the simulated game and uses only pre-game
+    information (the fitted hazard + the unfolding state), not the actual bullpen.
+
+    Returns {beta, mean, std, feats} for a standardized logistic model, plus the
+    reliever PAs marginal (relievers are ~1 inning; their variance is small and not
+    worth a state model here).
+    """
+    df = train_pa.select(["game_pk", "half_bin", "pitcher_id", "at_bat_number",
+                          "inning", "tto", "runs_scored"])
+    # starter per (game, half) = earliest at-bat; and pitcher count per half
+    firsts = (df.group_by(["game_pk", "half_bin", "pitcher_id"])
+              .agg(pl.col("at_bat_number").min().alias("fab"))
+              .with_columns(pl.col("fab").rank("ordinal")
+                            .over(["game_pk", "half_bin"]).alias("rk")))
+    npitch = (firsts.group_by(["game_pk", "half_bin"])
+              .agg(pl.len().alias("npitch")))
+    starters = firsts.filter(pl.col("rk") == 1).select(["game_pk", "half_bin", "pitcher_id"])
+    s = (df.join(starters, on=["game_pk", "half_bin", "pitcher_id"], how="inner")
+         .join(npitch, on=["game_pk", "half_bin"], how="left")
+         .sort(["game_pk", "half_bin", "at_bat_number"]))
+    grp = ["game_pk", "half_bin"]
+    s = s.with_columns([
+        pl.col("at_bat_number").cum_count().over(grp).alias("pas"),      # 1..N
+        pl.col("runs_scored").cum_sum().over(grp).alias("ra"),
+        pl.col("at_bat_number").max().over(grp).alias("last_ab"),
+    ])
+    # target: pulled after this PA = this is the last starter PA and a reliever followed
+    s = s.with_columns(
+        ((pl.col("at_bat_number") == pl.col("last_ab")) & (pl.col("npitch") > 1))
+        .cast(pl.Float64).alias("y"))
+    feat = np.column_stack([s[c].to_numpy().astype(np.float64) for c in HOOK_FEATS])
+    y = s["y"].to_numpy().astype(np.float64)
+    mean = feat.mean(0)
+    std = feat.std(0) + 1e-9
+    Xs = np.column_stack([np.ones(len(feat)), (feat - mean) / std])
+    beta = _fit_logistic(Xs, y)
+    _, reliever_pas = fit_hook_dists(train_pa)
+    return {"beta": beta, "mean": mean, "std": std, "feats": HOOK_FEATS,
+            "reliever_pas": reliever_pas, "base_rate": float(y.mean())}
+
+
+def starter_pull_prob(pas, inning, tto, ra, model: dict) -> np.ndarray:
+    """Vectorized P(pull) for the fitted hazard, given per-game state arrays.
+
+    Accepts all four candidate state arrays and selects the columns the model was
+    actually fit on (model["feats"]), so the feature set can change without touching
+    the simulator's call site.
+    """
+    avail = {"pas": np.asarray(pas, float), "inning": np.asarray(inning, float),
+             "tto": np.asarray(tto, float), "ra": np.asarray(ra, float)}
+    feat = np.column_stack([avail[f] for f in model["feats"]])
+    Xs = np.column_stack([np.ones(len(feat)), (feat - model["mean"]) / model["std"]])
+    return 1.0 / (1.0 + np.exp(-np.clip(Xs @ model["beta"], -30, 30)))
+
+
 def extract_games(test_pa: pl.DataFrame, id_to_idx: dict, park_map: dict | None = None) -> list[dict]:
     """Per game: lineups (9 batter idx each), pitching staffs in appearance
     order, park idx.

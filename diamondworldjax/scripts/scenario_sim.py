@@ -17,7 +17,7 @@ from diamondworldjax.paths import processed_root
 from diamondworldjax.data.pipeline import load_seasons
 from diamondworldjax.model.pa_model import pa_model
 from diamondworldjax.sim.rules_engine import EmpiricalEngine
-from diamondworldjax.sim.game_extract import extract_games, fit_hook_dists
+from diamondworldjax.sim.game_extract import extract_games, fit_hook_dists, fit_hook_model
 from diamondworldjax.scripts.train_pa import _build_player_table, _build_park_index, apply_park_idx
 from diamondworldjax.scripts.simulate_games import simulate, TRAIN, TEST
 
@@ -28,7 +28,7 @@ RECAL = "data/eval2/v13_cal_params.npz"
 
 class Sim:
     def __init__(self, ckpt=V15, recal=RECAL, recency_hl=2.0, scale=0.18,
-                 skill_mode="mean", recal_key="b_heur", train_end=2023):
+                 skill_mode="mean", recal_key="b_heur", train_end=2023, hook_model=False):
         # v15 (default) is trained through 2023, so its player embeddings are index-locked
         # to a 2015-2023 table; train_end must match the checkpoint (2022 for v13).
         import jax, jax.numpy as jnp
@@ -41,6 +41,8 @@ class Sim:
         tp = train.filter(pl.col("pa_terminal"))
         engine = EmpiricalEngine().fit(tp)
         hooks = fit_hook_dists(tp)
+        # State-dependent starter-pull hazard (endogenous, pre-game-legit bullpen).
+        self.hook_model = fit_hook_model(tp) if hook_model else None
         del train
         self.id2i = self.ptab["id_to_idx"]
         P = len(self.ptab["hand"])
@@ -71,7 +73,7 @@ class Sim:
         res = simulate(self.model_fn, self.params, self.pt, games,
                        self.jax.random.PRNGKey(seed), recal=True, recal_scale=self.scale,
                        recal_vec=self.recal_vec, seed=seed, skill_mode=sm, no_bullpen=no_bullpen,
-                       crn_keys=crn_keys)
+                       crn_keys=crn_keys, hook_model=self.hook_model)
         n = len(specs)
         return res["home"].reshape(n, R), res["away"].reshape(n, R)
 
