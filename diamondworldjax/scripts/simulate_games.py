@@ -98,12 +98,21 @@ def simulate(
     model_fn, params, pt, games, rng_key,
     shift=1.0, clock=1.0, recal=False, recal_scale=1.0, recal_vec=RECAL_V6,
     fixed_nine=False, no_bullpen=False, seed=0, platoon=False, recal_temp=1.0,
-    skill_mode="prior",
+    skill_mode="prior", crn_keys=None,
 ):
     """Vectorized simulation across all games with real game structure.
 
     Returns dict with per-game scores, occupancy, per-batter outcome counts,
     runs-by-inning (1-9), and structure stats (extras, walk-offs, ties).
+
+    crn_keys: optional per-game integer stream id (length G) enabling common
+    random numbers. Two games with the same key draw the same outcome-gumbel and
+    base-advancement sequence (until their play diverges), so shared game
+    randomness cancels when you difference scenarios. The intended use is to pass
+    the replica index, shared across scenarios, so scenario A replica r and
+    scenario B replica r are paired. Hooks use a separate per-game stream, so a
+    pitching-change timing difference does not scramble the outcome stream. When
+    None, a single global generator is used (the original behaviour).
     """
     import jax
     import jax.numpy as jnp
@@ -132,6 +141,19 @@ def simulate(
     starter_pas, reliever_pas = pt["_hook_dists"]
     rng_np = np.random.default_rng(seed)
 
+    # Common-random-numbers state: one generator per game for the outcome stream
+    # (gumbel + base-advancement uniform) and one for hooks. Games sharing a
+    # crn_key are seeded identically, so they produce identical sequences and the
+    # noise cancels in a scenario difference wherever the play matches.
+    crn = crn_keys is not None
+    if crn:
+        crn_keys = np.asarray(crn_keys, dtype=np.int64)
+        assert len(crn_keys) == G, "crn_keys must have one entry per game"
+        out_rng = [np.random.default_rng(np.random.SeedSequence(entropy=seed, spawn_key=(int(k), 0)))
+                   for k in crn_keys]
+        hook_rng = [np.random.default_rng(np.random.SeedSequence(entropy=seed, spawn_key=(int(k), 1)))
+                    for k in crn_keys]
+
     away_score = np.zeros(G)
     home_score = np.zeros(G)
     away9 = np.full(G, np.nan)   # score snapshot after 9 innings (pre-extras)
@@ -148,7 +170,8 @@ def simulate(
             "cur": np.zeros(G, dtype=np.int64),
             "pa": np.zeros(G, dtype=np.float64),
             "hook": (np.full(G, np.inf) if no_bullpen
-                     else rng_np.choice(starter_pas, size=G).astype(np.float64)),
+                     else (np.array([hook_rng[g].choice(starter_pas) for g in range(G)], np.float64)
+                           if crn else rng_np.choice(starter_pas, size=G).astype(np.float64))),
         }
 
     home_ps = _staff_state()  # home staff state (faces away lineup)
@@ -197,7 +220,8 @@ def simulate(
                 if len(need):
                     ps["cur"][need] += 1
                     ps["pa"][need] = 0.0
-                    ps["hook"][need] = rng_np.choice(reliever_pas, size=len(need))
+                    ps["hook"][need] = (np.array([hook_rng[g].choice(reliever_pas) for g in need])
+                                        if crn else rng_np.choice(reliever_pas, size=len(need)))
                     cyc[need, :] = 0  # new pitcher: batting team TTO resets
 
             slot = ptr[idx]
@@ -233,14 +257,22 @@ def simulate(
                         model_fn(tb, pt, teacher_force=False)
             if recal:
                 logits = (np.array(tr["pa_outcome"]["fn"].logits)[:, 0, :] + recal_scale * recal_vec) / recal_temp
-                oc = np.argmax(logits + rng_np.gumbel(size=logits.shape), axis=-1).astype(np.int64)
+                # Per-game gumbel from the replica-keyed stream when CRN is on, so
+                # the same replica of two scenarios draws the same outcome noise.
+                gum = (np.stack([out_rng[g].gumbel(size=logits.shape[1]) for g in idx])
+                       if crn else rng_np.gumbel(size=logits.shape))
+                oc = np.argmax(logits + gum, axis=-1).astype(np.int64)
             else:
                 oc = np.array(tr["pa_outcome"]["value"])[:, 0].astype(np.int64)
 
             occ_on += (bases[idx] > 0).sum()
             occ_n += B
             np.add.at(pcounts, (batter, oc), 1.0)
-            e = engine.sample(bases[idx], outs[idx], oc, rng_np)
+            # Base advancement: one per-game uniform from the same stream (drawn
+            # after the gumbel, so the per-game order is fixed) feeds the engine's
+            # CRN path; else the shared generator.
+            u = np.array([out_rng[g].random() for g in idx]) if crn else None
+            e = engine.sample(bases[idx], outs[idx], oc, rng_np, u=u)
             runs = e["runs"].astype(np.float64)
 
             if walkoff:

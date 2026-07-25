@@ -226,11 +226,19 @@ class EmpiricalEngine:
             exp[miss] = RUNS[bs[miss], oc[miss]]
         return exp
 
-    def sample(self, base_state, outs, outcome, rng: np.random.Generator) -> dict[str, np.ndarray]:
+    def sample(self, base_state, outs, outcome, rng: np.random.Generator,
+               u: np.ndarray | None = None) -> dict[str, np.ndarray]:
         """Sample (bs_after, runs) per element from the empirical distribution.
 
         Vectorized by unique key: at most 216 keys, so this is a short Python loop
         over the keys present in the batch, each doing one vectorized draw.
+
+        u: optional per-element uniform in [0,1). When given, base advancement is a
+        deterministic function of u instead of a draw from `rng`. This is the
+        common-random-numbers path: the caller supplies one uniform per game from a
+        replica-keyed stream, so the same replica of two scenarios advances runners
+        identically wherever the play is identical, and the shared noise cancels in
+        the scenario difference. When u is None the original rng path is used.
         """
         bs = np.asarray(base_state, np.int64)
         ou = np.clip(np.asarray(outs, np.int64), 0, 2)
@@ -244,7 +252,12 @@ class EmpiricalEngine:
             m = keys == k
             k = int(k)
             if k in self._bsa and len(self._bsa[k]):
-                idx = rng.integers(0, len(self._bsa[k]), size=int(m.sum()))
+                L = len(self._bsa[k])
+                if u is not None:
+                    # floor(u*L), clamped, so u in [0,1) maps uniformly onto 0..L-1
+                    idx = np.minimum((np.asarray(u)[m] * L).astype(np.int64), L - 1)
+                else:
+                    idx = rng.integers(0, L, size=int(m.sum()))
                 out_runs[m] = self._runs[k][idx]
                 out_bsa[m] = self._bsa[k][idx]
             else:

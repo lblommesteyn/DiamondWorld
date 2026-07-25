@@ -54,13 +54,24 @@ class Sim:
         self.scale, self.skill_mode = scale, skill_mode
         self.stats = self.ptab["stats"]   # per-player [hit,bb,k,hr] rates
 
-    def run(self, specs, R=200, seed=0, skill_mode=None, no_bullpen=False):
-        """Return home (n,R), away (n,R) run totals."""
+    def run(self, specs, R=200, seed=0, skill_mode=None, no_bullpen=False, crn=True):
+        """Return home (n,R), away (n,R) run totals.
+
+        crn (default True): pair the random stream by replica index across
+        scenarios, so replica r of every spec sees the same game randomness. For a
+        counterfactual (baseline vs one-change) the shared noise cancels in the
+        difference, giving a far tighter estimate of the causal delta at the same
+        R. Set False for the legacy independent-noise behaviour.
+        """
         sm = skill_mode or self.skill_mode
         games = [dict(s, game_pk=i) for i, s in enumerate(specs) for _ in range(R)]
+        # Spec-major flatten: position p is spec (p//R), replica (p%R). Keying the
+        # stream on the replica index pairs the same replica across all specs.
+        crn_keys = np.tile(np.arange(R), len(specs)) if crn else None
         res = simulate(self.model_fn, self.params, self.pt, games,
                        self.jax.random.PRNGKey(seed), recal=True, recal_scale=self.scale,
-                       recal_vec=self.recal_vec, seed=seed, skill_mode=sm, no_bullpen=no_bullpen)
+                       recal_vec=self.recal_vec, seed=seed, skill_mode=sm, no_bullpen=no_bullpen,
+                       crn_keys=crn_keys)
         n = len(specs)
         return res["home"].reshape(n, R), res["away"].reshape(n, R)
 
