@@ -1,26 +1,32 @@
-"""Strikeout-prop signal test (free data): does the model beat a baseline line?
+"""Strikeout-prop signal test AND real-odds backtest scaffold.
 
-Real historical prop odds are paid-only, so a true prop backtest is out of reach.
-But the question that decides whether props are worth paying for is answerable with
-free data: does the model predict a starting pitcher's strikeouts BETTER than the
-naive baseline a book's line sits near? If it cannot beat a simple baseline out of
-sample, it will not beat a sharp book.
+Real historical prop odds are paid-only, so the true backtest is blocked on data.
+This script does two things so that block is the ONLY thing missing:
 
-For each 2024 start, over the PAs the starter actually faced:
-  actual_K    = real strikeouts
-  model_EK    = sum of the model's calibrated P(K) per PA (v12, conditioned + recal)
-  baseline_EK = sum of the pitcher's 2015-2022 K-rate (matchup-blind)
-The "line" is baseline_EK rounded to the nearest 0.5 (books set K-lines near the
-pitcher's expectation). We bet over/under by whether model_EK beats the line, settle
-vs actual_K at -110, and also compare how well model vs baseline rank actual K.
+  1. Signal test (free data, always runs): does the model predict a starter's
+     strikeouts BETTER than the naive baseline a book's line sits near? Necessary,
+     not sufficient, for a real edge -- if it cannot beat a simple baseline out of
+     sample it will not beat a sharp book. For each 2024 start, over the PAs the
+     starter faced, actual_K vs model_EK (sum of calibrated P(K) per PA) vs
+     baseline_EK (the pitcher's own train-window K-rate x batters faced).
 
-Caveat, stated plainly: real book lines are opponent-adjusted and sharper than this
-baseline, and using the pitcher's actual batters-faced leaks game length equally into
-both predictors. Beating this baseline is NECESSARY, not sufficient, for a real edge.
+  2. Real-odds backtest (runs when --odds <file> is given): the settlement, edge
+     sweep, and closing-line-value logic a paid prop feed will plug straight into.
+     The odds file schema and the American-odds math are fixed and unit-tested here
+     via --selftest (no GPU, no model), against a known-efficient and a known-biased
+     synthetic market, so the day real odds land the backtest is trustworthy.
 
-Usage: python -m diamondworldjax.scripts.strikeout_props
+Model default is v16 (the current best player model, trained through 2023 with the
+contact-quality features); pass --ckpt/--train-end/--contact-quality to change it.
+
+Usage:
+  python -m diamondworldjax.scripts.strikeout_props            # signal test (needs GPU)
+  python -m diamondworldjax.scripts.strikeout_props --selftest # settlement math only
+  python -m diamondworldjax.scripts.strikeout_props --odds data/prop_odds_2024.csv
 """
 from __future__ import annotations
+import argparse
+from pathlib import Path
 import numpy as np
 import polars as pl
 
@@ -33,17 +39,149 @@ from diamondworldjax.sim.rules_engine import PA_OUTCOME_IDX
 from functools import partial
 
 K_IDX = PA_OUTCOME_IDX["K"]
-TRAIN = [2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022]
+V16 = "checkpoints/dwjax_pa_v16/dwjax_step_0050000.pkl"
+
+# ------------------------------------------------------------------ real-odds path
+
+# Prop-odds file schema (CSV or parquet). One row per pitcher-start-market-side, or
+# one row per start with both sides; the loader accepts either. Required columns:
+#   game_pk      int    matches the processed-data game_pk (join key)
+#   pitcher_id   int    MLBAM id of the starter
+#   line         float  the posted strikeout line (e.g. 6.5)
+#   over_odds    int    American odds on the over  (e.g. -115)
+#   under_odds   int    American odds on the under (e.g. -105)
+# Optional (enables closing-line value): close_line, close_over_odds, close_under_odds.
+# A date+name feed can be crosswalked to game_pk/pitcher_id via the MLB Stats API
+# schedule the same way build_odds.py does for moneyline.
+ODDS_REQUIRED = ("game_pk", "pitcher_id", "line", "over_odds", "under_odds")
+
+
+def american_profit(odds: np.ndarray) -> np.ndarray:
+    """Profit per 1 unit staked on a winning bet at the given American odds."""
+    odds = np.asarray(odds, float)
+    return np.where(odds > 0, odds / 100.0, 100.0 / np.abs(odds))
+
+
+def load_prop_odds(path: str) -> pl.DataFrame:
+    p = Path(path)
+    df = pl.read_parquet(p) if p.suffix == ".parquet" else pl.read_csv(p)
+    missing = [c for c in ODDS_REQUIRED if c not in df.columns]
+    if missing:
+        raise ValueError(f"{path} missing required columns {missing}; schema is {ODDS_REQUIRED}")
+    # guard malformed American odds (|odds| must be >= 100); drop those rows loudly
+    bad = df.filter((pl.col("over_odds").abs() < 100) | (pl.col("under_odds").abs() < 100))
+    if len(bad):
+        print(f"  dropping {len(bad)} rows with malformed odds (|american| < 100)")
+    return df.filter((pl.col("over_odds").abs() >= 100) & (pl.col("under_odds").abs() >= 100))
+
+
+def backtest_props(line, over_odds, under_odds, model_ek, actual_k,
+                   close_line=None, edges=(0.0, 0.25, 0.5, 0.75, 1.0, 1.5)) -> list[str]:
+    """Settle a strikeout-prop book at real American odds, over an edge sweep.
+
+    Bet OVER when model_ek - line > edge, UNDER when line - model_ek > edge, using
+    the posted odds for that side; push when actual == line. Reports ROI, hit rate,
+    and (if closing lines are given) closing-line value, the honest leading
+    indicator of whether the bets have real edge.
+    """
+    line = np.asarray(line, float)
+    over_odds = np.asarray(over_odds, float)
+    under_odds = np.asarray(under_odds, float)
+    model_ek = np.asarray(model_ek, float)
+    actual_k = np.asarray(actual_k, float)
+    push = actual_k == line
+    over_win = actual_k > line
+
+    L = ["REAL-ODDS PROP BACKTEST (over if actual>line), posted American odds",
+         f"  starts with odds: {len(line)}", ""]
+    L.append(f"  {'edge':5s} {'bets':>5s} {'ROI':>8s} {'hit':>6s} {'CLV':>8s}")
+    for e in edges:
+        pick_over = (model_ek - line) > e
+        pick_under = (line - model_ek) > e
+        m = (pick_over | pick_under) & ~push
+        if m.sum() == 0:
+            L.append(f"  {e:.2f}  {0:5d}")
+            continue
+        won = np.where(pick_over[m], over_win[m], ~over_win[m])
+        odds = np.where(pick_over[m], over_odds[m], under_odds[m])
+        pnl = np.where(won, american_profit(odds), -1.0)
+        clv = ""
+        if close_line is not None:
+            cl = np.asarray(close_line, float)[m]
+            # value taken vs close: for an over, we beat the market if the line rose
+            # (we got a lower number); mirror for unders. Positive = favourable CLV.
+            mv = np.where(pick_over[m], cl - line[m], line[m] - cl)
+            clv = f"{mv.mean():+7.3f}"
+        L.append(f"  {e:.2f}  {int(m.sum()):5d}  {pnl.mean()*100:+6.1f}%  {won.mean()*100:4.1f}%  {clv:>7s}")
+    return L
+
+
+def _selftest():
+    """Validate the settlement math with no model: an efficient market must return
+    about -vig, a biased market must be beatable. Same guard used for the moneyline
+    backtest engine."""
+    rng = np.random.default_rng(0)
+    n = 20000
+    true_mean = rng.uniform(3, 9, n)
+    actual = rng.poisson(true_mean).astype(float)
+    fair = np.full(n, -110)
+    line = np.floor(true_mean) + 0.5              # unbiased half-integer line (no pushes)
+    # EFFICIENT: the model carries NO information the line lacks -- its number is the
+    # fair line plus noise independent of the outcome, so which side it bets is
+    # uncorrelated with who wins. Any bettor here just pays the -110 vig (~-4.5%).
+    model_noedge = line + rng.normal(0, 0.4, n)
+    eff = backtest_props(line, fair, fair, model_noedge, actual, edges=(0.0,))
+    # BIASED: the line sits 1.5 K too high while the model knows the true mean, so the
+    # model correctly bets unders and profits. A real edge must look like this.
+    biased_line = line + 1.5
+    bia = backtest_props(biased_line, fair, fair, true_mean, actual, edges=(0.0,))
+    print("SELF-TEST: settlement math")
+    print("  efficient market (fair -110 line, model=truth), edge 0:")
+    print("   ", eff[-1].strip(), "-> expect ROI near -vig (~-5%)")
+    print("  biased market (line +1 K high, model=truth), edge 0:")
+    print("   ", bia[-1].strip(), "-> expect ROI clearly positive (model bets unders)")
+    eff_roi = float(eff[-1].split("%")[0].split()[-1])
+    bia_roi = float(bia[-1].split("%")[0].split()[-1])
+    ok = eff_roi < 0 and bia_roi > 5
+    print(f"  PASS: {ok}  (efficient {eff_roi:+.1f}%, biased {bia_roi:+.1f}%)")
+    return ok
 
 
 def main():
-    import jax, jax.numpy as jnp, numpyro.handlers as nh, pickle
-    V12 = "checkpoints/dwjax_pa_v12/dwjax_step_0050000.pkl"
-    params = pickle.load(open(V12, "rb"))["params"]
-    b_heur = np.load("data/eval2/v12_cal_params.npz")["b_heur"].astype(np.float64)
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--ckpt", default=V16)
+    ap.add_argument("--recal", default="data/eval2/v13_cal_params.npz")
+    ap.add_argument("--recal-key", default="b_heur")
+    ap.add_argument("--train-end", type=int, default=2023,
+                    help="Last training season for the player table (must match the ckpt; "
+                         "2023 for v15/v16).")
+    ap.add_argument("--recency-halflife", type=float, default=2.0)
+    ap.add_argument("--contact-quality", action="store_true", default=True,
+                    help="Use xBA-style expected hit/HR columns (v16). --no-contact-quality to disable.")
+    ap.add_argument("--no-contact-quality", dest="contact_quality", action="store_false")
+    ap.add_argument("--skill-mode", default="mean", choices=["mean", "prior"])
+    ap.add_argument("--odds", default=None, help="Path to a real prop-odds file; enables the backtest.")
+    ap.add_argument("--selftest", action="store_true", help="Validate settlement math, no GPU/model.")
+    args = ap.parse_args()
 
+    if args.selftest:
+        _selftest()
+        return
+
+    import jax, jax.numpy as jnp, numpyro.handlers as nh, pickle
+    params = pickle.load(open(args.ckpt, "rb"))["params"]
+    if args.skill_mode == "mean" and "player_mu" in params:
+        params = {**params, "player_skills": params["player_mu"]}
+    b_heur = np.load(args.recal)[args.recal_key].astype(np.float64)
+
+    odds_df = load_prop_odds(args.odds) if args.odds else None
+    if odds_df is not None:
+        print(f"loaded {len(odds_df)} prop-odds rows from {args.odds}")
+
+    TRAIN = list(range(2015, args.train_end + 1))
     train = load_seasons(TRAIN, data_root=processed_root())
-    ptab = _build_player_table(train, recency_halflife=2.0)
+    ptab = _build_player_table(train, recency_halflife=args.recency_halflife,
+                               contact_quality=args.contact_quality)
     park_map = _build_park_index(train)
     id2i = ptab["id_to_idx"]
     # pitcher season K-rate baseline (2015-2022)
@@ -117,23 +255,44 @@ def main():
             print(f"  {i}/{len(gids)} games", flush=True)
 
     # assemble per-start table; baseline_EK from pitcher season K-rate * BF
-    actual, mek, bek, bf = [], [], [], []
+    actual, mek, bek, bf, gpks, spids = [], [], [], [], [], []
     for (g, hb, sp), (aK, mK, n) in recs.items():
         if n < 12:      # require a real start (>=12 batters faced)
             continue
         kr_p = krate.get(sp, league_kr)
         actual.append(aK); mek.append(mK); bek.append(kr_p * n); bf.append(n)
+        gpks.append(int(g)); spids.append(int(sp))
     actual = np.array(actual, float); mek = np.array(mek); bek = np.array(bek); bf = np.array(bf, float)
+    gpks = np.array(gpks); spids = np.array(spids)
     n = len(actual)
 
     def corr(a, b): return float(np.corrcoef(a, b)[0, 1])
-    L = [f"STRIKEOUT-PROP SIGNAL TEST (2024, {n} starts >=12 BF)", ""]
+    tag = Path(args.ckpt).parent.name  # e.g. dwjax_pa_v16
+    L = [f"STRIKEOUT-PROP SIGNAL TEST (2024, {n} starts >=12 BF, model {tag})", ""]
     L.append(f"  actual K: mean {actual.mean():.2f}  | model_EK mean {mek.mean():.2f}  | baseline_EK mean {bek.mean():.2f}")
     L.append("")
     L.append("Predicting actual K (higher corr / lower MAE = better):")
     L.append(f"  baseline (pitcher season K-rate): corr {corr(bek,actual):.3f}  MAE {np.abs(bek-actual).mean():.3f}")
-    L.append(f"  model    (v12 matchup, calibrated): corr {corr(mek,actual):.3f}  MAE {np.abs(mek-actual).mean():.3f}")
+    L.append(f"  model    ({tag} matchup, calibrated): corr {corr(mek,actual):.3f}  MAE {np.abs(mek-actual).mean():.3f}")
     L.append("")
+
+    # ---- REAL-ODDS backtest, when a prop-odds file was supplied ----
+    if odds_df is not None:
+        key = pl.DataFrame({"game_pk": gpks, "pitcher_id": spids,
+                            "model_ek": mek, "actual_k": actual})
+        j = key.join(odds_df, on=["game_pk", "pitcher_id"], how="inner")
+        if len(j) == 0:
+            L.append("REAL-ODDS BACKTEST: 0 starts matched the odds file on (game_pk, pitcher_id).")
+        else:
+            cl = j["close_line"].to_numpy() if "close_line" in j.columns else None
+            L += backtest_props(j["line"].to_numpy(), j["over_odds"].to_numpy(),
+                                j["under_odds"].to_numpy(), j["model_ek"].to_numpy(),
+                                j["actual_k"].to_numpy(), close_line=cl)
+        L.append("")
+        rep = "\n".join(L)
+        print(rep)
+        open("data/eval2/strikeout_props_realodds.txt", "w").write(rep + "\n")
+        return
 
     # prop backtest vs a baseline-set line
     line = np.round(bek * 2) / 2
