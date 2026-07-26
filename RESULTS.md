@@ -15,6 +15,62 @@ posting the lowest KL divergence (3.7x closer fit) and Wasserstein of any method
 at 4,859 games, and unlike them it uniquely and correctly reproduces individual
 player stat lines. Distributional fit plus player identity is the differentiator.
 
+## Simulator benchmarks: measured against Log5, the market, and a summed model
+
+The "a generative model answers distributional questions projection systems cannot"
+claim used to rest on the mechanism being obviously true. `simulator_benchmarks.py`
+measures it on 2024 (2,376 decided games), pre-game and leakage-free (the fitted
+bullpen hook model supplies realistic reliever timing instead of the actual bullpen),
+against the baselines a reviewer would demand. It splits cleanly into a weakness and
+a strength.
+
+**Win probability: calibrated, but it does not out-predict simple baselines.** P(home
+win) from the replicas, versus Log5 (each team's Pythagorean win rate plus home field,
+the canonical talent-only baseline) and the devigged closing moneyline (the market):
+
+| model | log-loss | Brier | AUC | ECE |
+|---|---|---|---|---|
+| base rate (home 0.521) | 0.6923 | 0.2496 | - | - |
+| DiamondWorld sim (v15 + hook, R=100) | 0.6881 | 0.2473 | 0.572 | 0.034 |
+| Log5 (Pythagorean + home field) | 0.6709 | 0.2391 | 0.617 | 0.019 |
+| market (devigged close) | 0.6707 | 0.2391 | 0.614 | 0.019 |
+
+The simulator beats the base rate and is well calibrated (ECE 0.034), but it
+discriminates worse than Log5 and the market (AUC 0.572 vs ~0.615): its per-PA process
+washes team-level strength out toward 0.5, where Log5 and the market encode it directly.
+Honest read: point win probability is not the simulator's edge. (Log5 uses same-season
+team aggregates, a mild in-sample peek, so the fully fair pre-game comparison is sim vs
+market, which the market wins clearly. Replicas and the hook model matter: the same
+benchmark on the old v13 pre-game run at R=40 gave AUC 0.527 and log-loss 0.7334.)
+
+**Run-total distribution: this is the real, measured advantage.** The headline is
+correlated overdispersion a summed model structurally misses. Against an independent
+two-Poisson model with the identical per-game means (so only the shape differs) and a
+league negative-binomial:
+
+| model | mean | var | P(≥10) | P(≤5) | 50% cov | 80% cov | 90% cov | PIT KS | log-score |
+|---|---|---|---|---|---|---|---|---|---|
+| real (empirical) | 8.63 | 18.24 | 0.366 | 0.261 | - | - | - | - | - |
+| DiamondWorld sim | 9.03 | 17.87 | 0.404 | 0.228 | 0.538 | 0.821 | 0.903 | 0.049 | 2.864 |
+| independent 2-Poisson | 9.03 | 8.99 | 0.418 | 0.129 | 0.416 | 0.657 | 0.767 | 0.144 | 2.915 |
+| league negative-binomial | 8.63 | 18.22 | 0.371 | 0.249 | 0.555 | 0.830 | 0.917 | 0.016 | 2.860 |
+
+The simulator's per-game total variance is 17.87 against reality's 18.24 (overdispersion
+1.98x vs 2.11x), and its central-interval coverage is essentially nominal (0.54 / 0.82 /
+0.90 for the 50 / 80 / 90% intervals). The summed independent model, forced to var = mean,
+under-covers catastrophically (0.42 / 0.66 / 0.77) and fails PIT (KS 0.144 vs the sim's
+0.049). So the correlated-overdispersion claim is now measured, not asserted, at full-season
+scale. The bullpen hook model is what earned it: the same sim without it (v13 pre-game)
+had total variance 13.01 and 80% coverage 0.74; realistic reliever timing supplied the
+missing spread.
+
+Two honest limits. A league negative-binomial matches the sim on the marginal (log-score
+2.860 vs 2.864, PIT 0.016) because it is fit to that marginal, but it is not game-specific:
+it gives every matchup the identical distribution, which is exactly what the simulator is
+for and the NB cannot do. And the sim runs about 0.4 runs hot here (mean 9.03 vs 8.63),
+a recal-scale calibration wrinkle that inflates P(≥10) slightly and is worth re-tuning.
+Reproduce with `run_pregame_sim.py` then `simulator_benchmarks.py`.
+
 ## Scoreboard (per-game total runs vs real 2023-2024, all 4,859 games)
 
 Metric definitions: KL and Wasserstein on the discrete per-game run-total

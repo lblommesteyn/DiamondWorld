@@ -80,6 +80,19 @@ distribution:
   anything tail-sensitive: bullpen deployment, blowout/leverage planning, and
   distribution-aware win expectancy.
 
+This is not just one game. Measured across all 2,376 completed 2024 games (pre-game,
+with the fitted bullpen hook model so reliever timing is realistic and leakage-free),
+the simulator's per-game run-total distribution has variance 17.87 against reality's
+18.24 (overdispersion 1.98x vs 2.11x), and its central intervals cover at nominal
+rates: **0.54 / 0.82 / 0.90 for the 50 / 80 / 90% intervals**, with a randomized-PIT
+KS distance of 0.049. The independent two-Poisson summed model, forced to variance =
+mean, under-covers badly (0.42 / 0.66 / 0.77, PIT KS 0.144). So the claim that a summed
+projection cannot produce the real spread is measured, not asserted. The realistic
+bullpen is what earns it: without the hook model the same simulator covered only 0.74
+at the 80% level. A league negative-binomial matches the sim on the *marginal*, but
+gives every matchup the identical distribution, which is precisely what the simulator
+provides and the negative-binomial cannot (see `simulator_benchmarks.py`).
+
 ## 4. Win probability with full uncertainty
 
 Most win-probability models return a single number. A generative model returns a
@@ -110,6 +123,16 @@ The contribution remains the *uncertainty decomposition*, not a calibrated betti
 price (which additionally requires pre-game-only bullpen information; a fitted hook
 model now supplies exactly that). Reproduce with `wp_uncertainty.py` (full season,
 reliability curve saved to `data/eval2/wp_reliability.png`).
+
+One honest limit, stated because we measured it: calibration is not the same as
+discrimination, and the point win probability is *not* the simulator's strength. Scored
+against Log5 (team Pythagorean records plus home field) and the devigged closing
+moneyline over the 2024 season, the simulator's win probability has AUC 0.572 versus
+0.617 for Log5 and 0.614 for the market: it is well calibrated but separates winners
+from losers less sharply than a simple team-strength baseline, because a per-plate-
+appearance process washes team-level talent toward a coin flip. The simulator's edge is
+the *distribution and the decomposition* above (and the counterfactuals below), not a
+better point estimate of who wins.
 
 ## Benchmark: is the underlying player model any good?
 
