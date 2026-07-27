@@ -71,6 +71,37 @@ for and the NB cannot do. And the sim runs about 0.4 runs hot here (mean 9.03 vs
 a recal-scale calibration wrinkle that inflates P(≥10) slightly and is worth re-tuning.
 Reproduce with `run_pregame_sim.py` then `simulator_benchmarks.py`.
 
+## Counterfactual validation: do the causal what-ifs match the market?
+
+The counterfactual engine ("swap this starter, win probability moves by X") was always
+internally generated and never checked against anything external. This checks it against
+the betting market's own repricing, using a natural experiment that needs no game
+outcomes and no look-ahead: within a series the two teams are fixed, so the game-to-game
+change in the line is driven by the starter/park/rest matchup, exactly what a
+counterfactual isolates. If the simulator's within-series win-probability deltas track
+the market's, the causal estimates have independent support. Two leak-free designs (team
+identity only), on 2,355 2024 games with closing moneylines:
+
+| design | corr(sim, market) | note |
+|---|---|---|
+| team fixed effects (controls team strength + home field) | 0.278 | full sample, game-specific residual |
+| within-series (home field constant, starter varies) | 0.258 | permutation null 95th pct 0.034 → significant |
+
+**Direction is validated and it is leak-free:** the simulator's game-specific win-
+probability signal correlates with the market's beyond team identity, so it is capturing
+real starter and matchup effects an independent market also prices, not noise. This is
+the external support the causal claim needed.
+
+**Magnitude is overstated, and now calibrated.** The within-series OLS slope of market on
+sim is 0.17, but the simulator's win probability at R=100 replicas is noisy (reliability
+0.39), which attenuates the slope; correcting for that sampling noise gives a slope of
+**0.44**. So the raw simulator over-reacts to a single starter change by roughly 2x, and
+a raw "+9.8-point ace swap" is about **+4.3 points** in market-calibrated units. The
+honest upshot is a *market-calibrated* counterfactual engine: direction and magnitude
+both tied to an independent ground truth, with the earlier raw headline numbers corrected
+downward. (A higher-replica run would sharpen the magnitude; the direction result is
+already solid.) Reproduce with `counterfactual_validation.py`.
+
 ## Scoreboard (per-game total runs vs real 2023-2024, all 4,859 games)
 
 Metric definitions: KL and Wasserstein on the discrete per-game run-total
