@@ -96,23 +96,25 @@ identity only), on 2,355 2024 games with closing moneylines:
 
 | design | corr(sim, market) | note |
 |---|---|---|
-| team fixed effects (controls team strength + home field) | 0.278 | full sample, game-specific residual |
-| within-series (home field constant, starter varies) | 0.258 | permutation null 95th pct 0.034 → significant |
+| team fixed effects (controls team strength + home field) | 0.330 | full sample, game-specific residual |
+| within-series (home field constant, starter varies) | 0.321 | permutation null 95th pct 0.032 → significant |
 
 **Direction is validated and it is leak-free:** the simulator's game-specific win-
 probability signal correlates with the market's beyond team identity, so it is capturing
 real starter and matchup effects an independent market also prices, not noise. This is
-the external support the causal claim needed.
+the external support the causal claim needed. (These figures are from the R=500
+simulation; at R=100 the correlations read 0.28 / 0.26, attenuated by the simulator's own
+win-probability sampling noise, which the higher-replica run removes.)
 
 **Magnitude is overstated, and now calibrated.** The within-series OLS slope of market on
-sim is 0.17, but the simulator's win probability at R=100 replicas is noisy (reliability
-0.39), which attenuates the slope; correcting for that sampling noise gives a slope of
-**0.44**. So the raw simulator over-reacts to a single starter change by roughly 2x, and
-a raw "+9.8-point ace swap" is about **+4.3 points** in market-calibrated units. The
-honest upshot is a *market-calibrated* counterfactual engine: direction and magnitude
-both tied to an independent ground truth, with the earlier raw headline numbers corrected
-downward. (A higher-replica run would sharpen the magnitude; the direction result is
-already solid.) Reproduce with `counterfactual_validation.py`.
+sim is 0.27; correcting for the simulator's residual replica-sampling noise (reliability
+0.80 at R=500) gives a slope of **0.33**. So the raw simulator over-reacts to a single
+starter change by roughly 3x, and a raw "+9.8-point ace swap" is about **+3.3 points** in
+market-calibrated units. The honest upshot is a *market-calibrated* counterfactual engine:
+direction and magnitude both tied to an independent ground truth, with the earlier raw
+headline numbers corrected downward. The R=500 run makes this reliable rather than a
+noise-extrapolation (reliability rose from 0.39 at R=100 to 0.80). Reproduce with
+`counterfactual_validation.py --arrays data/eval2/calib_v15-pregame-hook-r500_arrays.npz`.
 
 **Is it broad, or just pitchers?** Within a series both the starter and the lineup
 change, so the aggregate result alone cannot say the validated signal is more than
