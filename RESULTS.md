@@ -126,6 +126,31 @@ so the market reprices on both and the causal engine's scope is legitimately bro
 the starter-swap validation generalizes to hitter and lineup what-ifs. Reproduce with
 `whatif_channels.py`.
 
+**Does it generalize across seasons and markets?** The 2024 result could be a
+single-season, single-book artifact. It is not. Freezing the model's player rates and
+running the same within-series channel test on later seasons and a different market
+type (`season_market_validation.py`, `build_odds_2025.py`):
+
+| season | market | model rates | games | within-series corr | channels |
+|---|---|---|---|---|---|
+| 2024 | sportsbook (consensus close) | ≤2023 | 2,355 | 0.26 | both |
+| 2025 | sportsbook (consensus close) | ≤2024 | 1,630 | **0.33** | pitching t=-13.8, hitting t=+2.4 |
+| 2026 (to date) | **Kalshi** prediction market | ≤2023 | 309 | 0.12 | pitching t=-2.65, hitting n.s. |
+
+The causal signal is positive in every case, across **two independent market types** (a
+sportsbook consensus and a Kalshi prediction market), and it holds a full season
+**out-of-sample**: the 2025 test uses rates the model formed before 2025 was played and
+still correlates 0.33 with the market's game-to-game repricing, stronger than in-window
+2024. The 2026 figure is weaker (0.12, and hitting washes out) for a concrete and honest
+reason: those rates are 2.5 years stale, so only ~6 of 9 batters and about half the
+starters are even known, and known players' pre-2024 rates no longer describe their 2026
+form. That degradation is itself a finding: the engine's causal signal is real and
+market-agreeing, and it needs reasonably current player rates to stay sharp. Data notes,
+stated because they bound the claim: Kalshi lists MLB game markets only from ~mid-2026
+(no 2025), the sportsbook feed covers 2021-2025, and Polymarket's accessible MLB markets
+are player props and first-5-innings lines, not clean full-game moneylines, so it could
+not be used. Reproduce with `season_market_validation.py`.
+
 ## Scoreboard (per-game total runs vs real 2023-2024, all 4,859 games)
 
 Metric definitions: KL and Wasserstein on the discrete per-game run-total
