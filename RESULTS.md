@@ -147,9 +147,15 @@ starters are even known, and known players' pre-2024 rates no longer describe th
 form. That degradation is itself a finding: the engine's causal signal is real and
 market-agreeing, and it needs reasonably current player rates to stay sharp. Data notes,
 stated because they bound the claim: Kalshi lists MLB game markets only from ~mid-2026
-(no 2025), the sportsbook feed covers 2021-2025, and Polymarket's accessible MLB markets
-are player props and first-5-innings lines, not clean full-game moneylines, so it could
-not be used. Reproduce with `season_market_validation.py`.
+(no 2025) and the sportsbook feed covers 2021-2025. Polymarket **does** carry liquid
+full-game MLB moneylines (median volume ~$485k/game, prices retrievable from the CLOB
+`prices-history` endpoint), correcting an earlier note here that said otherwise; but its
+history is likewise 2026-only, its CLOB rate-limits bulk fetches, and its per-market
+price histories do not cleanly pin to a single game's first pitch (week-spanning series
+markets, listing date != game date), so a clean bulk *pre-game* within-series harvest was
+not practical, and the expected result would mirror the 2026 Kalshi figure against the
+same stale rates. Kalshi is therefore the prediction-market datapoint used. Reproduce with
+`season_market_validation.py` (`--market kalshi|polymarket`).
 
 ## Scoreboard (per-game total runs vs real 2023-2024, all 4,859 games)
 

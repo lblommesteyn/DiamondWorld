@@ -51,7 +51,8 @@ def _get(url, cache_name=None, retries=3):
             return json.loads(p.read_text())
     for _ in range(retries):
         try:
-            r = json.load(urllib.request.urlopen(url, timeout=30))
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            r = json.load(urllib.request.urlopen(req, timeout=30))
             if cache_name:
                 (CACHE / cache_name).write_text(json.dumps(r))
             return r
@@ -152,13 +153,104 @@ def american_implied(ml):
     return 100.0 / (ml + 100.0) if ml > 0 else -ml / (-ml + 100.0)
 
 
+def _uget(u):
+    import urllib.request
+    r = urllib.request.Request(u, headers={"User-Agent": "Mozilla/5.0"})
+    return json.load(urllib.request.urlopen(r, timeout=40))
+
+
+def polymarket_games(season):
+    """{(date, frozenset{abbrevA,abbrevB}): {abbrev: pre-game P(win)}} from Polymarket.
+
+    Full-game moneyline = the market whose question equals the "Team A vs. Team B"
+    event title (outcomes are the two team names). Pre-game price = the last CLOB
+    price point before first pitch (from the MLB schedule), for outcome[0]'s token.
+    """
+    teams = _get("https://statsapi.mlb.com/api/v1/teams?sportId=1", cache_name="teams.json")
+    name2ab = {t["name"]: t["abbreviation"] for t in teams["teams"]}
+    sched = _get(f"https://statsapi.mlb.com/api/v1/schedule?sportId=1&season={season}&gameType=R",
+                 cache_name=f"sched_{season}.json")
+    # frozenset{full names} -> list of (game official-date, first-pitch ts). A team pair
+    # plays several times a season, so we keep them all and match Polymarket to the
+    # nearest game date (Polymarket's startDate is the listing date, not first pitch).
+    start_of = defaultdict(list)
+    for d in sched.get("dates", []):
+        for g in d.get("games", []):
+            names = frozenset({g["teams"]["home"]["team"]["name"], g["teams"]["away"]["team"]["name"]})
+            try:
+                ts = int(calendar.timegm(dt.datetime.strptime(g["gameDate"][:19], "%Y-%m-%dT%H:%M:%S").timetuple()))
+                start_of[names].append((d["date"], ts))
+            except Exception:
+                pass
+    evs = []
+    for off in range(0, 2000, 100):
+        d = _uget(f"https://gamma-api.polymarket.com/events?limit=100&offset={off}"
+                  f"&closed=true&order=startDate&ascending=false&tag_slug=mlb")
+        d = d if isinstance(d, list) else d.get("data", [])
+        evs += d
+        if len(d) < 100:
+            break
+    out = {}
+    n_match = n_clob_ok = n_pre = 0
+    for e in evs:
+        title = e.get("title", "")
+        if " vs" not in title.lower() or any(s in title for s in ("First 5", "Props", "Run Line", "Total", "Strikeout", "Home Runs", ": ")):
+            continue
+        sd = str(e.get("startDate", ""))[:10]
+        if not sd.startswith(str(season)):
+            continue
+        ml = [m for m in e.get("markets", []) if m.get("question", "").strip() == title.strip()]
+        if not ml:
+            continue
+        m = ml[0]
+        oc = m.get("outcomes"); oc = json.loads(oc) if isinstance(oc, str) else oc
+        tk = m.get("clobTokenIds"); tk = json.loads(tk) if isinstance(tk, str) else tk
+        if not oc or not tk or len(oc) < 2:
+            continue
+        ab0, ab1 = name2ab.get(oc[0]), name2ab.get(oc[1])
+        if not ab0 or not ab1:
+            continue
+        cands = start_of.get(frozenset({oc[0], oc[1]}), [])
+        if not cands:
+            continue
+        try:
+            sd_ts = int(calendar.timegm(dt.datetime.strptime(sd, "%Y-%m-%d").timetuple()))
+        except Exception:
+            continue
+        gdate, gts = min(cands, key=lambda gt: abs(gt[1] - sd_ts))
+        if abs(gts - sd_ts) > 3 * 86400:
+            continue
+        n_match += 1
+        cache = CACHE / f"pm_{tk[0][:24]}.json"
+        if not (cache.exists() and cache.stat().st_size > 2):
+            time.sleep(0.4)                            # throttle: the CLOB rate-limits bulk fetches
+        cs = _get(f"https://clob.polymarket.com/prices-history?market={tk[0]}&interval=max&fidelity=60",
+                  cache_name=f"pm_{tk[0][:24]}.json")
+        if not cs or not cs.get("history"):
+            continue
+        n_clob_ok += 1
+        pre = [p["p"] for p in cs["history"] if p.get("t", 0) <= gts]
+        if not pre:
+            continue
+        n_pre += 1
+        p0 = float(pre[-1])
+        if not (0.02 < p0 < 0.98):
+            continue
+        out[(gdate, frozenset({ab0, ab1}))] = {ab0: p0, ab1: 1 - p0}
+    print(f"  [polymarket diag] schedule-matched {n_match}, CLOB ok {n_clob_ok}, "
+          f"had pre-game pts {n_pre}, usable {len(out)}", flush=True)
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--season", type=int, default=2026)
     ap.add_argument("--train-end", type=int, default=2023,
                     help="Last season in the rate table. Use 2024 for a 1-year-out 2025 test.")
     ap.add_argument("--odds", default=None,
-                    help="Sportsbook odds CSV (game_pk,ml_home,ml_away). If omitted, uses Kalshi.")
+                    help="Sportsbook odds CSV (game_pk,ml_home,ml_away).")
+    ap.add_argument("--market", choices=["kalshi", "polymarket"], default="kalshi",
+                    help="Prediction market to use when --odds is not given.")
     ap.add_argument("--min-known", type=int, default=6, help="Min known batters of 9 per lineup.")
     args = ap.parse_args()
 
@@ -189,13 +281,11 @@ def main():
                     games.append((int(g["gamePk"]), d["date"], abn.get(h["team"]["id"]),
                                   abn.get(a["team"]["id"]), h["score"], a["score"]))
         price_of = lambda gpk, ha: om.get(gpk)      # already P(home)
-    else:                                           # Kalshi path
-        print(f"fetching Kalshi {args.season} game markets ...", flush=True)
-        kg = kalshi_games(args.season)
-        print(f"  {len(kg)} Kalshi games with pre-game prices", flush=True)
+    else:                                           # prediction-market path (Kalshi or Polymarket)
+        print(f"fetching {args.market} {args.season} game markets ...", flush=True)
+        kg = polymarket_games(args.season) if args.market == "polymarket" else kalshi_games(args.season)
+        print(f"  {len(kg)} {args.market} games with pre-game prices", flush=True)
         games, _ = sched_boxscores(args.season, set(kg.keys()))
-        def price_of(gpk, ha, _kg=kg):
-            return None  # set per game below via key
     print(f"  {len(games)} games matched to the schedule", flush=True)
 
     def channel_idx(bat_known, sp):
@@ -236,7 +326,7 @@ def main():
         nser += 1; idx = np.array(idx)
         dm.extend(mk[idx] - mk[idx].mean()); dp.extend(pitch[idx] - pitch[idx].mean()); dh.extend(hit[idx] - hit[idx].mean())
     dm, dp, dh = np.array(dm), np.array(dp), np.array(dh)
-    mkt_name = "sportsbook" if args.odds else "Kalshi prediction market"
+    mkt_name = "sportsbook" if args.odds else f"{args.market} prediction market"
     L = [f"SEASON x MARKET VALIDATION -- {args.season} vs {mkt_name} "
          f"(out-of-sample; rates frozen <= {args.train_end})", ""]
     L.append(f"  {n} games priced+known, {nser} series, {len(dm)} within-series deviations")
