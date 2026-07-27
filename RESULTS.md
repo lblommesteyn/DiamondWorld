@@ -114,6 +114,18 @@ both tied to an independent ground truth, with the earlier raw headline numbers 
 downward. (A higher-replica run would sharpen the magnitude; the direction result is
 already solid.) Reproduce with `counterfactual_validation.py`.
 
+**Is it broad, or just pitchers?** Within a series both the starter and the lineup
+change, so the aggregate result alone cannot say the validated signal is more than
+pitching. Decomposing each game into a pitching channel (the starters' allowed-run
+rates) and a hitting channel (the lineups' wOBA-ish rates) and regressing the market's
+within-series win-probability move on both (1,690 game-deviations, 2024) shows **both are
+priced**: pitching coefficient t = -17.6 (negative because the index is runs allowed, so
+a worse home starter lowers home win prob) and hitting t = +7.3, marginal correlations
+-0.39 and +0.16. Pitching dominates, as expected, but hitting is unambiguously present,
+so the market reprices on both and the causal engine's scope is legitimately broad:
+the starter-swap validation generalizes to hitter and lineup what-ifs. Reproduce with
+`whatif_channels.py`.
+
 ## Scoreboard (per-game total runs vs real 2023-2024, all 4,859 games)
 
 Metric definitions: KL and Wasserstein on the discrete per-game run-total
