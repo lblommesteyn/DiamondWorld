@@ -71,6 +71,18 @@ for and the NB cannot do. And the sim runs about 0.4 runs hot here (mean 9.03 vs
 a recal-scale calibration wrinkle that inflates P(≥10) slightly and is worth re-tuning.
 Reproduce with `run_pregame_sim.py` then `simulator_benchmarks.py`.
 
+**Against the market's totals line, though, there is no edge.** Tested whether the
+simulator's implied P(total > line) predicts actual overs better than the market's own
+devigged over-probability, on 2,274 games (sim mean-corrected for the 0.4-run bias):
+market log-loss 0.6931 / AUC 0.511, sim 0.7129 / AUC 0.506, and the two are essentially
+uncorrelated (0.054). The market sits at the no-information floor (log 2 = 0.693) because
+totals are efficiently priced, so neither it nor the simulator predicts over/under better
+than a coin flip, and the sim adds nothing to the market. The honest reading: the
+simulator's distributional value is the *full, calibrated, game-specific* run
+distribution (the coverage above, which a single market line does not provide), not an
+ability to beat the market on the one number the market prices. This is the same
+market-efficiency wall the betting audit hit, now confirmed on the run total.
+
 ## Counterfactual validation: do the causal what-ifs match the market?
 
 The counterfactual engine ("swap this starter, win probability moves by X") was always
