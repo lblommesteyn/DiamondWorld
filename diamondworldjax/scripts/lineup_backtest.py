@@ -30,8 +30,9 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--games", type=int, default=90)
     ap.add_argument("--cands", type=int, default=24)
-    ap.add_argument("--r-sel", type=int, default=200)
-    ap.add_argument("--r-eval", type=int, default=400)
+    ap.add_argument("--r-sel", type=int, default=150)
+    ap.add_argument("--r-eval", type=int, default=300)
+    ap.add_argument("--chunk-games", type=int, default=8)
     args = ap.parse_args()
 
     s = Sim()
@@ -59,9 +60,14 @@ def main():
                                   park=g["park"]))
             order_of.append((gi, o))
 
-    print(f"selection sim: {len(sel_specs)} specs x R={args.r_sel} ...", flush=True)
-    Hs, _ = s.run(sel_specs, R=args.r_sel, seed=11, crn=False)
-    sel_runs = Hs.mean(1)
+    print(f"selection sim: {len(sel_specs)} specs x R={args.r_sel} (chunked) ...", flush=True)
+    chunk = args.chunk_games * args.cands
+    outs = []
+    for i in range(0, len(sel_specs), chunk):
+        H, _ = s.run(sel_specs[i:i + chunk], R=args.r_sel, seed=11, crn=False)
+        outs.append(H.mean(1))
+        print(f"  sel {min(i + chunk, len(sel_specs))}/{len(sel_specs)}", flush=True)
+    sel_runs = np.concatenate(outs)
 
     # pick best order per game on selection seeds
     best_order = {}; actual_order = {}
@@ -80,9 +86,13 @@ def main():
                                  away_staff=list(g["away_staff"]), home_staff=list(g["home_staff"]),
                                  park=g["park"]))
             tag.append(t)
-    print(f"evaluation sim (independent seeds): {len(ev_specs)} specs x R={args.r_eval} ...", flush=True)
-    He, _ = s.run(ev_specs, R=args.r_eval, seed=99, crn=False)
-    ev_runs = He.mean(1)
+    print(f"evaluation sim (independent seeds): {len(ev_specs)} specs x R={args.r_eval} (chunked) ...", flush=True)
+    echunk = args.chunk_games * 3
+    eouts = []
+    for i in range(0, len(ev_specs), echunk):
+        H, _ = s.run(ev_specs[i:i + echunk], R=args.r_eval, seed=99, crn=False)
+        eouts.append(H.mean(1))
+    ev_runs = np.concatenate(eouts)
     ev = {t: ev_runs[i::3] for i, t in enumerate(["sel", "act", "rnd"])}
 
     gain = ev["sel"] - ev["act"]                     # honest gain (independent-seed eval)

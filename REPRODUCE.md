@@ -18,17 +18,24 @@ redistributed, with the derived inputs and transformation logic provided instead
 |---|---|---|---|
 | Pitch/PA play-by-play (2015-2024) | MLB Statcast via Baseball Savant | full seasons | derived Parquet in `data/processed/` |
 | Game schedule, boxscores, lineups, starters | MLB Stats API (`statsapi.mlb.com`) | pulled 2026-07; cached in `data/cache/` | yes (public API) |
-| Market-implied win probabilities (game moneylines, 2021-2025) | consensus pregame closing prices | closing, pre-first-pitch | **no** (see below) |
+| Sportsbook consensus moneylines (2021-2025) | reactiv/delphi public MLB odds dataset | pregame closing | derived probabilities only |
+| Prediction-market prices (2026) | Kalshi (`KXMLBGAME`) and Polymarket game markets, public APIs | pregame, from price history | derived probabilities only |
 | Steamer preseason-2024 projections | public archived release | preseason 2024 | derived rates only |
 
-**Market data (non-redistributable).** The validation ground truth is de-vigged
-pregame market-implied win probabilities. We cannot redistribute the raw prices. We
-release: (a) the derived per-game pregame home-win probability keyed by `game_pk`
-(`data/eval2/odds_2023_2024.csv`, `odds_2025.csv`, schema `game_pk, ml_home, ml_away`);
-(b) the exact de-vigging logic (`american_implied` in `simulator_benchmarks.py`:
-normalize the two implied probabilities to sum to one); and (c) the join logic
-(date + full team names to `game_pk`, `build_odds_2025.py`). The restriction is stated
-rather than obscured.
+**Market sources (named; derived inputs released).** The validation target is a de-vigged
+pregame market-implied win probability. The primary source (2024-2025) is the consensus of
+sportsbook closing moneylines from the public reactiv/delphi MLB odds dataset; the
+prediction-market cross-check (2026) is the Kalshi `KXMLBGAME` series (pregame implied
+probability from its candlestick price history). Polymarket carries the same game markets
+(median volume roughly \$0.5M/game) and its prices are retrievable via the CLOB, but its
+event price histories span multiple days and do not pin cleanly to a single game's first
+pitch, so it is assessed but not used as a within-series estimate. We release: (a) the
+derived per-game pregame home-win probability keyed by `game_pk`
+(`data/eval2/odds_2023_2024.csv`, `odds_2025.csv`); (b) the exact de-vigging logic
+(`american_implied`: normalize the two implied probabilities to sum to one); (c) the join
+logic (`build_odds_2025.py`, `season_market_validation.py`), including the Kalshi and
+Polymarket API pipelines and their as-of timestamps. Raw prices are not redistributed;
+the restriction is stated rather than obscured.
 
 ## Train / validation / test manifest
 

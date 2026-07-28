@@ -99,9 +99,10 @@ simulation is new, but the external validation of its counterfactual sensitiviti
 \textbf{Game-state value.} Continuous game-state value models, notably expected possession value in
 basketball~\cite{cervone}, estimate the value of a state from a stochastic process; we produce
 state-conditional estimates but validate discrete interventions against a market.
-\textbf{Markets as forecasters.} Pregame market prices, de-vigged to implied
-probabilities~\cite{strumbelj}, are strong information aggregators; we use them as an external forecast
-to validate against, not as causal ground truth.
+\textbf{Markets as forecasters.} Pregame prices from consensus sportsbook moneylines and from
+prediction markets (Kalshi, Polymarket), de-vigged to implied probabilities~\cite{strumbelj}, are
+strong information aggregators; we use them as an external forecast to validate against, not as causal
+ground truth.
 \textbf{Evaluation.} We use proper scoring rules and probability-integral-transform calibration for
 count data~\cite{gneiting,czado}, classical win-probability baselines (Log5, Pythagorean)~\cite{james},
 and, where we discuss interventions, the potential-outcomes framing~\cite{imbens}. The model is fit by
@@ -218,8 +219,8 @@ Player-specific counterfactual & & partial & \checkmark\\
 \section{Validating counterfactual forecast changes}
 \label{sec:val}
 The estimate ``change this starter, win probability moves by $X$'' is internally generated. We check it
-against an independent pregame market's implied win probability (de-vigged~\cite{strumbelj}) for the
-same teams under different pitchers. Within a series the two teams and home field are fixed, so the
+against an independent pregame market's implied win probability, from consensus sportsbook closing
+moneylines de-vigged to probabilities~\cite{strumbelj}, for the same teams under different pitchers. Within a series the two teams and home field are fixed, so the
 game-to-game move in the market's implied win probability is driven by the starter, lineup, and rest
 (Fig.~\ref{fig:series}); if the simulator's within-series moves track the market's, its counterfactual
 sensitivities have external support that uses \emph{no realized outcomes and no look-ahead}. We stress
@@ -270,11 +271,15 @@ signal the market responds to (pitching $t{=}{-}17.6$, hitting $t{=}{+}7.3$), so
 pitcher-only.
 
 \textbf{A later season, and a stale-input stress test.} Freezing the rate features and repeating the
-within-series test on 2025, a season the features predate, gives $r{=}0.33$ (channel-level, using the
-model's inputs rather than a full re-simulation; see Limitations). As a deliberate stress test we also
-run 2026-to-date against a second, independent market with rates now $2.5$ years stale (only about six
-of nine batters and half the starters known): agreement attenuates to $r{=}0.12$, as expected. We do not
-claim this as clean generalization; it shows the signal is real and degrades with stale inputs.
+within-series test on the 2025 sportsbook consensus, a season the features predate, gives $r{=}0.33$
+(channel-level, using the model's inputs rather than a full re-simulation; see Limitations). As a
+deliberate stress test we also run 2026-to-date against a \emph{prediction market} (Kalshi), a
+different market mechanism, with rates now $2.5$ years stale (only about six of nine batters and half
+the starters known): agreement attenuates to $r{=}0.12$, as expected. We do not claim this as clean
+generalization; it shows the signal is real, appears across a sportsbook and a prediction market, and
+degrades with stale inputs. A second prediction market (Polymarket) carries the same game markets but
+its price histories did not pin cleanly to a single game's first pitch for a bulk pregame harvest, so
+we report it as assessed rather than as a third estimate (see Reproducibility).
 
 \begin{figure}[t]
 \centering
@@ -293,6 +298,27 @@ the simulator's move (green) tracks the independent market's (orange).}
 the magnitude calibration.}
 \label{fig:val}
 \end{figure}
+
+\section{From forecast agreement toward a causal reading}
+\label{sec:causal}
+The within-series design is a first difference that removes both team fixed effects and home
+field, so it is closer to an identified intervention than a raw correlation. Under a
+potential-outcomes reading~\cite{imbens}, for an ordered series we compare the simulator's
+$do(\text{swap game }t\text{'s roster for game }t{+}1\text{'s})$ estimate against the market's
+differenced forecast, and we stress the identifying assumption three ways. \emph{(i) Rest
+control.} Adding the within-series difference in days of rest leaves the simulator coefficient
+essentially unchanged ($0.267\!\to\!0.266$, $t{=}16$), so the effect is not a rest confound.
+\emph{(ii) Negative-control placebo.} Pairing each simulator delta with a market delta from a
+random other series gives mean correlation $0.00$ (99th percentile $0.05$); the observed $0.32$
+is far outside that distribution. \emph{(iii) Sensitivity to unobserved confounding.} An omitted
+differenced covariate would have to correlate at least $0.57$ with \emph{both} the simulator and
+market deltas to explain the association; rest, the strongest observed such covariate, manages
+only $0.07$. So no single plausible confounder accounts for the effect. We are explicit that
+this is a design-based identification with stated assumptions, not a timestamp-clean starter-
+scratch event study: the announced-probable-pitcher data required for that is not publicly
+recoverable (the free schedule API overwrites the announced probable with the actual starter
+post-game, leaving only four apparent 2024 scratches, which are artifacts). A clean event study
+with proprietary intraday lines is the natural next step.
 
 \section{Run distribution and where the simulator does not lead}
 \label{sec:bench}

@@ -130,7 +130,7 @@ def fig4():
     fig, ax = plt.subplots(figsize=(5.4, 3.5))
     ax.bar(x - w, marcel, w, color=MUTE, label="Marcel", zorder=3)
     ax.bar(x, steamer, w, color=STEEL, label="Steamer", zorder=3)
-    ax.bar(x + w, dw, w, color=FIELD, label="DiamondWorld v16", zorder=3)
+    ax.bar(x + w, dw, w, color=FIELD, label="DiamondWorld (locked spec.)", zorder=3)
     ax.set_xticks(x); ax.set_xticklabels(stats)
     ax.set_ylabel("cross-player rate correlation (2024)")
     ax.set_ylim(0, 0.9)
