@@ -122,10 +122,18 @@ def main():
     mae_ev = float(np.abs(ey - pred).mean()); mae_null = float(np.abs(ey).mean())
     sign_ev = float((np.sign(ex) == np.sign(ey)).mean())
     r_ev = float(np.corrcoef(ex, ey)[0, 1])
+    # held-out magnitude calibration: (a) the held-out half's own OLS slope/intercept, and
+    # (b) the frozen-calibration check -- regress held-out market on frozen-calibrated sim, which
+    # should have slope ~1 and intercept ~0 if the magnitude calibration transfers out-of-sample.
+    slope_ev, int_ev = (float(v) for v in np.polyfit(ex, ey, 1))
+    cal_slope, cal_int = (float(v) for v in np.polyfit(pred, ey, 1))
     L.append("  CALIBRATION / EVALUATION SPLIT (fit slope on a random half of series, freeze, eval on rest):")
     L.append(f"    slope fit on {len(fit_idx)} series = {slope:.3f}")
-    L.append(f"    held-out {len(ev_idx)} series: corr {r_ev:.3f}, sign acc {sign_ev:.3f}, "
-             f"MAE {mae_ev:.4f} vs {mae_null:.4f} (predict-zero) = {(1-mae_ev/mae_null)*100:.0f}% better")
+    L.append(f"    held-out {len(ev_idx)} series own OLS: slope {slope_ev:.3f}, intercept {int_ev:+.4f}, "
+             f"corr {r_ev:.3f}, sign acc {sign_ev:.3f}")
+    L.append(f"    held-out MAE {mae_ev:.4f} vs {mae_null:.4f} (predict-zero) = {(1-mae_ev/mae_null)*100:.0f}% better")
+    L.append(f"    frozen-calibration check (market on frozen-calibrated sim): slope {cal_slope:.3f} "
+             f"(want ~1), intercept {cal_int:+.4f} (want ~0)")
     rep = "\n".join(L)
     print(rep)
     Path("data/eval2").mkdir(parents=True, exist_ok=True)

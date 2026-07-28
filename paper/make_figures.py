@@ -77,7 +77,7 @@ def fig1():
     ax.axhline(0, color=MUTE, lw=0.6); ax.axvline(0, color=MUTE, lw=0.6)
     ax.set_xlabel("simulator within-series $\\Delta$WP (points)")
     ax.set_ylabel("market-implied within-series $\\Delta$WP (points)")
-    ax.set_title(f"Causal what-ifs vs. independent market forecast\n$r={r:.2f}$, leak-free, "
+    ax.set_title(f"Simulator counterfactuals versus market forecast changes\n$r={r:.2f}$, leak-free, "
                  f"{len(ss)} game-deviations", fontsize=9.5)
     ax.legend(frameon=False, fontsize=8, loc="upper left")
     ax.set_xlim(-22, 22); ax.set_ylim(-9, 9)
@@ -240,7 +240,7 @@ def fig8_series():
     ax.set_xticklabels(["Game 1\nSP: ace", "Game 2\nSP: #3 starter", "Game 3\nSP: back-end"], fontsize=8.5)
     ax.set_ylabel("home win probability")
     ax.set_ylim(0.36, 0.70); ax.set_xlim(0.7, 3.3)
-    ax.set_title("Within-series identification: same teams, only the starter changes", fontsize=9)
+    ax.set_title("Within-series forecast-change benchmark:\nsame teams, varying pregame inputs", fontsize=9)
     ax.legend(frameon=False, fontsize=8.5, loc="upper center", ncol=2)
     ax.annotate("both move\nwith the starter", xy=(2, 0.466), xytext=(1.55, 0.40),
                 fontsize=8, color="#555", ha="center",

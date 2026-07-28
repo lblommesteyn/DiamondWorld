@@ -56,10 +56,26 @@ def main():
 
     L = [f"RUN-TOTAL DISTRIBUTION: PROPER SCORING & CONDITIONAL CALIBRATION ({n} games, R={R})", ""]
     L.append(f"  {'model':22s} {'log-score':>10s} {'CRPS':>8s}")
+    per = {}                                   # per-game score arrays for bootstrap CIs
     for name, S in (("DiamondWorld", st), ("independent 2-Poisson", pois), ("league neg-binomial", nb)):
-        ls = logscore(S, rt, R).mean(); cr = crps_sample(S, rt).mean()
-        L.append(f"  {name:22s} {ls:10.3f} {cr:8.3f}")
+        ls_g = logscore(S, rt, R); cr_g = crps_sample(S, rt)
+        per[name] = (ls_g, cr_g)
+        L.append(f"  {name:22s} {ls_g.mean():10.3f} {cr_g.mean():8.3f}")
     L.append("  (lower is better; CRPS in runs)")
+    L.append("")
+
+    # paired bootstrap CIs on the score DIFFERENCE (DiamondWorld minus baseline); a game is the
+    # resampling unit. Negative favors DiamondWorld. This gives uncertainty for log-score and CRPS,
+    # and shows DW clearly beats the independent Poisson while the NB gap is within noise.
+    def diff_ci(a, b, B=3000):
+        d = a - b; idx = rng.integers(0, len(d), (B, len(d)))
+        bs = d[idx].mean(1)
+        return d.mean(), np.percentile(bs, 2.5), np.percentile(bs, 97.5)
+    L.append("  paired score differences (DiamondWorld minus baseline; negative favors DiamondWorld):")
+    for base in ("independent 2-Poisson", "league neg-binomial"):
+        for j, lab in ((0, "log-score"), (1, "CRPS")):
+            m, lo, hi = diff_ci(per["DiamondWorld"][j], per[base][j])
+            L.append(f"    {lab:>9s}  vs {base:22s}  {m:+.3f}  95% CI [{lo:+.3f}, {hi:+.3f}]")
     L.append("")
 
     L.append("  tail-probability calibration  P(total >= k):  predicted vs empirical")
