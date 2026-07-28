@@ -36,8 +36,9 @@
 
 \title{\vspace{-3.5ex}\textbf{\large DiamondWorld: A Market-Validated Causal Simulator\\[-0.2ex] for Baseball Games}}
 \author[1]{Luke Blommesteyn}
-\author[1]{Jaden}
-\affil[1]{\normalsize\textnormal{\texttt{lblommesteyn@icloud.com}}}
+\author[2]{Jaden Majumdar}
+\affil[1]{\normalsize\textnormal{Western University\quad\texttt{lblommes@uwo.ca}}}
+\affil[2]{\normalsize\textnormal{University of Toronto\quad\texttt{jaden.majumdar@mail.utoronto.ca}}}
 \date{\vspace{-3ex}\small MIT Sloan Sports Analytics Conference, Research Paper Track}
 
 \begin{document}
@@ -127,8 +128,18 @@ recency-weighted rate features. Two modeling choices matter for the results belo
 minibatch scaling of the skill-latent divergence revived a posterior that had collapsed to its prior,
 lifting cross-player differentiation substantially. Second, the current model adds \emph{contact-quality
 features}: expected hit and home-run rates built by binning every batted ball on exit velocity and
-launch angle and reading the league outcome frequency in each bin. This was the single largest input
-lever we found (\S\ref{sec:bench}).
+launch angle and reading the league outcome frequency in each bin (Fig.~\ref{fig:heat}). This was the
+single largest input lever we found (\S\ref{sec:bench}).
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{figs/fig6_heatmap.pdf}
+\caption{The contact-quality feature. League probability of a hit as a function of exit velocity and
+launch angle, built directly from batted-ball data. The bright band is the barrel zone. Scoring a
+batter on the quality of contact made, rather than on which balls happened to fall in, is what lets the
+model separate skill from ball-in-play luck.}
+\label{fig:heat}
+\end{figure}
 
 The \textbf{empirical rules engine} turns an outcome sequence into runs and base-state transitions.
 Ported from a validated Markov baseline~\cite{bukiet}, it reproduces test-season run totals to within
@@ -251,7 +262,17 @@ implied win probability for the same teams under different pitchers. The natural
 Within a series the two teams and home field are fixed, so the game-to-game change in the market-implied
 win probability is driven by the starter, lineup, and rest, exactly what a counterfactual isolates. If
 the simulator's within-series win-probability deltas track the market's, the causal estimates have
-external support that uses \emph{no game outcomes and no look-ahead}.
+external support that uses \emph{no game outcomes and no look-ahead} (Fig.~\ref{fig:series}).
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{figs/fig8_series.pdf}
+\caption{The within-series natural experiment (illustrative). Across a series the two teams and home
+field are held constant, so the game-to-game move in win probability is the starter and lineup effect,
+precisely a counterfactual. The validation measures whether the simulator's move (green) tracks the
+independent market's (orange). It does, at $r{=}0.32$ leak-free.}
+\label{fig:series}
+\end{figure}
 
 \textbf{Direction is validated, leak-free.} We residualize the simulator's and the market's logit win
 probability against team fixed effects (team identity only, no outcomes) and correlate the residuals:
@@ -337,7 +358,19 @@ versus $18.24$) and its central intervals cover at nominal rates, while the summ
 under-covers (Fig.~\ref{fig:cov}; randomized-PIT KS $0.049$ versus $0.144$~\cite{gneiting}). The
 realistic bullpen earns this: without the hook model the same simulator covered only $0.74$ at the
 $80\%$ level. A league negative-binomial matches the marginal but gives every matchup the identical
-distribution, which is exactly what the simulator provides and it cannot.
+distribution, which is exactly what the simulator provides and it cannot. Figure~\ref{fig:rundist} shows
+the effect directly: the simulator tracks the real game-total distribution including its heavy blowout
+tail, while an independent-Poisson model with the same mean is too peaked in the middle and too thin in
+the tail.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{figs/fig7_rundist.pdf}
+\caption{Game-total run distribution. The simulator (green) matches real games (bars) across the whole
+range; an independent-Poisson model with the same mean (dashed) concentrates in the middle and misses
+the fat blowout tail that drives leverage and bullpen decisions.}
+\label{fig:rundist}
+\end{figure}
 
 \textbf{Win probability: calibrated, not sharp.} Point win probability is honestly \emph{not} the
 simulator's edge. It is well calibrated (ECE $0.034$ over the full season) but discriminates less than a

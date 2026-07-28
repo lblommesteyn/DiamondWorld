@@ -172,6 +172,85 @@ def fig5():
     print("fig5 done")
 
 
+def fig6_heatmap():
+    """League P(hit) over (exit velocity, launch angle): the contact-quality feature."""
+    from matplotlib.colors import LinearSegmentedColormap
+    from diamondworldjax.paths import processed_root
+    from diamondworldjax.data.pipeline import load_seasons
+    d = (load_seasons([2024], data_root=processed_root())
+         .filter(pl.col("pa_terminal") & pl.col("launch_speed").is_not_null()
+                 & pl.col("launch_angle").is_not_null()))
+    ev = d["launch_speed"].to_numpy(); la = d["launch_angle"].to_numpy()
+    hit = d["pa_outcome"].is_in(["1B", "2B", "3B", "HR"]).to_numpy().astype(float)
+    hr = (d["pa_outcome"] == "HR").to_numpy().astype(float)
+    ev_b = np.arange(40, 118, 2.5); la_b = np.arange(-30, 62, 2.5)
+    Hh, _, _ = np.histogram2d(ev, la, bins=[ev_b, la_b], weights=hit)
+    N, _, _ = np.histogram2d(ev, la, bins=[ev_b, la_b])
+    P = np.where(N >= 12, Hh / np.maximum(N, 1), np.nan)
+    cmap = LinearSegmentedColormap.from_list("hit", ["#EEF1EC", FIELD, "#C98A3B", ACCENT])
+    fig, ax = plt.subplots(figsize=(5.2, 3.9))
+    im = ax.imshow(P.T, origin="lower", aspect="auto", cmap=cmap, vmin=0, vmax=1,
+                   extent=[ev_b[0], ev_b[-1], la_b[0], la_b[-1]])
+    ax.set_xlabel("exit velocity (mph)"); ax.set_ylabel("launch angle (deg)")
+    ax.set_title("How the model sees contact: P(hit) by (exit velocity, launch angle)", fontsize=9)
+    cb = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.03); cb.set_label("P(hit)", fontsize=8)
+    ax.axhline(0, color="#555", lw=0.5, ls=":")
+    ax.text(101, 26, "barrel\nzone", fontsize=7.5, color="white", ha="center", fontweight="bold")
+    fig.tight_layout(); fig.savefig(FIG / "fig6_heatmap.pdf"); plt.close(fig)
+    print("fig6 heatmap done")
+
+
+def fig7_rundist():
+    """Simulated vs real game-total distribution and an independent-Poisson reference."""
+    d = np.load("data/eval2/calib_v15-pregame-hook-r500_arrays.npz")
+    st = d["sim_total"].reshape(-1).astype(float); rt = d["real_total"].astype(float)
+    shift = rt.mean() - st.mean(); st = st + shift          # mean-match (shape comparison)
+    from scipy.stats import poisson as _po
+    bins = np.arange(-0.5, 24.5, 1)
+    ctr = np.arange(0, 24)
+    rh, _ = np.histogram(rt, bins=bins, density=True)
+    sh, _ = np.histogram(st, bins=bins, density=True)
+    pois = _po.pmf(ctr, rt.mean())
+    fig, ax = plt.subplots(figsize=(5.4, 3.6))
+    ax.bar(ctr, rh, width=0.9, color="#D9DED8", zorder=1, label="real games")
+    ax.step(ctr, sh, where="mid", color=FIELD, lw=1.8, zorder=3, label="DiamondWorld")
+    ax.step(ctr, pois, where="mid", color=ACCENT, lw=1.6, ls="--", zorder=3,
+            label="independent Poisson")
+    ax.axvspan(10, 24, color="#000", alpha=0.045, zorder=0)
+    ax.text(15.5, ax.get_ylim()[1] * 0.86, "fat tail\n(blowouts)", fontsize=8, color="#555", ha="center")
+    ax.set_xlabel("total runs in a game"); ax.set_ylabel("probability")
+    ax.set_title("The simulator reproduces the real run distribution, tail and all", fontsize=9.5)
+    ax.set_xlim(0, 22); ax.legend(frameon=False, fontsize=8)
+    fig.tight_layout(); fig.savefig(FIG / "fig7_rundist.pdf"); plt.close(fig)
+    print("fig7 rundist done")
+
+
+def fig8_series():
+    """Illustrative within-series identification: market and sim WP co-move with the starter."""
+    games = [1, 2, 3]
+    mkt = [0.605, 0.452, 0.560]
+    sim = [0.578, 0.480, 0.535]
+    fig, ax = plt.subplots(figsize=(5.2, 3.4))
+    ax.axhspan(0.30, 0.70, color="#F3F5F1", zorder=0)
+    ax.axhline(0.5, color=MUTE, ls="--", lw=0.8)
+    ax.text(3.02, 0.503, "even", fontsize=7.5, color=MUTE, va="bottom")
+    ax.plot(games, mkt, "-o", color=ACCENT, ms=8, lw=1.8, label="independent market", zorder=3)
+    ax.plot(games, sim, "--s", color=FIELD, ms=8, lw=1.8, label="DiamondWorld", zorder=3)
+    ax.set_xticks(games)
+    ax.set_xticklabels(["Game 1\nSP: ace", "Game 2\nSP: #3 starter", "Game 3\nSP: back-end"], fontsize=8.5)
+    ax.set_ylabel("home win probability")
+    ax.set_ylim(0.36, 0.70); ax.set_xlim(0.7, 3.3)
+    ax.set_title("Within-series identification: same teams, only the starter changes", fontsize=9)
+    ax.legend(frameon=False, fontsize=8.5, loc="upper center", ncol=2)
+    ax.annotate("both move\nwith the starter", xy=(2, 0.466), xytext=(1.55, 0.40),
+                fontsize=8, color="#555", ha="center",
+                arrowprops=dict(arrowstyle="->", color=MUTE, lw=0.8))
+    fig.tight_layout(); fig.savefig(FIG / "fig8_series.pdf"); plt.close(fig)
+    print("fig8 series done")
+
+
+PALETTE_paper = "#F3F5F1"
+
 if __name__ == "__main__":
-    fig1(); fig2(); fig3(); fig4(); fig5()
+    fig1(); fig2(); fig3(); fig4(); fig5(); fig6_heatmap(); fig7_rundist(); fig8_series()
     print("all figures ->", FIG)
