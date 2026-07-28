@@ -2,6 +2,7 @@
 
 \usepackage[letterpaper,margin=0.82in,columnsep=0.28in]{geometry}
 \usepackage{graphicx}
+\usepackage{array}
 \usepackage{booktabs}
 \usepackage{amsmath,amssymb}
 \usepackage[dvipsnames]{xcolor}
@@ -172,7 +173,7 @@ launch angle, from training-season batted balls. Each batter's static feature is
 \caption{Feature availability audit. All model inputs are available before the plate appearance; no
 post-contact quantity from the current PA is used.}
 \label{tab:leak}
-\begin{tabular}{@{}lcc@{}}
+\begin{tabular}{@{}p{2.55cm}c>{\raggedright\arraybackslash}p{3.05cm}@{}}
 \toprule
 \textbf{Feature} & \textbf{Pre-PA?} & \textbf{Construction} \\
 \midrule
@@ -438,26 +439,6 @@ what the validation does and does not establish. All code and data-join pipeline
 \appendix
 \section{Architecture ablation}
 \label{app:arch}
-We compared the generative model against a per-PA MLP, a GRU, a causal transformer, and a
-joint-embedding predictive architecture (JEPA)~\cite{lecun,assran} with variance-covariance
-regularization~\cite{bardes} and a frozen probe, on identical inputs and target
-(Fig.~\ref{fig:arch}, Fig.~\ref{fig:metric}). Held-out per-PA log-likelihood is a poor yardstick: a PA
-is near the empirical entropy of the league-average outcome distribution (about $1.495$ nats, well below
-the nine-category maximum of $\log 9\approx2.197$ nats), so all models score near that floor. The
-sharper metric is cross-player differentiation. A frozen JEPA probe attains the best likelihood and
-near-zero differentiation; fine-tuning its encoder recovers it ($0.06\!\to\!0.54$) and from-scratch
-supervised training does marginally better, so the collapse is the frozen objective and the
-self-supervised pretraining adds nothing here. Once differentiation is measured correctly, the
-transformer, GRU, and MLP cluster near $0.577$ and features (contact quality) move the number more than
-architecture. Metric definitions, seeds, and per-run values are in the repository.
-
-\begin{figure}[t]
-\centering
-\includegraphics[width=\linewidth]{figs/fig5_metric.pdf}
-\caption{Held-out likelihood versus player differentiation. A frozen self-supervised probe minimizes NLL
-and cannot tell players apart; fine-tuning the same encoder recovers differentiation.}
-\label{fig:metric}
-\end{figure}
 
 \begin{figure*}[t]
 \centering
@@ -484,6 +465,28 @@ collapses to $0.06$ despite the best likelihood.}
 \label{fig:arch}
 \end{figure*}
 
+We compared the generative model against a per-PA MLP, a GRU, a causal transformer, and a
+joint-embedding predictive architecture (JEPA)~\cite{lecun,assran} with variance-covariance
+regularization~\cite{bardes} and a frozen probe, on identical inputs and target
+(Fig.~\ref{fig:arch}, Fig.~\ref{fig:metric}). Held-out per-PA log-likelihood is a poor yardstick: a PA
+is near the empirical entropy of the league-average outcome distribution (about $1.495$ nats, well below
+the nine-category maximum of $\log 9\approx2.197$ nats), so all models score near that floor. The
+sharper metric is cross-player differentiation. A frozen JEPA probe attains the best likelihood and
+near-zero differentiation; fine-tuning its encoder recovers it ($0.06\!\to\!0.54$) and from-scratch
+supervised training does marginally better, so the collapse is the frozen objective and the
+self-supervised pretraining adds nothing here. Once differentiation is measured correctly, the
+transformer, GRU, and MLP cluster near $0.577$ and features (contact quality) move the number more than
+architecture. Metric definitions, seeds, and per-run values are in the repository.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{figs/fig5_metric.pdf}
+\caption{Held-out likelihood versus player differentiation. A frozen self-supervised probe minimizes NLL
+and cannot tell players apart; fine-tuning the same encoder recovers differentiation.}
+\label{fig:metric}
+\end{figure}
+
+\clearpage
 \section{Reproducibility}
 \label{app:repro}
 The repository contains the model, simulator, market-join pipelines, and every figure, with fixed
