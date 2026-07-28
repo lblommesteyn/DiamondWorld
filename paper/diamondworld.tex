@@ -398,9 +398,19 @@ selected, actual, and a random order on an \emph{independent} set of seeds. The 
 seed split is essential: the best of many candidates is inflated on its own selection seeds, so we never
 score a choice on the seeds used to pick it. Honestly, a counterfactual lineup's realized outcome is
 unobservable, so the reported gain is the simulator's own unbiased estimate of the lever, complemented by
-the market validation of the counterfactual machinery. \textbf{[Result: honest, winner's-curse-corrected
-gain to be inserted from \texttt{lineup\_backtest.py}; the naive selection-seed gain is reported
-alongside to show the correction.]}
+the market validation of the counterfactual machinery.
+
+Across 50 held-out 2024 games with 12 candidate orders each, the naive gain measured on the selection
+seeds is $+0.47$ runs per game, which annualizes to an implausible $+76$ runs per season. Scored on
+independent evaluation seeds, that gain collapses to $-0.03$ runs per game (95\% cluster CI $[-0.12,
++0.06]$), with only half of games improved and the selected order beating a random order by $+0.003$
+versus the actual order's $+0.032$. The corrected estimate is statistically indistinguishable from zero.
+We read this as two findings. First, the winner's-curse correction is doing real work: without the
+selection/evaluation seed split we would have reported a large, entirely illusory improvement. Second,
+batting-order optimization is a near-null lever at this granularity, consistent with the sabermetric
+consensus that lineup order is worth at most a few runs across a full season. The methodological point of
+the study is not that the simulator wins a decision, but that the same discipline used for the market
+validation prevents it from manufacturing one.
 
 \section{Limitations}
 We are explicit about the boundaries. (1) The market is an external forecaster, not causal ground truth;
