@@ -76,8 +76,8 @@ def fig1():
             label=f"fit (slope {b1:.2f})")
     ax.axhline(0, color=MUTE, lw=0.6); ax.axvline(0, color=MUTE, lw=0.6)
     ax.set_xlabel("simulator within-series $\\Delta$WP (points)")
-    ax.set_ylabel("market within-series $\\Delta$WP (points)")
-    ax.set_title(f"Causal what-ifs vs market repricing\n$r={r:.2f}$, leak-free, "
+    ax.set_ylabel("market-implied within-series $\\Delta$WP (points)")
+    ax.set_title(f"Causal what-ifs vs. independent market forecast\n$r={r:.2f}$, leak-free, "
                  f"{len(ss)} game-deviations", fontsize=9.5)
     ax.legend(frameon=False, fontsize=8, loc="upper left")
     ax.set_xlim(-22, 22); ax.set_ylim(-9, 9)
@@ -86,7 +86,7 @@ def fig1():
 
 
 def fig2():
-    labels = ["2024\nsportsbook", "2025\nsportsbook\n(out-of-sample)", "2026\nKalshi\n(prediction mkt)"]
+    labels = ["2024\nmarket", "2025\nmarket\n(out-of-sample)", "2026\nmarket\n(independent source)"]
     corr = [0.26, 0.33, 0.12]
     colors = [STEEL, FIELD, ACCENT]
     fig, ax = plt.subplots(figsize=(4.6, 3.6))
@@ -96,7 +96,7 @@ def fig2():
     ax.set_xticks(range(3)); ax.set_xticklabels(labels, fontsize=8)
     ax.set_ylabel("within-series corr(sim, market)")
     ax.set_ylim(0, 0.4)
-    ax.set_title("Signal holds across seasons and market types", fontsize=9.5)
+    ax.set_title("Signal holds across seasons and independent forecasts", fontsize=9.5)
     ax.axhline(0.032, color=MUTE, ls="--", lw=0.8)
     ax.text(2.42, 0.045, "null 95th pct", fontsize=7, color=MUTE, ha="right")
     fig.tight_layout(); fig.savefig(FIG / "fig2_crossmarket.pdf"); plt.close(fig)
