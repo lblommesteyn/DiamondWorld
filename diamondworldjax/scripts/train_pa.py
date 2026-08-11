@@ -94,7 +94,8 @@ def _contact_quality(terminal, batter_col, id_to_idx, P, weights):
 
 
 def _build_player_table(pitches, recency_halflife: float | None = None,
-                        contact_quality: bool = False) -> dict:
+                        contact_quality: bool = False,
+                        per_stat_shrink: bool = False) -> dict:
     """Build the per-player stat/handedness table.
 
     recency_halflife (seasons): if set, each PA's contribution to a player's rate
@@ -147,6 +148,40 @@ def _build_player_table(pitches, recency_halflife: float | None = None,
 
     pa_count = np.maximum(stats[:, 4:5], 1)
     stats[:, :4] /= pa_count
+
+    if per_stat_shrink:
+        # Per-stat empirical-Bayes shrinkage toward the league rate.
+        #
+        # Columns 0..3 are RAW observed rates, so a 150-PA batter's hit rate is
+        # mostly noise while his strikeout rate is already informative. Feeding
+        # both in raw asks the model to work out how much to trust each one from
+        # the PA count in column 4. In principle it can; the evidence from the
+        # v17/v18/v19 series is that this model does not learn what it could
+        # learn, and that FEATURES move the metric where architecture and
+        # objective do not.
+        #
+        # The constants are measured, not guessed: projection_levers.py found
+        # each rate stabilises at a different sample size (K ~200 PA, BB ~400,
+        # hit and HR ~2200), and flagged the single shipped REG=1200 as "badly
+        # wrong at both ends". This applies each stat's own constant.
+        #
+        # Order of columns 0..3 is (hit, bb, k, hr); mismatching this would
+        # silently shrink strikeouts with the home-run constant, so it is
+        # asserted against PA_OUTCOME order in the tests.
+        reg = np.array([2200.0, 400.0, 200.0, 2200.0], dtype=np.float64)
+        n = stats[:, 4:5].astype(np.float64)
+        seen = (n > 0).ravel()
+        # League baseline from PA-weighted observed rates, so it is not dragged
+        # by the many near-zero-PA rows in the table.
+        #
+        # NOTE the name: `league` is already taken by the league_id int array a
+        # few lines above, which feeds LeagueEmbedding. Shadowing it here silently
+        # replaced those ints with float rates and blew up inside nn.Embed with
+        # "Input type must be an integer" from three frames away.
+        league_rate = ((stats[seen, :4].astype(np.float64) * n[seen]).sum(0)
+                       / max(n[seen].sum(), 1.0))
+        stats[:, :4] = ((stats[:, :4].astype(np.float64) * n + reg * league_rate)
+                        / (n + reg)).astype(np.float32)
 
     if contact_quality and {"launch_speed", "launch_angle"}.issubset(terminal.columns):
         tnn = terminal.filter(pl.col("pa_outcome").is_not_null())
@@ -297,6 +332,33 @@ def main() -> None:
     parser.add_argument("--no-kl-scale", action="store_true",
                         help="Disable the minibatch player_skills KL scaling (reproduce the "
                              "pre-fix v6..v12 latent-collapse behavior).")
+    parser.add_argument("--bilinear-rank", type=int, default=0,
+                        help="Rank of the bilinear batter x pitcher interaction added to the "
+                             "outcome logits (0 = off, the v6..v16 behavior). Generalises the "
+                             "hand-coded --platoon lever to all interactions. Eval scripts must "
+                             "pass the same value.")
+    parser.add_argument("--nested", action="store_true",
+                        help="Two-stage outcome head: {K,BB,HBP,in-play} then in-play -> "
+                             "{1B,2B,3B,HR,out,E}, instead of a flat 9-way softmax. Eval "
+                             "scripts must pass the same flag.")
+    parser.add_argument("--skill-prior", choices=["iso", "learned", "lkj", "walk"], default="iso",
+                        help="Prior on the per-player skill latent. iso = N(0,I) (v6..v16); "
+                             "learned = per-dimension learned scale (adaptive shrinkage); "
+                             "lkj = full learned correlation. Eval scripts must pass the same.")
+    parser.add_argument("--player-agg-weight", type=float, default=0.0,
+                        help="Weight on the per-batter aggregation loss (0 = off). Reweights "
+                             "the objective from per-PA (where ~99.7%% of the signal is the "
+                             "league marginal) toward per-BATTER, the axis the eval metric "
+                             "measures. Training-only; adds no parameters, so eval scripts do "
+                             "NOT need a matching flag.")
+    parser.add_argument("--player-agg-shrink", type=float, default=20.0,
+                        help="Shrinkage constant k in n/(n+k) for the aggregation loss; "
+                             "downweights batters with few PAs in the minibatch.")
+    parser.add_argument("--per-stat-shrink", action="store_true",
+                        help="Shrink each rate feature toward the league rate using its OWN "
+                             "measured stabilisation constant (K 200 PA, BB 400, hit/HR 2200) "
+                             "instead of feeding raw rates. Changes the input distribution, so "
+                             "eval scripts must pass the same flag.")
     parser.add_argument("--tag", type=str, default=None,
                         help="Checkpoint/log dir tag override (e.g. v6).")
     parser.add_argument("--train-end", type=int, default=2022,
@@ -331,7 +393,8 @@ def main() -> None:
 
     print("Building player table...", flush=True)
     player_table_np = _build_player_table(pitches, recency_halflife=args.recency_halflife,
-                                          contact_quality=args.contact_quality)
+                                          contact_quality=args.contact_quality,
+                                          per_stat_shrink=args.per_stat_shrink)
     print(f"  {len(player_table_np['all_ids']):,} unique players.", flush=True)
 
     print("Filtering to PA-terminal rows...", flush=True)
@@ -362,6 +425,20 @@ def main() -> None:
         _mkw["fatigue"] = True
     if args.platoon:
         _mkw["platoon"] = True
+    if args.bilinear_rank > 0:
+        _mkw["bilinear_rank"] = args.bilinear_rank
+    if args.nested:
+        _mkw["nested"] = True
+    if args.skill_prior != "iso":
+        _mkw["skill_prior"] = args.skill_prior
+    if args.skill_prior == "walk":
+        # Derive the season axis from the actual training range rather than a
+        # default, so --train-end changes the latent shape correctly.
+        _mkw["season_base"] = TRAIN_SEASONS[0]
+        _mkw["n_seasons"] = len(TRAIN_SEASONS)
+    if args.player_agg_weight > 0:
+        _mkw["player_agg_weight"] = args.player_agg_weight
+        _mkw["player_agg_shrink"] = args.player_agg_shrink
     _mkw["kl_scale"] = kl_scale
     model_fn = partial(pa_model, **_mkw)
 
@@ -381,6 +458,8 @@ def main() -> None:
         ss_start_step    = 0 if args.resume else 5_000,
         engine_ss        = args.engine_ss,
         kl_scale         = kl_scale,
+        skill_prior      = args.skill_prior,
+        n_seasons        = len(TRAIN_SEASONS) if args.skill_prior == "walk" else 1,
     )
 
     elapsed = time.time() - t0

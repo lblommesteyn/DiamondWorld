@@ -31,6 +31,14 @@ def main():
     ap.add_argument("--skill-mode", choices=["prior", "mean"], default="mean",
                     help="mean substitutes the learned player_mu (correct for a non-collapsed "
                          "latent); prior samples N(0,1) (legacy).")
+    ap.add_argument("--bilinear-rank", type=int, default=0,
+                    help="Must match the checkpoint's --bilinear-rank (v17+).")
+    ap.add_argument("--nested", action="store_true",
+                    help="Must match the checkpoint's --nested (v17+).")
+    ap.add_argument("--skill-prior", choices=["iso", "learned", "lkj", "walk"], default="iso",
+                    help="Must match the checkpoint's --skill-prior (v17+).")
+    ap.add_argument("--per-stat-shrink", action="store_true",
+                    help="Must match the checkpoint's --per-stat-shrink.")
     ap.add_argument("--tag", default="v12")
     ap.add_argument("--train-end", type=int, default=2022,
                     help="Last training season for the player table (must match the checkpoint's "
@@ -47,11 +55,17 @@ def main():
     import jax, jax.numpy as jnp, numpyro.handlers as nh
     params = pickle.load(open(args.ckpt, "rb"))["params"]
     if args.skill_mode == "mean" and "player_mu" in params:
-        params = {**params, "player_skills": params["player_mu"]}
+        # The walk prior's latent site is the INNOVATION tensor `player_skill_eps`
+        # (the skill path itself is a deterministic cumsum of it), so substituting
+        # `player_skills` would silently miss and leave the latent sampled from the
+        # prior at eval. Same class of mistake as the guide-coverage bug.
+        site = "player_skill_eps" if args.skill_prior == "walk" else "player_skills"
+        params = {**params, site: params["player_mu"]}
     b_heur = np.load(args.recal)["b_heur"].astype(np.float64)
     trp = load_seasons(TRAIN, data_root=processed_root())
     ptab = _build_player_table(trp, recency_halflife=args.recency_halflife,
-                               contact_quality=args.contact_quality)
+                               contact_quality=args.contact_quality,
+                               per_stat_shrink=args.per_stat_shrink)
     park_map = _build_park_index(trp); id2i = ptab["id_to_idx"]; del trp
 
     n_rookie = 0
@@ -86,7 +100,15 @@ def main():
           "hand": jnp.array(ptab["hand"]),
           "bat_hand": jnp.array(ptab.get("bat_hand", np.full(len(ptab["hand"]), .5, np.float32))),
           "pit_hand": jnp.array(ptab.get("pit_hand", np.full(len(ptab["hand"]), .5, np.float32)))}
-    model_fn = partial(pa_model, outcome_only=True, fatigue=True)
+    _walk_kw = {}
+    if args.skill_prior == "walk":
+        # Must match training exactly, or the season axis (and hence which season's
+        # skill each PA reads) silently shifts. The test season is beyond the
+        # trained range and is clamped to the last trained season by the model.
+        _walk_kw = {"season_base": TRAIN[0], "n_seasons": len(TRAIN)}
+    model_fn = partial(pa_model, outcome_only=True, fatigue=True,
+                       bilinear_rank=args.bilinear_rank, nested=args.nested,
+                       skill_prior=args.skill_prior, **_walk_kw)
     gids = te["game_pk"].unique().to_numpy()
 
     # per-batter accumulators

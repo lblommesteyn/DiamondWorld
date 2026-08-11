@@ -186,23 +186,51 @@ def encode_players_numpyro(
     handedness: jnp.ndarray,      # (P,) int32
     pitcher_ids: jnp.ndarray,     # (B, T) int32
     batter_ids: jnp.ndarray,      # (B, T) int32
-    player_skills: jnp.ndarray,   # (P, SKILL_DIM) — sampled latent skill vectors
+    player_skills: jnp.ndarray,   # (P, SKILL_DIM), or (P, S, SKILL_DIM) if seasonal
     hidden_dim: int = 128,
     out_dim: int = 64,
     name: str = "player_encoder",
+    season_idx: Optional[jnp.ndarray] = None,  # (B, T) int32, required if seasonal
 ) -> tuple[jnp.ndarray, jnp.ndarray]:
     """
     NumPyro model fragment.
+
+    When `player_skills` is 3-D the skill latent is per (player, season) and
+    `season_idx` selects which season's skill each plate appearance sees. The
+    deterministic encoding is season-invariant (the stat table is one row per
+    player), so it is broadcast across seasons before fusion; only the stochastic
+    part carries time.
 
     Returns
     -------
     pitcher_z : (B, T, D)
     batter_z  : (B, T, D)
     """
-    registry = PlayerRegistry(
-        player_stats, league_ids, handedness, player_skills,
-        name=name, hidden_dim=hidden_dim, out_dim=out_dim,
+    if player_skills.ndim == 2:
+        registry = PlayerRegistry(
+            player_stats, league_ids, handedness, player_skills,
+            name=name, hidden_dim=hidden_dim, out_dim=out_dim,
+        )
+        return registry.lookup(pitcher_ids), registry.lookup(batter_ids)
+
+    if season_idx is None:
+        raise ValueError("seasonal player_skills requires season_idx")
+
+    P, S, _ = player_skills.shape
+    encoder = flax_module(
+        name,
+        PlayerSeasonEncoder(f_player=player_stats.shape[-1],
+                            hidden_dim=hidden_dim, out_dim=out_dim),
+        player_stats, league_ids, handedness,
     )
-    pitcher_z = registry.lookup(pitcher_ids)  # (B, T, D)
-    batter_z  = registry.lookup(batter_ids)   # (B, T, D)
-    return pitcher_z, batter_z
+    det_emb = encoder(player_stats, league_ids, handedness)          # (P, D)
+    det_rep = jnp.broadcast_to(det_emb[:, None, :], (P, S, out_dim))
+
+    fusion = flax_module(
+        f"{name}_skill_fusion", SkillFusionLayer(out_dim=out_dim),
+        det_rep.reshape(P * S, out_dim), player_skills.reshape(P * S, -1),
+    )
+    table = fusion(det_rep.reshape(P * S, out_dim),
+                   player_skills.reshape(P * S, -1)).reshape(P, S, out_dim)
+
+    return table[pitcher_ids, season_idx], table[batter_ids, season_idx]

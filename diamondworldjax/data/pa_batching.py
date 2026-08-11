@@ -50,6 +50,10 @@ def build_pa_batch(pa_df: pl.DataFrame, max_pa: int = MAX_PA) -> dict:
     arr_pitch_count  = _f()   # Phase-4 fatigue: pitcher's cumulative game pitch count
     arr_bat_side     = _f()   # platoon: batter side this PA (R=1, L=0); 0.5 unknown
     arr_pit_hand     = _f()   # platoon: pitcher throw hand (R=1, L=0); 0.5 unknown
+    arr_season       = _i(0)  # calendar season of this PA; consumed only by the
+                              # random-walk skill prior (--skill-prior walk). Emitted
+                              # unconditionally because an extra batch key is inert
+                              # for every existing consumer.
 
     raw_inning   = _col("inning", 1.0)
     raw_half     = _col("half_bin", 0.0)
@@ -87,6 +91,7 @@ def build_pa_batch(pa_df: pl.DataFrame, max_pa: int = MAX_PA) -> dict:
     raw_batter   = (_col("batter_id")  if "batter_id"  in pa_df.columns
                     else _col("batter_idx"))
     raw_park     = _col("park_idx", 0.0)
+    raw_season   = _col("season", 0.0)
 
     for b_idx, gid in enumerate(unique_games):
         mask  = game_ids_arr == gid
@@ -124,6 +129,7 @@ def build_pa_batch(pa_df: pl.DataFrame, max_pa: int = MAX_PA) -> dict:
         _fi(arr_pitcher_ids, raw_pitcher)
         _fi(arr_batter_ids,  raw_batter)
         _fi(arr_park_ids,    raw_park)
+        _fi(arr_season,      raw_season)
 
     return {
         "pa_valid":         jnp.array(pa_valid),
@@ -143,6 +149,7 @@ def build_pa_batch(pa_df: pl.DataFrame, max_pa: int = MAX_PA) -> dict:
         "pit_hand":         jnp.array(arr_pit_hand),
         "pitcher_ids":      jnp.array(arr_pitcher_ids),
         "batter_ids":       jnp.array(arr_batter_ids),
+        "season":           jnp.array(arr_season),
         "park_ids":         jnp.array(arr_park_ids),
         "game_ids":         unique_games,
     }
