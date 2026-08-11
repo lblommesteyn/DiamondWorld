@@ -40,11 +40,91 @@ GRAD_CLIP_VALUE   = 1.0   # per-element gradient clip threshold
 SKILL_DIM = 32
 
 
-def empty_guide(*args, **kwargs) -> None:
-    """No continuous latent variables — guide does nothing."""
+def make_player_skills_guide(P: int, skill_dim: int = SKILL_DIM, kl_scale: float = 1.0,
+                             skill_prior: str = "iso", n_seasons: int = 1):
+    """Dispatch to the guide matching the model's skill prior.
+
+    CRITICAL, and the source of a real bug. A NumPyro guide that omits a latent
+    site does NOT raise. Under Trace_ELBO the missing site is simply drawn from
+    its prior at every step, so it is never learned. That silently converts
+    "give the model a learned prior hyperparameter" into "inject fresh noise into
+    the prior on every step", which is a different experiment with a predictably
+    worse outcome.
+
+    This bit hard. The v17c (learned scale) and v17d (LKJ) runs were trained
+    against the iso-only guide, so `skill_tau` and `skill_L` were resampled from
+    their priors every step and never fitted. Their checkpoints contain no
+    parameters for those sites, which is how it was caught. Both results measured
+    prior NOISE rather than prior freedom, and both were retracted.
+
+    `scripts/_check_guide_coverage.py` asserts coverage for every prior.
+    """
+    if skill_prior == "iso":
+        return _guide_iso(P, skill_dim, kl_scale)
+    if skill_prior in ("learned", "lkj"):
+        return _guide_scaled(P, skill_dim, kl_scale, lkj=(skill_prior == "lkj"))
+    if skill_prior == "walk":
+        return _guide_walk(P, skill_dim, kl_scale, n_seasons)
+    raise ValueError(f"unknown skill_prior {skill_prior!r}")
 
 
-def make_player_skills_guide(P: int, skill_dim: int = SKILL_DIM, kl_scale: float = 1.0):
+def _guide_scaled(P: int, skill_dim: int, kl_scale: float, lkj: bool):
+    """Guide for the learned-scale and LKJ priors.
+
+    The per-player skill keeps its mean-field Normal posterior. The GLOBAL
+    hyperparameters (tau, and the LKJ Cholesky factor) get point estimates via
+    Delta, the standard treatment for a handful of globals shared across all
+    players: there is ample data to pin them, and a Delta keeps the ELBO free of
+    an extra KL that would need its own subsample scaling.
+    """
+    base = _guide_iso(P, skill_dim, kl_scale)
+
+    def guide(batch, player_table, teacher_force=True):
+        base(batch, player_table, teacher_force)
+        tau = numpyro.param(
+            "skill_tau_loc", jnp.ones(skill_dim),
+            constraint=constraints.interval(0.05, 3.0),
+        )
+        with nhandlers.scale(scale=kl_scale):
+            numpyro.sample("skill_tau", dist.Delta(tau).to_event(1))
+            if lkj:
+                L = numpyro.param(
+                    "skill_L_loc", jnp.eye(skill_dim),
+                    # Singleton instance, not a call: constraints.corr_cholesky is
+                    # already the constraint object in this NumPyro version.
+                    constraint=constraints.corr_cholesky,
+                )
+                numpyro.sample("skill_L", dist.Delta(L).to_event(2))
+    return guide
+
+
+def _guide_walk(P: int, skill_dim: int, kl_scale: float, n_seasons: int):
+    """Guide for the per-season random-walk skill prior.
+
+    The latent is the innovation tensor `player_skill_eps` with shape
+    (P, n_seasons, skill_dim), so the posterior is mean-field over that tensor;
+    the walk's step size gets a point estimate.
+    """
+    def guide(batch, player_table, teacher_force=True):
+        mu = numpyro.param(
+            "player_mu", jnp.zeros((P, n_seasons, skill_dim)),
+            constraint=constraints.interval(-5.0, 5.0),
+        )
+        sigma = numpyro.param(
+            "player_sigma", jnp.full((P, n_seasons, skill_dim), 0.3),
+            constraint=constraints.interval(0.05, 2.0),
+        )
+        walk = numpyro.param(
+            "skill_walk_sigma_loc", jnp.asarray(0.3),
+            constraint=constraints.interval(0.01, 1.0),
+        )
+        with nhandlers.scale(scale=kl_scale):
+            numpyro.sample("skill_walk_sigma", dist.Delta(walk))
+            numpyro.sample("player_skill_eps", dist.Normal(mu, sigma).to_event(3))
+    return guide
+
+
+def _guide_iso(P: int, skill_dim: int = SKILL_DIM, kl_scale: float = 1.0):
     """Return a variational guide for the per-player latent skill vectors.
 
     Parameterises q(player_skills) = Normal(mu, sigma) with hard constraints:
@@ -231,7 +311,8 @@ def train(
     seed: int             = 0,
     ckpt_dir: Path | None  = None,
     log_path: Path | None  = None,
-    rank: int             = 20,
+    rank: int             = 20,      # UNUSED. Left only so train_v0.py's --rank
+                                     # keeps working; there is no low-rank guide.
     resume_path: Path | None = None,
     cosine_decay: bool    = False,
     cosine_alpha: float   = 0.0,   # LR floor as fraction of init_lr (0 = decay to 0)
@@ -240,6 +321,10 @@ def train(
     ss_start_step: int    = 5_000,  # don't apply SS until model has learned basics
     engine_ss: bool       = False,  # use engine-based (legal) DAgger instead of neural bsa
     kl_scale: float       = 1.0,    # scale for the global player_skills KL (= batch/total_games)
+    skill_prior: str      = "iso",  # MUST match the model, else its extra latents go
+                                    # uncovered by the guide and are silently resampled
+                                    # from the prior every step instead of being learned
+    n_seasons: int        = 1,      # season axis, only used by skill_prior="walk"
 ) -> tuple[Any, Any, list[float]]:
     """
     Run SVI training.
@@ -265,7 +350,8 @@ def train(
 
     first_batch, first_player_table = next(batch_iter)
     P = first_player_table["stats"].shape[0]
-    guide = make_player_skills_guide(P, kl_scale=kl_scale)
+    guide = make_player_skills_guide(P, kl_scale=kl_scale,
+                                     skill_prior=skill_prior, n_seasons=n_seasons)
     print(f"  player_skills KL scale = {kl_scale:.6g}", flush=True)
 
     svi = SVI(

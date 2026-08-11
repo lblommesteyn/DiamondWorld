@@ -4,9 +4,18 @@ Usage
 -----
     python -m diamondworldjax.scripts.train_v0 [--seasons 2015..2022] [--steps 50000]
 
-Trains the joint DiamondWorldJAX model via SVI with an
-AutoLowRankMultivariateNormal guide and saves checkpoints to
+Trains the joint DiamondWorldJAX model via SVI and saves checkpoints to
 checkpoints/dwjax_v0/.
+
+NOTE: this path is parked in favour of the PA-level model (see NOTES_FOR_JADEN).
+It shares train/svi.py, so it uses the hand-written mean-field guide over
+`player_skills`, NOT an AutoLowRankMultivariateNormal as an earlier version of
+this docstring claimed; `--rank` is consequently inert. Corrected because a
+guide/model mismatch is exactly the failure this codebase has already been bitten
+by once (see make_player_skills_guide), and a docstring describing a guide the
+code does not use is how such a bug stays hidden. The joint model samples only
+`player_skills`, which the guide does cover, so this is a documentation fix and
+not a correctness one.
 """
 from __future__ import annotations
 
