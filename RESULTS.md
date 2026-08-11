@@ -799,6 +799,334 @@ remaining 0.060 is the age and minor-league levers we cannot build from pitch da
 "input-saturated" is now decisively false: one correctly constructed feature moved the
 best model by more than the entire v13-to-v15 previous-season retrain moved hit rate.
 
+## Confidence intervals: which of these results actually survive
+
+Every comparison above this line is a point estimate. That is a real gap, because the
+differences the project turns on are small (v15 to v16 is +0.017 AVG) and the test set
+is one season of 383 to 434 batters. Until now there was no way to tell a genuine
+improvement from a lucky season, and at least one claim in this document turns out to
+have been wrong because of it.
+
+`bootstrap_playercorr.py` resamples BATTERS with replacement, the unit the metric is
+computed over, and recomputes each model's correlation on the resampled set. The
+decisive output is the PAIRED interval on the difference between two models. Because
+both models are scored on the same batters in the same season, shared batter-level
+noise cancels in the difference, so the paired interval is much tighter than the two
+individual intervals (3.6x tighter for v16 vs v15). Comparing the individual intervals
+and noting that they overlap is the classic error here, and it would wrongly declare
+every result in this project null: v16's own interval is [0.566, 0.654], which
+comfortably contains v15's 0.594.
+
+Paired 95% intervals, 20,000 replicates:
+
+| comparison | K | BB | Hit | HR | AVG |
+|---|---|---|---|---|---|
+| v13 - v12 | +0.000 | **+0.228** | -0.023 | **+0.084** | **+0.073 [+0.038, +0.107]** |
+| v14 - v13 | **-0.054** | **-0.085** | +0.007 | **+0.032** | **-0.025 [-0.043, -0.003]** |
+| v16 - v15 | **+0.028** | +0.001 | +0.012 | **+0.027** | **+0.017 [+0.004, +0.029]** |
+
+Bold marks a difference whose interval excludes zero. Three findings:
+
+**1. The two headline claims hold.** The v13 KL-scaling fix is real and large
+(+0.073, interval [+0.038, +0.107], p < 0.001), and it is concentrated exactly where
+the mechanism predicts: walks (+0.228) and home runs (+0.084), with strikeouts dead
+flat at +0.000. The v16 contact-quality gain is also real (+0.017, [+0.004, +0.029],
+p = 0.009). Its internal pattern is the stronger evidence: BB is +0.001, which is what
+a feature that adds no walk information should do, so the effect is the feature and
+not a lucky draw.
+
+**2. The v14 claim was wrong, and in the honest direction.** This document previously
+said v14's regression against v13 was "within training-run variance." It is not within
+BATTER-sampling variance: the paired interval is [-0.043, -0.003] and excludes zero, so
+on this test season the mask fix genuinely made the model worse, driven by strikeouts
+(-0.054) and walks (-0.085) against a real HR gain (+0.032). The stated caveat needs
+care, though, because the bootstrap answers a narrower question than the original claim
+did. It quantifies uncertainty over WHICH BATTERS landed in the test season. It says
+nothing about seed-to-seed retraining noise, which is a separate source and the one the
+original sentence appealed to. So the correct statement is: the v14 regression is too
+large to be explained by test-set sampling, and settling whether it is explained by
+training noise requires retraining v13 and v14 under several seeds, which has not been
+done. Either way, "too small to measure" was the wrong description.
+
+**3. Hit rate is never significant, in any comparison.** No lever this project has
+tried has moved hit-rate correlation by a detectable amount (v13 -0.023, v14 +0.007,
+v16 +0.012, all intervals spanning zero). That is a sharper version of the BABIP-limited
+claim made elsewhere: it is not merely that hit rate is hard, it is that nothing tried
+so far has moved it at all. It also sets the bar for the nested-head variant, whose
+whole reason for existing is to attack that stat.
+
+The practical consequence for future work is a gate: a variant is an improvement only
+if its paired interval against the incumbent excludes zero. A better point estimate is
+not sufficient evidence, and at these effect sizes it never was.
+
+## v17 and v18: four interventions, four failures, and what that closes
+
+With the gate in place, four further changes were run against v16, each a single lever
+on v16's exact recipe (50K steps, recency 2, train through 2023, test 2024, same recal,
+same 383 batters). Three attacked the model's STRUCTURE; the fourth attacked the
+training OBJECTIVE. All four were preregistered in `scripts/run_v17.sh` and
+`scripts/run_v18.sh` with their falsification conditions written down before running.
+
+| vs v16 (0.611) | K | BB | Hit | HR | AVG | AVG 95% CI |
+|---|---|---|---|---|---|---|
+| v17a bilinear matchup | +0.004 | +0.010 | +0.006 | -0.006 | +0.003 | [-0.007, +0.012] |
+| v17b nested head | -0.004 | +0.012 | **-0.033** | +0.002 | -0.006 | [-0.020, +0.007] |
+| ~~v17c learned skill prior~~ | | | | | | RETRACTED (guide bug), see below |
+| ~~v17d LKJ-correlated prior~~ | | | | | | RETRACTED (guide bug), see below |
+| v19c learned skill prior (re-run) | **-0.051** | +0.008 | **-0.036** | **-0.020** | **-0.025** | [-0.038, -0.012] |
+| v19d LKJ-correlated prior (re-run) | **-0.023** | +0.017 | -0.026 | **-0.020** | **-0.013** | [-0.023, -0.001] |
+| v19w per-season random walk | +0.010 | +0.002 | +0.022 | +0.003 | +0.009 | [-0.011, +0.029] |
+| v20 per-stat feature shrinkage | +0.013 | +0.013 | +0.022 | -0.004 | +0.011 | [-0.002, +0.023] |
+| v18 aggregation loss (lambda 1) | -0.006 | +0.005 | -0.003 | -0.001 | -0.001 | [-0.014, +0.010] |
+| v18b aggregation loss (lambda 4) | -0.038 | -0.014 | -0.001 | -0.008 | **-0.015** | [-0.029, -0.000] |
+
+Bold marks an interval excluding zero. Not one variant beat v16; the only intervals that
+exclude zero are regressions. `bootstrap_ALL.txt` scores every valid variant against v16
+in a single paired run.
+
+Two properties of this table matter beyond the individual rows. First, across five
+variants and twenty-five stat cells there is **no positive result anywhere**: every
+interval that excludes zero is negative. Second, the nulls are TIGHT, not ambiguous:
+v18's AVG interval spans 0.024 and v17a's 0.019, against a v16-vs-v15 effect of +0.017
+that the same method resolved comfortably. So these are measurements of absence, not
+failures to measure. That distinction is what makes the negative result reportable: the
+experiment had the resolution to see an effect the size of the last real improvement, and
+saw nothing.
+
+**v17a, bilinear matchup (null).** The hypothesis was that a plate appearance is a
+matchup while the context is a CONCATENATION, forcing the MLP to discover interactions
+it cannot represent, with the v11 platoon lever as evidence (it had to be fed one
+interaction pre-multiplied). A rank-8 bilinear term `b^T W_k p` on the logits finds
+nothing: +0.003 with an interval four times wider than the effect. The conclusion is
+that the concatenated MLP already captures whatever matchup structure these features
+carry, and the platoon result was specific to handedness rather than evidence of a
+general architectural gap. Note this is exactly the case the gate exists for: 0.614 vs
+0.611 reads as a small win and is not one.
+
+**v17b, nested outcome head (failed in the opposite direction).** Splitting the flat
+9-way softmax into {K, BB, HBP, in-play} then in-play -> {1B, 2B, 3B, HR, out, E} was
+aimed squarely at hit rate, on the logic that plate discipline and contact quality are
+different skills driven by different features. Hit was indeed the only cell that moved,
+and it moved DOWN by 0.033, the largest single effect in the whole experiment. The
+readable mechanism is that hit rate had been borrowing strength from a representation
+shared with the discipline stage, and isolating the stages removed that support rather
+than removing a constraint. Caveat: p = 0.043 across five cells does not survive a
+multiplicity correction, so this is directional evidence, not a confirmed regression.
+
+**v17c and v17d, the skill-prior variants: RETRACTED, they measured a bug.** These two
+were reported as showing that freeing the skill prior monotonically hurts (v16 fixed
+N(0, I) 0.611, v17c learned scale 0.579, v17d LKJ 0.558), and that the fixed unit prior
+was therefore load-bearing regularisation. **That conclusion is withdrawn. Neither run
+tested what it claimed to test.**
+
+The SVI guide in `train/svi.py` was hand-written and covered exactly one latent site,
+`player_skills`. A NumPyro guide that omits a latent does NOT raise: under Trace_ELBO the
+missing site is drawn from its PRIOR at every step and never learned. So `skill_tau`
+(v17c) and `skill_tau` plus `skill_L` (v17d) were resampled from HalfNormal and LKJ
+priors on every step. Both runs measured fresh NOISE injected into the prior each step,
+not a learned prior. The apparent monotone ordering reduces to the unremarkable fact that
+more injected noise hurts more.
+
+Two independent confirmations. `scripts/_check_guide_coverage.py` traces model and guide
+and reports the uncovered sites directly. And the checkpoints settle it: v17c and v17d
+contain exactly the same parameter set as v16, with no entry for `skill_tau` or
+`skill_L`, so those sites demonstrably were never fitted.
+
+The guide now dispatches per prior (Delta point estimates for the global
+hyperparameters, mean-field for the per-player and per-season latents) and all four
+priors verify as covered. v17c/v17d were re-run against the corrected guide as v19c/v19d.
+
+**v19c, the honest version of v17c: the regression replicates.** With the guide fixed and
+`skill_tau_loc` confirmed present in the checkpoint (so the scale was genuinely fitted),
+a learned per-dimension prior scale still regresses: AVG -0.025, interval
+[-0.038, -0.012], p < 0.001, damaging K (-0.051), Hit (-0.036) and HR (-0.020) while
+leaving BB alone. Against the retracted run's -0.032, that is the same direction and a
+similar magnitude.
+
+Two things follow, and they should not be conflated. The retraction was still correct:
+v17c's number came from an experiment that measured prior NOISE, and reporting it as
+evidence about prior freedom was wrong regardless of the fact that a valid experiment
+later agreed. A right answer reached by broken means is not a result. What is now true is
+that the claim has evidence behind it: **the fixed unit prior really is doing
+regularisation work, and fitting the shrinkage strength from data costs accuracy.** The
+preregistered expectation for v19c was "plausible small win, or null", on the reasoning
+that a metric which is fundamentally about shrinkage should benefit from fitting the
+shrinkage. That reasoning was wrong.
+
+**v19d, the honest version of v17d: also a regression, but it INVERTS the ordering.**
+With `skill_tau_loc` and `skill_L_loc` both confirmed present in the checkpoint, the LKJ
+prior regresses too: AVG -0.013, interval [-0.023, -0.001], p = 0.029. So the prior axis
+now reads:
+
+| prior | AVG | vs v16 |
+|---|---|---|
+| fixed N(0, I) (v16) | **0.611** | - |
+| + learned per-dimension scale (v19c) | 0.586 | -0.025, CI excludes 0 |
+| + learned scale and LKJ correlation (v19d) | 0.598 | -0.013, CI excludes 0 |
+
+One half of the retracted claim survives and one half is dead. SURVIVES: freeing the
+skill prior hurts, and both ways of doing it regress with intervals excluding zero, so
+the fixed unit prior is genuinely doing regularisation work. DEAD: the monotone ordering.
+The bugged runs had LKJ strictly worse than the learned scale (0.558 < 0.579), which is
+exactly what made "more freedom, more harm" look like a clean mechanism. Trained
+properly, LKJ is BETTER than the learned scale alone (0.598 > 0.586) despite granting
+strictly more freedom. The ordering is inverted, and the proposed mechanism goes with it:
+adding correlation structure evidently buys back part of what the free scale costs.
+
+This is worth stating carefully because it is the second time this experiment produced a
+tidy story that did not survive being done right. The claim that is actually supported is
+narrower than either version: relaxing the prior costs accuracy, but not in proportion to
+how much freedom is granted, and the reason is not established.
+
+**v19w, per-season random-walk skill: the first variant to move hit rate.** Instead of
+one static skill per player, the latent becomes a trajectory:
+`z[p, 0] ~ N(0, 1)`, `z[p, s] ~ N(z[p, s-1], sigma_walk)`. This is the principled version
+of the recency lever, which hand-builds a "current form" prior by exponentially
+discounting older seasons in the FEATURES; the walk instead lets the model infer how fast
+talent drifts. At eval the test season is beyond the trained range and clamps to the last
+trained season, which is exactly the quantity recency weighting approximates.
+
+The mechanism verified rather than collapsing: `player_mu` came out (3520, 9, 32),
+`skill_walk_sigma` fitted to 0.267, and mean season-to-season skill change 0.049, so the
+walk did not degenerate to a constant path. Result: **AVG 0.620 (Hit 0.444)**, delta
++0.009 with interval [-0.011, +0.029]. A null by the gate, but the highest absolute score
+the project had produced at that point, and hit rate moved +0.022 after resisting every
+previous lever.
+
+One measurement detail is itself informative: v19w's paired intervals are about twice as
+wide as every other variant's (AVG width 0.040 against 0.019 to 0.024). The paired
+bootstrap is tight when two models make similar per-batter predictions, because shared
+error cancels. A wide paired interval means v19w is genuinely a DIFFERENT model rather
+than a perturbation of v16. So unlike the other nulls, this one is plausibly a power
+problem rather than an absence of effect, and it is the only variant in the series where
+that caveat applies.
+
+**v20, per-stat shrinkage of the rate features: the same result by a different route.**
+Columns 0..3 of the player table are raw observed rates, so a 150-PA batter's hit rate is
+mostly noise while his strikeout rate is already informative, and both were fed in raw.
+v20 shrinks each toward the league rate by its OWN measured stabilisation constant
+(K ~200 PA, BB ~400, hit and HR ~2200), the constants projection_levers.py established
+while flagging the single shipped REG=1200 as wrong at both ends.
+
+**AVG 0.622 (Hit 0.444)**, delta +0.011 with interval [-0.002, +0.023], p = 0.107. The
+highest absolute score any model in this project has reached, and the interval clips zero
+by 0.002. The preregistered prediction was "a small win concentrated in Hit and HR,
+roughly flat in K". Half right: Hit moved most (+0.022) as the mechanism required, but HR
+did not move at all (-0.004) despite sharing hit's 2200-PA constant, and K was the cell
+closest to significance (+0.013, p = 0.053) after being predicted flat. The feature
+helped, but not through the channel claimed.
+
+**The convergence is the finding, not either result alone.**
+
+| model | mechanism | AVG | Hit |
+|---|---|---|---|
+| v16 | incumbent | 0.611 | 0.422 |
+| v19w | per-season latent trajectory | 0.620 | **0.444** |
+| v20 | per-stat feature shrinkage | **0.622** | **0.444** |
+
+Two INDEPENDENT interventions, one on latent structure and one on input features,
+produced the same +0.022 on hit rate and nearly the same AVG. Hit rate is the stat that
+had resisted everything: v13, v14, v16 and v17a null, v17b and v17c negative. Two
+unrelated changes moving the one immovable stat by an identical amount is either
+coincidence or a real effect that neither run had the power to confirm alone. Note also
+that v20's null is BETTER powered than v19w's (interval width 0.025 against 0.040), so
+v20 is closer to a genuine no-effect while v19w remains ambiguous.
+
+v21 tests the combination. The mechanisms are orthogonal, so if both effects are real
+they should be roughly additive at about +0.020, which clears the gate. The informative
+middle outcome is ~+0.010 still spanning zero, which would say temporal information and
+sample-size shrinkage are the same lever wearing two hats rather than two separate gains.
+Stated plainly because it is the first result here worth guarding against over-reading:
+two near-misses pointing the same way is suggestive, not evidence, and even a +0.020
+landing at p just under 0.05 would want a second seed or a 2025 test season before it
+went into a paper.
+
+The bug also caught the random-walk prior before it burned a run: `player_skill_eps` was
+uncovered too, so that variant would have produced another meaningless number.
+
+Note what is NOT affected. v17a and v17b add Flax parameters through `flax_module`, and
+v18/v18b add a `numpyro.factor`; none of them introduces a latent sample site, and all
+ran under `skill_prior="iso"`, which the coverage check confirms is fully covered. Those
+four results stand.
+
+LESSON, and it generalises past this repo: a hand-written variational guide is a silent
+correctness dependency on the model. Adding a latent to the model without adding it to
+the guide produces a run that trains cleanly, converges, and reports a plausible number
+that answers a different question. The only reliable defence is a coverage assertion, and
+one now exists.
+
+**v18, player-aggregation loss (null).** This one attacked the objective rather than the
+architecture, on the following diagnosis. Marginal outcome entropy is 1.495 nats and the
+best model reaches about 1.49, so the player-attributable share of the training signal is
+roughly 0.005 nats: about 0.3% of the loss. Roughly 99.7% of every gradient step goes
+into the league-average plate appearance while 100% of the evaluation is player
+differentiation. The intervention adds a squared-error term on per-BATTER aggregated
+rates within each minibatch. It is not new information (the likelihood has the same
+optimum and the aggregation gradient is unbiased for the same target, verified by a
+gradient-direction test in `tests/test_pa_model_variants.py`); it is a reweighting, since
+cross-entropy weights every plate appearance equally while aggregation weights every
+BATTER equally. At lambda = 1.0 it changed nothing: -0.001 AVG, and no individual stat
+moved more than 0.006.
+
+**v18b, the same loss at lambda = 4.0 (regression, and it settles the question).** v18's
+null was ambiguous in a way worth resolving. A PURE null, rather than the regression that
+would signal too large a lambda, is consistent both with the diagnosis being wrong and
+with lambda = 1.0 being too small to bite, and inspecting the loss value cannot separate
+them because the aux term's magnitude is dominated by irreducible minibatch noise.
+Quadrupling the weight discriminates:
+
+| lambda | AVG vs v16 | 95% CI |
+|---|---|---|
+| 1.0 (v18) | -0.001 | [-0.014, +0.010] |
+| 4.0 (v18b) | **-0.015** | **[-0.029, -0.000]** |
+
+At 4x the term is unambiguously active and it HURTS, with the interval excluding zero
+(p = 0.044) and the damage concentrated in strikeouts (-0.038), exactly the signature of
+being dragged toward reproducing each batter's own historical rate. There is no interior
+optimum: the sequence is monotone downward from lambda = 0.
+
+**What this establishes.** Two axes are closed; a third is still open.
+ARCHITECTURE, closed: combined with the earlier sweep, in which transformer, GRU, LSTM
+and MLP all landed near 0.577, four structural interventions here plus that sweep have
+produced zero wins, so the model's limitation is not its structure. OBJECTIVE, closed on
+stronger evidence than v18 alone supported (see the lambda sweep below). PRIOR, OPEN: the
+two variants that would have tested it were invalidated by the guide-coverage bug and are
+being re-run.
+Because lambda = 4.0 demonstrably moves the model, v18's null at lambda = 1.0 was a real
+measurement of the effect rather than an artifact of a too-weak knob. Reweighting the
+objective toward the player axis does not recover player differentiation; past the point
+where it does anything at all, it costs it. The objective-mismatch hypothesis is
+refuted, not merely unsupported.
+
+What tips the balance toward a ceiling reading is the clustering. v16, v17a and v18
+land at 0.611, 0.614 and 0.609: three different objectives and architectures converging
+on the same number within noise. That is the signature of an information limit in the
+feature set rather than an optimisation or capacity limit.
+
+**Hit rate is the sharpest form of this.** It has now resisted every lever ever tried
+here: v13, v14, v16 and v17a all null, v17b and v17c actively negative. Meanwhile a
+Marcel-style estimator with the same contact-quality construction reaches 0.497 against
+v16's 0.422. A simple regularised average beats the full hierarchical model on that stat.
+The information exists and is extractable, and nothing done to the network reaches it,
+which points the remaining work at features and at per-stat regression constants (K
+stabilises at 200 PA, BB at 400, hit and HR at 2200, against the single REG=1200 shipped)
+rather than at the model.
+
+**One more instance of the project's central lesson.** Ranking these runs by training fit
+inverts the ranking by the metric:
+
+| model | final ELBO | player-corr AVG |
+|---|---|---|
+| v17b | **-6819 (best fit)** | 0.605 |
+| v16 | -6951 | **0.611 (best metric)** |
+| v17a | -7090 | 0.614 |
+| v17c | -7413 (worst fit) | 0.579 (worst metric) |
+
+v17b achieved the best training fit of any model this project has produced and nearly
+the worst player differentiation. After JEPA, this is the third independent demonstration
+that fit and the metric are decoupled here. (v18's ELBO is not comparable, since its
+objective carries an extra penalty term.)
+
 ## Reproduce
 
 ```bash

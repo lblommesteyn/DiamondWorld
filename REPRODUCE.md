@@ -81,13 +81,31 @@ python -m diamondworldjax.scripts.lineup_backtest --games 90 --cands 24
 | Counterfactual magnitude calibration | `counterfactual_validation.py` |
 | Lineup decision study (winner's-curse corrected) | `lineup_backtest.py` |
 | Contact-quality feature, hook model | `train_pa.py`, `game_extract.py` |
+| Paired bootstrap CIs on the player-corr metric | `bootstrap_playercorr.py` |
+| v17 structural variants (bilinear / nested / skill prior) | `scripts/run_v17.sh` |
 | All figures | `paper/make_figures.py` |
+
+Model comparisons are gated on `bootstrap_playercorr.py`, which resamples batters and
+reports a PAIRED interval on the difference between two models. A variant counts as an
+improvement only when that interval excludes zero; a better point estimate does not
+qualify. Requires no GPU, since it reads the `prod_rates_<tag>.npz` arrays that
+`prod_playercorr.py` writes:
+
+```bash
+python -m diamondworldjax.scripts.bootstrap_playercorr \
+    --rates v15=data/eval2/prod_rates_v15_2024.npz \
+    --rates v16=data/eval2/prod_rates_v16.npz \
+    --baseline v15 --reps 20000
+```
 
 ## Tests
 
 Rules-engine and data-schema tests: `tests/` (`test_dwjax_sim.py`, `test_pa_encoding.py`,
-`test_validate.py`, `test_enrich.py`). The PA-encoding test guards the outcome class order
-against a silent index bug. Run with `pytest tests/`.
+`test_validate.py`, `test_enrich.py`, `test_pa_model_variants.py`). The PA-encoding test
+guards the outcome class order against a silent index bug, and the variants test guards
+the properties whose failure would be silent: that the nested head emits normalised
+log-probabilities, that its two stages factorise as claimed, and that the bilinear term
+is a genuine interaction rather than an additively separable one. Run with `pytest tests/`.
 
 ## Anonymization
 
