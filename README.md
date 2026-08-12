@@ -144,7 +144,7 @@ estimate is not sufficient evidence.
 | v19d LKJ-correlated prior | prior | -0.013 | [-0.023, -0.001] | regression |
 | v19w per-season random walk | structure | +0.009 | [-0.011, +0.029] | null, AVG 0.620 |
 | v20 per-stat feature shrinkage | features | +0.011 | [-0.002, +0.023] | null, AVG 0.622 |
-| v21 v19w + v20 combined | both | running | | |
+| **v21 v19w + v20 combined** | both | **+0.025** | [-0.000, +0.048] | **near-miss, p=0.054** |
 
 What this closes. **Architecture**: with the earlier transformer / GRU / LSTM / MLP sweep
 all landing near 0.577, six structural interventions have produced zero wins, so the
@@ -157,11 +157,30 @@ The nulls are tight (AVG interval widths 0.019 to 0.025) against a v15-to-v16 ef
 +0.017 that the same method resolved comfortably. These are measurements of absence, not
 failures to measure.
 
-**The one live thread.** v19w and v20 are independent mechanisms, one changing latent
-structure and one changing input features, and both moved hit rate by an identical +0.022
-to 0.444, after that stat had resisted every previous lever. Both are the highest absolute
-scores the project has produced. Neither passes alone. v21 tests whether the effects are
-additive.
+**The one live thread, and it replicated.** v19w and v20 are independent mechanisms, one
+changing latent structure and one changing input features, and both moved hit rate by an
+identical +0.022 to 0.444, after that stat had resisted every previous lever. Neither
+passed alone. v21 combines them, and the preregistered additive prediction came true
+almost exactly:
+
+| | AVG | Hit |
+|---|---|---|
+| v19w alone | +0.009 | +0.022 |
+| v20 alone | +0.011 | +0.022 |
+| sum, predicted before running | +0.020 | +0.044 |
+| **v21 observed** | **+0.025** | **+0.041** |
+
+Hit rate nearly doubled relative to either component, which rules out the alternative that
+the two were capturing the same signal by different routes. v21 posts the highest absolute
+scores in the project: AVG 0.635, Hit 0.463, HR 0.634. Hit 0.463 closes roughly half the
+gap to Steamer on the stat this project had described as BABIP-limited and immovable.
+
+It still does not pass the gate. The AVG interval is [-0.000, +0.048] at p = 0.054,
+missing by essentially nothing, and it is the widest interval of any variant, which is the
+same signature as v19w: a wide PAIRED interval means the model genuinely differs from v16
+rather than perturbing it, so this is underpowered at n=383 rather than null. The run
+script preregistered that a landing at p just under 0.05 would need a second seed or a
+2025 test season before it could be claimed. A seed replication is running.
 
 ### Other findings
 

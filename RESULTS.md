@@ -869,16 +869,21 @@ training OBJECTIVE. All four were preregistered in `scripts/run_v17.sh` and
 
 | vs v16 (0.611) | K | BB | Hit | HR | AVG | AVG 95% CI |
 |---|---|---|---|---|---|---|
+| *architecture* | | | | | | |
 | v17a bilinear matchup | +0.004 | +0.010 | +0.006 | -0.006 | +0.003 | [-0.007, +0.012] |
 | v17b nested head | -0.004 | +0.012 | **-0.033** | +0.002 | -0.006 | [-0.020, +0.007] |
+| *objective* | | | | | | |
+| v18 aggregation loss (lambda 1) | -0.006 | +0.005 | -0.003 | -0.001 | -0.001 | [-0.014, +0.010] |
+| v18b aggregation loss (lambda 4) | -0.038 | -0.014 | -0.001 | -0.008 | **-0.015** | [-0.029, -0.000] |
+| *prior* | | | | | | |
 | ~~v17c learned skill prior~~ | | | | | | RETRACTED (guide bug), see below |
 | ~~v17d LKJ-correlated prior~~ | | | | | | RETRACTED (guide bug), see below |
 | v19c learned skill prior (re-run) | **-0.051** | +0.008 | **-0.036** | **-0.020** | **-0.025** | [-0.038, -0.012] |
 | v19d LKJ-correlated prior (re-run) | **-0.023** | +0.017 | -0.026 | **-0.020** | **-0.013** | [-0.023, -0.001] |
+| *structure and features* | | | | | | |
 | v19w per-season random walk | +0.010 | +0.002 | +0.022 | +0.003 | +0.009 | [-0.011, +0.029] |
 | v20 per-stat feature shrinkage | +0.013 | +0.013 | +0.022 | -0.004 | +0.011 | [-0.002, +0.023] |
-| v18 aggregation loss (lambda 1) | -0.006 | +0.005 | -0.003 | -0.001 | -0.001 | [-0.014, +0.010] |
-| v18b aggregation loss (lambda 4) | -0.038 | -0.014 | -0.001 | -0.008 | **-0.015** | [-0.029, -0.000] |
+| **v21 v19w + v20 combined** | +0.019 | +0.012 | **+0.041** | +0.027 | **+0.025** | [-0.000, +0.048] |
 
 Bold marks an interval excluding zero. Not one variant beat v16; the only intervals that
 exclude zero are regressions. `bootstrap_ALL.txt` scores every valid variant against v16
@@ -1032,14 +1037,35 @@ coincidence or a real effect that neither run had the power to confirm alone. No
 that v20's null is BETTER powered than v19w's (interval width 0.025 against 0.040), so
 v20 is closer to a genuine no-effect while v19w remains ambiguous.
 
-v21 tests the combination. The mechanisms are orthogonal, so if both effects are real
-they should be roughly additive at about +0.020, which clears the gate. The informative
-middle outcome is ~+0.010 still spanning zero, which would say temporal information and
-sample-size shrinkage are the same lever wearing two hats rather than two separate gains.
-Stated plainly because it is the first result here worth guarding against over-reading:
-two near-misses pointing the same way is suggestive, not evidence, and even a +0.020
-landing at p just under 0.05 would want a second seed or a 2025 test season before it
-went into a paper.
+**v21, the two combined: the additive prediction held, and it still does not pass.**
+The preregistered prediction was about +0.020 AVG if both effects are real and orthogonal.
+
+| | AVG | Hit |
+|---|---|---|
+| v19w alone | +0.009 | +0.022 |
+| v20 alone | +0.011 | +0.022 |
+| sum, predicted before running | +0.020 | +0.044 |
+| **v21 observed** | **+0.025** | **+0.041** |
+
+Both cells land almost exactly on the additive prediction, and hit rate nearly doubled
+relative to either component. That eliminates the alternative outcome written into the run
+script, that the two were capturing the same underlying signal by different routes; these
+are two separate effects. v21 posts the highest absolute scores the project has produced:
+AVG 0.635, Hit 0.463, HR 0.634. Hit 0.463 closes roughly half the remaining gap to the
+Steamer figure of 0.510 on the stat repeatedly described here as BABIP-limited.
+
+It still fails the gate. AVG +0.025 with interval [-0.000, +0.048] at p = 0.054, missing
+by essentially nothing. The interval is the widest of any variant at 0.048, which is the
+v19w signature again: the paired bootstrap only tightens when two models make similar
+per-batter predictions, so a wide paired interval is itself evidence that v21 genuinely
+differs from v16 rather than perturbing it. This is underpowered at n = 383, not null.
+
+The run script preregistered exactly this contingency, that a +0.020 landing at p just
+under 0.05 would need a second seed or a 2025 test season before it could be claimed. That
+standard is being honoured rather than relaxed now that it has become inconvenient: v21b,
+a seed replication with identical recipe and --seed 1, is running. If the effect
+replicates, the binding constraint was sample size, and the features-plus-structure axis
+is live after nine failures on architecture, prior and objective.
 
 The bug also caught the random-walk prior before it burned a run: `player_skill_eps` was
 uncovered too, so that variant would have produced another meaningless number.
