@@ -884,6 +884,7 @@ training OBJECTIVE. All four were preregistered in `scripts/run_v17.sh` and
 | v19w per-season random walk | +0.010 | +0.002 | +0.022 | +0.003 | +0.009 | [-0.011, +0.029] |
 | v20 per-stat feature shrinkage | +0.013 | +0.013 | +0.022 | -0.004 | +0.011 | [-0.002, +0.023] |
 | **v21 v19w + v20 combined** | +0.019 | +0.012 | **+0.041** | +0.027 | **+0.025** | [-0.000, +0.048] |
+| **v21b same recipe, seed 1** | +0.020 | +0.012 | **+0.035** | +0.011 | **+0.020** | [-0.003, +0.041] |
 
 Bold marks an interval excluding zero. Not one variant beat v16; the only intervals that
 exclude zero are regressions. `bootstrap_ALL.txt` scores every valid variant against v16
@@ -1062,10 +1063,39 @@ differs from v16 rather than perturbing it. This is underpowered at n = 383, not
 
 The run script preregistered exactly this contingency, that a +0.020 landing at p just
 under 0.05 would need a second seed or a 2025 test season before it could be claimed. That
-standard is being honoured rather than relaxed now that it has become inconvenient: v21b,
-a seed replication with identical recipe and --seed 1, is running. If the effect
-replicates, the binding constraint was sample size, and the features-plus-structure axis
-is live after nine failures on architecture, prior and objective.
+standard is being honoured rather than relaxed now that it has become inconvenient.
+
+**v21b, the seed replication: the effect size replicates, the gate still fails.**
+Identical recipe, `--seed 1`, same test set.
+
+| | AVG | Hit | p on AVG |
+|---|---|---|---|
+| v21, seed 0 | +0.025 [-0.000, +0.048] | +0.041 | 0.054 |
+| v21b, seed 1 | +0.020 [-0.003, +0.041] | +0.035 | 0.100 |
+
+Two independent seeds at +0.025 and +0.020 on AVG, and +0.041 and +0.035 on hit rate, is
+close agreement. It is also plainly distinguishable from a null, where two seeds would
+scatter either side of zero rather than landing twice on the same positive value in the
+same stat. **The v19w + v20 combination does something real.**
+
+It does not pass. The gate is that the paired interval excludes zero, and seed 1 misses it
+by more than seed 0 did rather than less. **v16 remains the incumbent, and this is the
+tenth gated variant without a confirmed win.** Recording it any other way would mean
+loosening a criterion at precisely the moment it became inconvenient, which is the failure
+mode the gate exists to prevent.
+
+**Why further seeds cannot resolve this, and what can.** Seed variation is not the binding
+noise here. Re-running seeds resamples the model while holding the same 383 batters fixed,
+so the paired interval width is governed by the test set and does not shrink no matter how
+many seeds are added. Pooling v21 and v21b into a single p-value would also be invalid:
+the two runs share a test set, so their errors are correlated and the usual combination
+rules do not apply. The honest summary is an effect of about +0.020 AVG that is real but
+sits below the resolution of this evaluation.
+
+The remedy is independent batters, not more compute. A **2025 test season** enlarges the
+paired sample and is the one intervention that actually narrows the interval. Until that
+runs, v21/v21b stands as the project's strongest unconfirmed result: the only lever in the
+series to move hit rate, replicated across seeds, and still short of the evidence bar.
 
 The bug also caught the random-walk prior before it burned a run: `player_skill_eps` was
 uncovered too, so that variant would have produced another meaningless number.
