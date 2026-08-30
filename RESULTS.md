@@ -8,6 +8,17 @@ validated empirical rules engine turns outcome sequences into runs and base-stat
 transitions. A true game simulator plays full 9-inning-plus-extras games with
 lineup cycling, a bullpen, walk-offs, and the ghost-runner extras rule.
 
+
+> **READ FIRST, correction notice (2026-08-29).** Every cross-player correlation recorded
+> before this date is inflated by a scoring defect: the index-0 unknown-player sink was
+> being scored as if it were a batter. The corrected incumbent is **v16 AVG 0.624**, not
+> 0.611, and the corrected v21 result is **+0.015 at p = 0.130**, not +0.025 at p = 0.054.
+> Three variant verdicts change. Historical figures below are left as they were measured,
+> so treat any pre-correction number as approximately 0.013 too high and see
+> [Three defects found in external review](#three-defects-found-in-external-review-and-every-number-they-touched)
+> at the end of this file for the corrected tables. The game-level results additionally
+> carry an unquantified optimistic bias from bullpen leakage, described in the same section.
+
 ## The claim
 
 On the aggregate run distribution the model beats strong run-only baselines,
@@ -648,7 +659,7 @@ The findings, several of them counterintuitive:
 4. **We are at the ceiling.** *(RETRACTED. See the power analysis at the end of this
    file: the per-outcome ceilings quoted below are ceilings over the methods tried,
    not over the data. The binomial bound on Hit is 0.691, not the 0.39 claimed here,
-   and v16 already scores 0.422 above that. The rest of this item stands.)* The
+   and v16 already scores 0.445 above that. The rest of this item stands.)* The
    optimal LINEAR blend of the two models (OLS of
    each real rate on the two predictions) tops out at AVG 0.569, essentially the
    50/50 hybrid's 0.563 — there is no more juice in combining them. Per-outcome the
@@ -1243,16 +1254,20 @@ square root of the reliability is the highest correlation anything can score.
 
 | stat | reliability | max attainable corr | v16 | headroom |
 |---|---|---|---|---|
-| K | 0.862 | 0.929 | 0.769 | +0.160 |
-| BB | 0.727 | 0.852 | 0.645 | +0.207 |
-| Hit | 0.477 | 0.691 | 0.422 | +0.269 |
-| HR | 0.630 | 0.794 | 0.607 | +0.187 |
-| **AVG** | | **0.816** | **0.611** | **+0.206** |
+| K | 0.862 | 0.929 | 0.792 | +0.136 |
+| BB | 0.727 | 0.852 | 0.651 | +0.201 |
+| Hit | 0.477 | 0.691 | 0.445 | +0.246 |
+| HR | 0.630 | 0.794 | 0.610 | +0.184 |
+| **AVG** | | **0.816** | **0.624** | **+0.192** |
+
+(Figures re-run after the index-0 scoring fix described below. The ceilings themselves are
+unchanged by that fix, since they depend only on the observed rates and PA counts; the
+incumbent column and therefore the headroom moved.)
 
 **This retracts the ceiling claim in the technique sweep.** That section put the Hit
 ceiling at 0.39 and concluded the model was at the achievable limit for this data, with
-hit rate irreducibly luck-dominated. v16 already scores 0.422, above that supposed limit,
-which should have been the tell. The binomial calculation puts the real Hit ceiling at
+hit rate irreducibly luck-dominated. v16 scores 0.445 once scored correctly, above that
+supposed limit, which should have been the tell. The binomial calculation puts the real Hit ceiling at
 **0.691**: hit rate is genuinely the noisiest of the four stats, with only 47.7% of its
 observed spread being skill, but the conclusion drawn from that noise was wrong. Steamer's
 0.510 sits between v16's 0.422 and the bound, which is what you would expect if the bound
@@ -1271,22 +1286,25 @@ stats) rather than assumed. 2,000 simulated seasons, 4,000 bootstrap reps each.
 
 | true AVG delta | P(CI excludes zero) |
 |---|---|
-| +0.000 | 0.05 |
-| +0.010 | 0.16 |
-| +0.020 | 0.50 |
-| +0.025 | 0.66 |
-| +0.030 | 0.83 |
-| +0.040 | 0.97 |
+| +0.000 | 0.04 |
+| +0.010 | 0.17 |
+| +0.015 | 0.31 |
+| +0.020 | 0.49 |
+| +0.025 | 0.71 |
+| +0.030 | 0.85 |
+| +0.035 | 0.95 |
+| +0.040 | 0.98 |
 | +0.050 | 1.00 |
 
 **The gate is correctly calibrated.** Its false-positive rate at a true delta of zero is
-0.053 against a nominal 0.05, so nothing about the paired bootstrap is broken and none of
+0.044 against a nominal 0.05, so nothing about the paired bootstrap is broken and none of
 the ten rejections was a procedural artifact.
 
 **The gate is also underpowered for the effects this project produces.** The minimum
 detectable effect at 80% power is **+0.030 AVG**. Every variant in the v17-v21 series
-landed below that. v21's +0.025 sits at 66% power and v21b's +0.020 at 50%, so a genuinely
-real effect of that size fails the gate roughly a third to a half of the time.
+landed below that, and after the index-0 correction they land further below it: v21's
+corrected +0.015 sits at **31%** power and v21b's +0.011 lower still. A real effect of that
+size fails this gate roughly two times in three.
 
 That reframes the replication. Two seeds failing at +0.025 and +0.020 is not evidence
 against the effect: it is close to the most likely outcome if the effect is real and about
@@ -1316,3 +1334,139 @@ python -m diamondworldjax.scripts.power_playercorr \
     --alt data/eval2/prod_rates_v21.npz \
     --sims 2000 --reps 4000
 ```
+
+## Three defects found in external review, and every number they touched
+
+An external code review raised three issues. All three are real. One of them changed
+published numbers, so this section restates every affected result rather than editing the
+old ones in place.
+
+### Defect 1: `p0_error` was structurally always zero
+
+`diamondworldjax/eval/calibration.py` computed the shutout-rate error as
+
+```python
+def _p(runs, threshold):
+    return (runs >= threshold).mean()
+"p0_error": abs(_p(sim_runs, 0) - _p(obs_runs, 0)),
+```
+
+Run totals are non-negative, so both sides are 1.0 and the metric is identically 0.00000.
+The `>=` form is correct for the `p5_plus` and `p8_plus` tails and wrong for this one. The
+older PyTorch implementation in `diamondworld/eval/metrics.py` always had it right, using
+`sim_runs == 0`, so the two lines silently disagreed.
+
+Nothing in the results was ever inferred from `p0_error`, because a metric that reads
+0.00000 in every row invites no attention, which is precisely how it survived. Fixed to
+compare `P(runs == 0)`, guarded by `tests/test_metric_guards.py`.
+
+### Defect 2: index 0 is a real player, and it was being scored as a batter
+
+`_build_player_table` enumerates player ids with no reserved sentinel:
+
+```python
+all_ids = np.unique(...)
+id_to_idx = {int(pid): i for i, pid in enumerate(all_ids)}
+```
+
+So slot 0 belongs to the lowest-numbered real player. Every lookup then falls back to that
+slot with `id_to_idx.get(int(b), 0)`, which means each unseen player is assigned a real
+player's learned representation, and that player's row accumulates the plate appearances of
+everyone the training table never saw.
+
+`game_extract.py` documents the intent that index 0 be excluded from reporting, and
+`simulate_games.py` does exclude it. **`prod_playercorr.py` did not.** Its filter was
+`keep = cnt >= 150`, and the pooled row carries 11,813 PA, so it passed comfortably and
+entered every published cross-player correlation as one of the 383 batters.
+
+The pooled row is an outlier in exactly the direction that flatters a correlation: it sits
+far from the batter cloud on both axes, so it inflates r by widening the spread being
+fitted. It also flatters the *incumbent* more than the challengers, because the effect
+depends on how each model happens to place that one point.
+
+**Corrected incumbent.** v16 on 382 real batters:
+
+| | K | BB | Hit | HR | AVG |
+|---|---|---|---|---|---|
+| as published (383 rows, sink included) | 0.769 | 0.645 | 0.422 | 0.607 | 0.611 |
+| corrected (382 real batters) | 0.792 | 0.651 | 0.445 | 0.610 | **0.624** |
+
+**Corrected benchmark.** The projection comparison is unaffected on the Steamer and Marcel
+side, since `projection_headtohead.py` keys on real MLBAM ids and filters on real 2024 PA.
+Only our own row moves:
+
+| system | K% | BB% | Hit% | HR% | AVG |
+|---|---|---|---|---|---|
+| Steamer | 0.820 | 0.702 | 0.510 | 0.651 | **0.671** |
+| Marcel | 0.790 | 0.685 | 0.420 | 0.609 | 0.626 |
+| DiamondWorld v16, corrected | 0.792 | 0.651 | 0.445 | 0.610 | 0.624 |
+
+v16 is now level with Marcel rather than 0.015 behind it, and the gap to Steamer narrows
+from 0.060 to 0.047. Hit rate remains the largest single deficit.
+
+**Corrected variant series.** Re-running the full paired bootstrap on 382 batters, 20,000
+reps, baseline v16:
+
+| variant | AVG, published | AVG, corrected | 95% CI | corrected verdict |
+|---|---|---|---|---|
+| v17a bilinear matchup | +0.003 | +0.001 | [-0.008, +0.010] | null |
+| v17b nested outcome head | -0.006 | -0.008 | [-0.022, +0.004] | null, **Hit -0.042 now excludes zero** |
+| v18 aggregation loss (L=1) | -0.001 | -0.005 | [-0.016, +0.005] | null |
+| v18b aggregation loss (L=4) | -0.015 | -0.013 | [-0.028, +0.002] | **null, no longer a regression** |
+| v19c learned prior scale | -0.025 | -0.025 | [-0.039, -0.011] | regression, unchanged |
+| v19d LKJ-correlated prior | -0.013 | -0.012 | [-0.023, +0.000] | **null, no longer a regression** |
+| v19w per-season random walk | +0.009 | +0.001 | [-0.014, +0.016] | null, effect largely gone |
+| v20 per-stat shrinkage | +0.011 | +0.007 | [-0.005, +0.018] | null |
+| v21 v19w + v20 | +0.025 | **+0.015** | [-0.004, +0.032] | null, p = 0.130 (was 0.054) |
+| v21b seed 1 | +0.020 | **+0.011** | [-0.007, +0.028] | null, p = 0.241 (was 0.100) |
+
+Three verdicts change and none in a direction that helps the project's story:
+
+- **v21 loses about 40% of its effect.** +0.025 becomes +0.015, and p moves from 0.054, a
+  near-miss worth chasing, to 0.130, which is not. The K component was the part that was an
+  artifact: it falls from +0.020 to **+0.000**. What survives is Hit +0.027 and HR +0.025.
+- **v17b becomes a confirmed regression on hit rate**, -0.042 with a CI excluding zero,
+  where it had been recorded as a null with a soft -0.033.
+- **v18b and v19d stop being regressions** and become nulls. Two of the three claimed
+  regressions in the series were partly the artifact.
+
+What survives intact is the additivity finding, at smaller magnitude. On hit rate v19w
+gives +0.010 and v20 gives +0.016, summing to +0.026 against v21's observed +0.027. The
+prediction still lands, so the two mechanisms are still independent and still the only
+levers that have moved hit rate.
+
+### Defect 3: the pre-game simulation is not leakage-free
+
+`run_pregame_sim.py` described itself as using "the fitted starter-pull hazard instead of
+the actual bullpen (no leakage)". Half of that is true. `game_extract.extract_games` builds
+each team's staff from the completed game's PA data, **in actual appearance order**, and
+the lineup the same way. The fitted hazard decides *when* the starter is pulled; *who*
+follows, and in what sequence, is read off the finished game.
+
+That is genuine look-ahead. A manager's bullpen choices are endogenous to how the game
+unfolded, so the simulator is handed a summary of the game it is meant to be forecasting.
+It is not a small technicality for this project specifically, because the game-level
+results are the headline contribution.
+
+**Affected and now provisional:** the win-probability calibration (ECE 0.039, AUC 0.572),
+the run-distribution coverage figures (0.54 / 0.82 / 0.90 at nominal 50 / 80 / 90), and
+every market comparison built on the same arrays. The direction of the bias is optimistic,
+and its size is unquantified.
+
+**Not affected:** everything at the PA level. The cross-player correlation metric, the
+variant series, the power analysis and the ceiling calculation never touch `extract_games`.
+
+The fix is a staff-selection model that draws from a team's roster using only information
+available at first pitch, then re-running the game-level benchmarks. That is a modelling
+change plus a GPU re-run and has not been done. Until it is, the game-level claims should
+not be repeated in a paper or an abstract. The docstrings that asserted leak-freedom have
+been corrected in place so the claim is not propagated again.
+
+### Why these survived
+
+All three are silent-failure defects of the same family as the guide-coverage bug recorded
+earlier in this file: each produced a plausible number rather than an error. A metric that
+is always 0.00000, a batter row that is merely unusually productive, and a simulator that
+is simply well informed all look like success. The lesson the guide-coverage bug taught, to
+assert the invariant rather than eyeball the output, applied here too and was not carried
+across. `tests/test_metric_guards.py` now covers defects 1 and 2.

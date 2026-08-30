@@ -116,6 +116,12 @@ def main() -> None:
             )
     keep = np.zeros(n_common, dtype=bool)
     keep[:] = ref_cnt >= args.min_pa
+    # Drop the index-0 unknown-player sink. There is no reserved sentinel in the
+    # player table, so slot 0 is a real batter onto whom every unseen player is
+    # folded; the pooled row has ~11.8k PA and so passes any min-pa filter. It is
+    # excluded here as well as in prod_playercorr so that .npz files written
+    # before that fix are scored correctly on read.
+    keep[0] = False
     n = int(keep.sum())
 
     pred: dict[str, np.ndarray] = {}

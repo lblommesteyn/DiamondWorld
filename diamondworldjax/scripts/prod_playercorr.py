@@ -138,7 +138,16 @@ def main():
         np.add.at(rBB, bidx, np.isin(yi, BB_IDX)); np.add.at(rHit, bidx, np.isin(yi, HIT_IDX))
         np.add.at(cnt, bidx, 1.0)
 
-    keep = cnt >= 150
+    # Index 0 is the UNKNOWN-PLAYER SINK: _build_player_table enumerates real
+    # player ids with no reserved sentinel, so slot 0 is a real player, and every
+    # id missing from the training table is folded onto him by the id_to_idx.get(
+    # ..., 0) fallback used throughout. His row therefore mixes one real batter
+    # with every unseen batter in the test season and is not a player at all.
+    # game_extract.py and simulate_games.py already exclude it; this scorer did
+    # not, and the row cleared the >= 150 PA filter with ~11.8k PA, so it entered
+    # every published correlation. Excluding it moves v16 AVG 0.611 -> 0.624.
+    keep = (cnt >= 150)
+    keep[0] = False
     def corr(s, r): return float(np.corrcoef((s[keep] / cnt[keep]), (r[keep] / cnt[keep]))[0, 1])
     cK, cBB, cHit, cHR = corr(sumK, rK), corr(sumBB, rBB), corr(sumHit, rHit), corr(sumHR, rHR)
     rookie_kept = int((keep[-n_rookie:]).sum()) if n_rookie else 0

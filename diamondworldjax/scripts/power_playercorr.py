@@ -48,6 +48,7 @@ def _load(path: str, min_pa: float):
     d = np.load(path)
     cnt = d["cnt"].astype(np.float64)
     keep = cnt >= min_pa
+    keep[0] = False  # index-0 unknown-player sink, see bootstrap_playercorr
     n = cnt[keep]
     pred = np.stack([d["sum" + s][keep] / n for s in STATS], axis=1)
     real = np.stack([d["r" + s][keep] / n for s in STATS], axis=1)

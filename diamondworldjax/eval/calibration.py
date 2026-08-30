@@ -188,12 +188,19 @@ def game_run_metrics(
     def _p(runs, threshold):
         return (runs >= threshold).mean()
 
+    def _p_exact(runs, k):
+        return (runs == k).mean()
+
     return {
         "kl_run_distribution": kl_divergence_runs(sim_runs, obs_runs),
         "wasserstein_runs":    wasserstein_runs(sim_runs, obs_runs),
         "mean_rg_error":       abs(sim_mean - obs_mean),
         "variance_error":      abs(sim_var  - obs_var),
-        "p0_error":            abs(_p(sim_runs, 0) - _p(obs_runs, 0)),
+        # Shutout rate, P(runs == 0). This used to call _p(runs, 0), i.e.
+        # P(runs >= 0), which is identically 1 for both sides, so the metric
+        # was always exactly 0.00000 and looked like a perfect score. The
+        # >= form is right for the 5+ and 8+ tails but wrong for this one.
+        "p0_error":            abs(_p_exact(sim_runs, 0) - _p_exact(obs_runs, 0)),
         "p5_plus_error":       abs(_p(sim_runs, 5) - _p(obs_runs, 5)),
         "p8_plus_error":       abs(_p(sim_runs, 8) - _p(obs_runs, 8)),
     }

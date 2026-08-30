@@ -2,9 +2,19 @@
 all 2024 games and save the full per-game replica distributions, so
 simulator_benchmarks.py can score it against Log5, the market, and independent-Poisson.
 
-This is the clean foundation the benchmarks want: the current calibrated model, the
-fitted starter-pull hazard instead of the actual bullpen (no leakage), and enough
-replicas (R=100) that per-game win probability is not dominated by sampling noise.
+This is the current calibrated model, the fitted starter-pull hazard rather than the
+actual hook times, and enough replicas (R=100) that per-game win probability is not
+dominated by sampling noise.
+
+KNOWN LEAKAGE, do not describe this run as pre-game without the caveat. The hazard
+controls WHEN the starter is pulled, but game_extract.extract_games derives each
+team's staff from the completed game's PA data, in actual appearance order, and the
+lineup likewise. So the simulator is told which relievers appeared and in what
+sequence, which a genuine pre-game forecast could not know and which correlates with
+how the game went. Removing it needs a staff-selection model that draws from a team's
+roster using only information available at first pitch. Until then the game-level
+numbers this feeds (win probability, run-distribution coverage, market comparisons)
+carry an unquantified optimistic bias.
 
 Saves data/eval2/calib_<tag>_arrays.npz with the same schema the benchmark reads.
 

@@ -122,6 +122,15 @@ def extract_games(test_pa: pl.DataFrame, id_to_idx: dict, park_map: dict | None 
     """Per game: lineups (9 batter idx each), pitching staffs in appearance
     order, park idx.
 
+    LEAKAGE WARNING. Both the lineup and the staff are read off `test_pa`, the
+    COMPLETED game. The staff is the actual relievers in the actual order they were
+    used, and the lineup is the realized batting order including any early
+    substitution. Callers that describe themselves as pre-game (run_pregame_sim.py)
+    are leak-free only in hook TIMING, which the fitted hazard supplies; the identity
+    and ordering of the relievers still come from the finished game. A true pre-game
+    extractor would need to select a staff from the roster using information
+    available at first pitch.
+
     The staff a lineup FACES belongs to the fielding team: half_bin 0 (top,
     away batting) is pitched by the HOME staff and vice versa. (The v1
     extractor tagged these crossed, so every lineup faced its own starter.)

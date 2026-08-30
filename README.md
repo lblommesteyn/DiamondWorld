@@ -103,17 +103,21 @@ demonstration: best NLL of anything tried, near-zero player differentiation.
 
 Two evaluation regimes, not directly comparable to each other. v12 to v14 train through
 2022 and test on 2023+2024 (434 batters); v15 onward train through 2023 and test on 2024
-(383 batters).
+(382 batters).
+
+All figures below are **corrected** for the index-0 scoring defect found in review; see
+[RESULTS.md](RESULTS.md) for what changed and by how much. Earlier v12 to v15 numbers are
+left as originally measured and are inflated by the same amount.
 
 | model | change | AVG player-corr |
 |---|---|---|
 | v6 | outcome-only head + empirical engine | first version matching real run rate |
 | v10 | park + fatigue, 50K steps | best marginal run distribution (KL 0.0044) |
-| v12 | recency-weighted features | 0.484 |
-| v13 | minibatch-SVI KL-scale fix | 0.556 |
-| v14 | padded-PA likelihood mask | 0.531 |
-| v15 | retrain through 2023 | 0.594 |
-| **v16** | **xBA-style contact quality** | **0.611 (current best)** |
+| v12 | recency-weighted features | 0.484 (uncorrected) |
+| v13 | minibatch-SVI KL-scale fix | 0.556 (uncorrected) |
+| v14 | padded-PA likelihood mask | 0.531 (uncorrected) |
+| v15 | retrain through 2023 | 0.594 (uncorrected) |
+| **v16** | **xBA-style contact quality** | **0.624 (current best, corrected)** |
 
 ### Benchmark against real projection systems
 
@@ -123,10 +127,11 @@ Same 2024 test set, same metric.
 |---|---|---|---|---|---|
 | Steamer | 0.820 | 0.702 | 0.510 | 0.651 | **0.671** |
 | Marcel | 0.790 | 0.685 | 0.420 | 0.609 | 0.626 |
-| DiamondWorld v16 | 0.769 | 0.645 | 0.422 | 0.607 | 0.611 |
+| DiamondWorld v16 | 0.792 | 0.651 | 0.445 | 0.610 | 0.624 |
 
-v16's players are on par with a standard projection baseline and 0.060 below Steamer, with
-the largest single gap in hit rate.
+v16 is level with a standard projection baseline and 0.047 below Steamer, with the largest
+single gap in hit rate. The Steamer and Marcel rows are unaffected by the scoring defect,
+since that comparison keys on real player ids.
 
 ### The v17-v21 variant series: ten gated attempts, zero confirmed wins
 
@@ -136,16 +141,16 @@ estimate is not sufficient evidence.
 
 | variant | axis | AVG vs v16 | 95% CI | verdict |
 |---|---|---|---|---|
-| v17a bilinear matchup | architecture | +0.003 | [-0.007, +0.012] | null |
-| v17b nested outcome head | architecture | -0.006 | [-0.020, +0.007] | null, Hit -0.033 |
-| v18 aggregation loss (L=1) | objective | -0.001 | [-0.014, +0.010] | null |
-| v18b aggregation loss (L=4) | objective | -0.015 | [-0.029, -0.000] | regression |
-| v19c learned prior scale | prior | -0.025 | [-0.038, -0.012] | regression |
-| v19d LKJ-correlated prior | prior | -0.013 | [-0.023, -0.001] | regression |
-| v19w per-season random walk | structure | +0.009 | [-0.011, +0.029] | null, AVG 0.620 |
-| v20 per-stat feature shrinkage | features | +0.011 | [-0.002, +0.023] | null, AVG 0.622 |
-| v21 v19w + v20 combined | both | +0.025 | [-0.000, +0.048] | near-miss, p=0.054 |
-| **v21b same recipe, seed 1** | replication | **+0.020** | [-0.003, +0.041] | **replicates, p=0.100** |
+| v17a bilinear matchup | architecture | +0.001 | [-0.008, +0.010] | null |
+| v17b nested outcome head | architecture | -0.008 | [-0.022, +0.004] | null, **Hit -0.042 confirmed** |
+| v18 aggregation loss (L=1) | objective | -0.005 | [-0.016, +0.005] | null |
+| v18b aggregation loss (L=4) | objective | -0.013 | [-0.028, +0.002] | null |
+| v19c learned prior scale | prior | -0.025 | [-0.039, -0.011] | regression |
+| v19d LKJ-correlated prior | prior | -0.012 | [-0.023, +0.000] | null |
+| v19w per-season random walk | structure | +0.001 | [-0.014, +0.016] | null, AVG 0.626 |
+| v20 per-stat feature shrinkage | features | +0.007 | [-0.005, +0.018] | null, AVG 0.631 |
+| v21 v19w + v20 combined | both | +0.015 | [-0.004, +0.032] | null, p=0.130 |
+| v21b same recipe, seed 1 | replication | +0.011 | [-0.007, +0.028] | null, p=0.241 |
 
 What this closes. **Architecture**: with the earlier transformer / GRU / LSTM / MLP sweep
 all landing near 0.577, six structural interventions have produced zero wins, so the
@@ -158,44 +163,35 @@ The nulls are tight, with AVG interval widths of 0.019 to 0.025. The power analy
 says exactly what that buys: these are measurements of absence for effects of +0.030 and
 larger, and inconclusive below about +0.025.
 
-**The one live thread, and it replicated.** v19w and v20 are independent mechanisms, one
-changing latent structure and one changing input features, and both moved hit rate by an
-identical +0.022 to 0.444, after that stat had resisted every previous lever. Neither
-passed alone. v21 combines them, and the preregistered additive prediction came true
-almost exactly:
+**The one live thread, and what the scoring fix did to it.** v19w and v20 are independent
+mechanisms, one changing latent structure and one changing input features, and both moved
+hit rate after that stat had resisted every previous lever. Neither passed alone. v21
+combines them, and the preregistered additive prediction still lands on corrected numbers:
 
 | | AVG | Hit |
 |---|---|---|
-| v19w alone | +0.009 | +0.022 |
-| v20 alone | +0.011 | +0.022 |
-| sum, predicted before running | +0.020 | +0.044 |
-| **v21 observed** | **+0.025** | **+0.041** |
+| v19w alone | +0.001 | +0.010 |
+| v20 alone | +0.007 | +0.016 |
+| sum, predicted before running | +0.008 | +0.026 |
+| **v21 observed** | **+0.015** | **+0.027** |
 
-Hit rate nearly doubled relative to either component, which rules out the alternative that
-the two were capturing the same signal by different routes. v21 posts the highest absolute
-scores in the project: AVG 0.635, Hit 0.463, HR 0.634. Hit 0.463 closes roughly half the
-gap to Steamer on the stat this project had described as BABIP-limited and immovable.
+Additivity on hit rate survives the correction almost exactly (+0.026 predicted, +0.027
+observed), so the two mechanisms really are independent and are still the only levers that
+have moved that stat. What does not survive is the magnitude. Before the fix v21 read
++0.025 AVG at p = 0.054, a near-miss; corrected it reads **+0.015 at p = 0.130**, and the
+strikeout component that carried much of the apparent gain falls from +0.020 to **+0.000**.
+Roughly 40% of the effect was the index-0 artifact. The second seed, v21b, tells the same
+story at +0.011.
 
-It still does not pass the gate, at p = 0.054. The run script preregistered that a landing
-at p just under 0.05 would need a second seed or a 2025 test season before it could be
-claimed, so v21b re-ran the identical recipe under `--seed 1`:
+**v16 remains the incumbent**, and this is the tenth gated variant without a confirmed win.
+The honest reading is now weaker than it was a week ago: not a near-miss awaiting one more
+piece of evidence, but a hit-rate effect of perhaps +0.027 sitting inside a series whose
+AVG signal is mostly gone.
 
-| | AVG | Hit | p on AVG |
-|---|---|---|---|
-| v21, seed 0 | +0.025 | +0.041 | 0.054 |
-| v21b, seed 1 | +0.020 | +0.035 | 0.100 |
-
-**The effect size replicates and the gate still fails.** Two seeds agreeing at +0.025 and
-+0.020, both moving the same stat, is not the signature of a null, where seeds scatter
-either side of zero. But the criterion is that the paired interval excludes zero, and seed
-1 misses by more than seed 0 did. **v16 remains the incumbent** and this is the tenth
-gated variant without a confirmed win.
-
-More seeds cannot settle it. Seeds resample the model while the same 383 batters stay
-fixed, so the paired interval is set by the test set and does not shrink; and the two runs
-share that test set, so their p-values cannot be legitimately pooled. The remedy is
-independent batters, which means a **2025 test season**. That is a data question rather
-than a compute one.
+More seeds cannot settle it, and neither can more compute. Seeds resample the model while
+the same 382 batters stay fixed, so the paired interval is set by the test set and does not
+shrink; and the two runs share that test set, so their p-values cannot be legitimately
+pooled. The remedy is independent batters, which means a **2025 test season**.
 
 ### The gate is honest, and the whole series was underpowered
 
@@ -203,17 +199,16 @@ Ten rejections invite a question the project had never asked: can this gate dete
 effect of the size these variants produce? `power_playercorr.py` answers it by simulating
 the test season under a known ground truth, no GPU involved.
 
-| true AVG delta | +0.000 | +0.010 | +0.020 | +0.025 | +0.030 | +0.040 | +0.050 |
+| true AVG delta | +0.000 | +0.010 | +0.015 | +0.020 | +0.025 | +0.030 | +0.040 |
 |---|---|---|---|---|---|---|---|
-| P(CI excludes zero) | 0.05 | 0.16 | 0.50 | 0.66 | **0.83** | 0.97 | 1.00 |
+| P(CI excludes zero) | 0.04 | 0.17 | 0.31 | 0.49 | 0.71 | **0.85** | 0.98 |
 
-The false-positive rate at a true delta of zero is 0.053 against a nominal 0.05, so the
+The false-positive rate at a true delta of zero is 0.044 against a nominal 0.05, so the
 paired bootstrap is calibrated and no rejection was a procedural artifact. But the
 **minimum detectable effect at 80% power is +0.030 AVG**, and every variant in the series
-landed below it. v21 at +0.025 had 66% power and v21b at +0.020 had 50%. Two seeds failing
-at those sizes is close to the most likely outcome if the effect is real, so v21 is
-**unconfirmed rather than null**, and the nulls above close the +0.030-and-larger band
-rather than everything.
+landed below it. On corrected numbers v21's +0.015 has only **31%** power. So the nulls
+above close the +0.030-and-larger band rather than everything, and the series was never in
+a position to confirm effects of the size it was producing.
 
 **The ceiling was also wrong.** Observed rates are binomial draws around true rates, which
 caps the attainable correlation. Method of moments gives the real bound:
@@ -221,10 +216,10 @@ caps the attainable correlation. Method of moments gives the real bound:
 | stat | K | BB | Hit | HR | AVG |
 |---|---|---|---|---|---|
 | max attainable | 0.929 | 0.852 | **0.691** | 0.794 | **0.816** |
-| v16 | 0.769 | 0.645 | 0.422 | 0.607 | 0.611 |
+| v16, corrected | 0.792 | 0.651 | 0.445 | 0.610 | 0.624 |
 
 The technique sweep concluded hit rate was luck-limited at 0.39, yet v16 already scores
-0.422. The true bound is 0.691, so hit rate has the **largest** headroom of the four stats,
+0.445. The true bound is 0.691, so hit rate has the **largest** headroom of the four stats,
 not the smallest, and Steamer's 0.510 sits inside that gap. The old number was a ceiling
 over the methods tried, not a property of the data, and it foreclosed the one direction
 v19w, v20 and v21 were actually moving. Details in [RESULTS.md](RESULTS.md).
