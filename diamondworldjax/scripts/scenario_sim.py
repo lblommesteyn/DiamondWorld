@@ -83,12 +83,32 @@ class Sim:
         return res["home"].reshape(n, R), res["away"].reshape(n, R)
 
     # ---- real games as specs ----
-    def real_games(self, season=2024, limit=400):
+    def real_games(self, season=2024, limit=400, pregame_staff=False):
+        """Game specs for the simulator.
+
+        pregame_staff=True replaces each side's realized staff, which extract_games
+        reads off the completed game in actual appearance order, with one selected
+        from prior games only (diamondworldjax.sim.pregame_staff). The realized
+        version is look-ahead and biases every game-level result built on it; see
+        the leakage note in game_extract.extract_games.
+        """
         te = load_seasons([season], data_root=processed_root()).filter(pl.col("pa_terminal"))
         keep = te["game_pk"].unique().sort().to_numpy()[:limit]
         te = te.filter(pl.col("game_pk").is_in(keep.tolist()))
         te = apply_park_idx(te, self.park_map)
         games = extract_games(te, self.id2i, park_map=self.park_map)
+        if pregame_staff:
+            from diamondworldjax.sim.pregame_staff import pregame_staffs
+            staffs = pregame_staffs(te, self.id2i)
+            # half_bin 0 (top, away batting) is pitched by the HOME staff, and vice
+            # versa. extract_games tags them this way and the v1 extractor got it
+            # crossed, so the mapping is spelled out rather than inferred.
+            for g in games:
+                gp = int(g["game_pk"])
+                for half, fielding in ((0, "home"), (1, "away")):
+                    st = staffs.get((gp, half))
+                    if st:
+                        g[f"{fielding}_staff"] = st
         return games  # each has game_pk, away/home_lineup, away/home_staff, park
 
     def player_rate(self, idx):

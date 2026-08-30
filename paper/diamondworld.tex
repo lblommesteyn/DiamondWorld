@@ -123,7 +123,7 @@ velocity and launch angle, take the league hit and home-run frequency in each bi
 each batter's own batted balls to a static per-batter feature (Fig.~\ref{fig:heat}). They are
 \emph{not} the current PA's launch measurements, so they are available before the PA; Table~\ref{tab:leak}
 lists every feature and its availability, and removing the contact-quality features reverts the model to
-its ablation ($0.611\!\to\!0.594$ cross-player correlation), a small change rather than a collapse,
+its ablation ($0.624\!\to\!0.609$ cross-player correlation), a small change rather than a collapse,
 confirming they are an additive, leak-free lever.
 
 The \textbf{empirical rules engine} maps an outcome sequence to runs and base-state transitions; ported
@@ -131,9 +131,14 @@ from a validated Markov baseline~\cite{bukiet}, it reproduces test-season run to
 percent. The \textbf{game simulator} plays full nine-inning-plus-extras games with lineup cycling, a
 bullpen, walk-offs, and the ghost-runner rule. Relievers follow a fitted \emph{hook model}, a logistic
 hazard for pulling the starter in batters faced, times through the order, and runs allowed (held-out
-AUC $0.889$), so bullpen usage is endogenous: the hook uses only pregame-fitted parameters and
-in-simulation state, never future information. All exogenous inputs the simulator conditions on are
-available before first pitch; in-game state is generated recursively as the game is played. The model is
+AUC $0.889$), so the \emph{timing} of the hook is endogenous: it uses only pregame-fitted parameters
+and in-simulation state. We flag one limitation honestly. The \emph{identity and ordering} of the
+relievers a team uses, and the batting order, are taken from the completed game rather than selected
+from the roster, so the simulator is given information a genuine pre-game forecast would not have.
+Because managers' bullpen choices are endogenous to how a game unfolds, the game-level results in
+Sec.~\ref{sec:bench} carry an optimistic bias of unquantified size, and we report them as provisional
+pending a roster-based staff-selection model. The plate-appearance-level results are unaffected: they
+never invoke the game extractor. In-game state is generated recursively as the game is played. The model is
 trained through 2023 (rate features through
 2024 for the later-season checks) and evaluated on 2024 unless stated. A held-out player-differentiation
 ablation of architectures is reported in Appendix~\ref{app:arch}; the short version is that on that

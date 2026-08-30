@@ -46,18 +46,22 @@ def main():
     ap.add_argument("--r", type=int, default=100)
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--chunk", type=int, default=250)
+    ap.add_argument("--pregame-staff", action="store_true",
+                    help="select relievers from prior games only, removing the "
+                         "realized-bullpen leak described above")
     args = ap.parse_args()
 
     s = Sim(hook_model=True)                       # pre-game-legit bullpen via the fitted hazard
     outcomes = real_runs(2024)
-    games = [g for g in s.real_games(2024, limit=10000)
+    games = [g for g in s.real_games(2024, limit=10000, pregame_staff=args.pregame_staff)
              if g["park"] != 0 and int(g["game_pk"]) in outcomes]
     if args.limit:
         games = games[:args.limit]
     pk = np.array([int(g["game_pk"]) for g in games])
     rh = np.array([outcomes[int(g["game_pk"])][0] for g in games], float)
     ra = np.array([outcomes[int(g["game_pk"])][1] for g in games], float)
-    print(f"pre-game sim over {len(games)} games x R={args.r} (hook model, crn off)", flush=True)
+    print(f"pre-game sim over {len(games)} games x R={args.r} (hook model, crn off, "
+          f"staff={'pregame' if args.pregame_staff else 'REALIZED (leaky)'})", flush=True)
 
     Hs, As = [], []
     for i in range(0, len(games), args.chunk):
