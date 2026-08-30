@@ -645,7 +645,11 @@ The findings, several of them counterintuitive:
    leans on the SVI there. So the concrete answer to "as good as it can get" at the
    PA level is a SVI + discriminative HYBRID, not a fancier single network.
 
-4. **We are at the ceiling.** The optimal LINEAR blend of the two models (OLS of
+4. **We are at the ceiling.** *(RETRACTED. See the power analysis at the end of this
+   file: the per-outcome ceilings quoted below are ceilings over the methods tried,
+   not over the data. The binomial bound on Hit is 0.691, not the 0.39 claimed here,
+   and v16 already scores 0.422 above that. The rest of this item stands.)* The
+   optimal LINEAR blend of the two models (OLS of
    each real rate on the two predictions) tops out at AVG 0.569, essentially the
    50/50 hybrid's 0.563 — there is no more juice in combining them. Per-outcome the
    ceilings are K 0.64, BB 0.65, HR 0.61 (all near the input-feature ceiling; the
@@ -1221,4 +1225,94 @@ python -m diamondworldjax.scripts.calib_audit --ckpt <ckpt> ... --limit-games 48
   --chunk-games 1000 --out data/eval2/calib_bt.txt       # saves *_arrays.npz
 python -m diamondworldjax.scripts.backtest --arrays data/eval2/calib_bt_arrays.npz \
   --odds data/eval2/odds_2023_2024.csv --market moneyline --edge 0.03
+```
+
+## Power analysis: the gate is honest, the series was underpowered, and the ceiling was wrong
+
+Ten rejected variants admit two very different readings: the interventions are null, or
+the gate cannot resolve effects of the size they produce. The project had never separated
+those, so `power_playercorr.py` simulates the test season under a known ground truth. It
+touches no GPU and no checkpoint; it is resampling arithmetic on the observed PA counts.
+
+### The attenuation ceiling
+
+A batter's observed rate is a binomial draw around his true rate, so a model that knew
+every true rate exactly still could not correlate 1.0 with the observed rates. Method of
+moments splits the observed spread, `var(observed) = var(true) + E[p(1-p)/n]`, and the
+square root of the reliability is the highest correlation anything can score.
+
+| stat | reliability | max attainable corr | v16 | headroom |
+|---|---|---|---|---|
+| K | 0.862 | 0.929 | 0.769 | +0.160 |
+| BB | 0.727 | 0.852 | 0.645 | +0.207 |
+| Hit | 0.477 | 0.691 | 0.422 | +0.269 |
+| HR | 0.630 | 0.794 | 0.607 | +0.187 |
+| **AVG** | | **0.816** | **0.611** | **+0.206** |
+
+**This retracts the ceiling claim in the technique sweep.** That section put the Hit
+ceiling at 0.39 and concluded the model was at the achievable limit for this data, with
+hit rate irreducibly luck-dominated. v16 already scores 0.422, above that supposed limit,
+which should have been the tell. The binomial calculation puts the real Hit ceiling at
+**0.691**: hit rate is genuinely the noisiest of the four stats, with only 47.7% of its
+observed spread being skill, but the conclusion drawn from that noise was wrong. Steamer's
+0.510 sits between v16's 0.422 and the bound, which is what you would expect if the bound
+is real and reachable.
+
+The earlier number was an empirical ceiling over the methods tried, a linear blend of two
+model families, not a property of the data. Reporting it as the latter foreclosed a
+direction that is in fact open, and that framing propagated into every later section.
+
+### Minimum detectable effect
+
+Two models are simulated with correlated errors, because variants of one recipe make
+similar mistakes and that correlation is exactly what makes the paired interval tight. The
+correlation is estimated from the real v16 and v21 predictions (mean 0.771 across the four
+stats) rather than assumed. 2,000 simulated seasons, 4,000 bootstrap reps each.
+
+| true AVG delta | P(CI excludes zero) |
+|---|---|
+| +0.000 | 0.05 |
+| +0.010 | 0.16 |
+| +0.020 | 0.50 |
+| +0.025 | 0.66 |
+| +0.030 | 0.83 |
+| +0.040 | 0.97 |
+| +0.050 | 1.00 |
+
+**The gate is correctly calibrated.** Its false-positive rate at a true delta of zero is
+0.053 against a nominal 0.05, so nothing about the paired bootstrap is broken and none of
+the ten rejections was a procedural artifact.
+
+**The gate is also underpowered for the effects this project produces.** The minimum
+detectable effect at 80% power is **+0.030 AVG**. Every variant in the v17-v21 series
+landed below that. v21's +0.025 sits at 66% power and v21b's +0.020 at 50%, so a genuinely
+real effect of that size fails the gate roughly a third to a half of the time.
+
+That reframes the replication. Two seeds failing at +0.025 and +0.020 is not evidence
+against the effect: it is close to the most likely outcome if the effect is real and about
+that size. The correct statement is that v21 is unconfirmed, not that it is null, and the
+distinction was not available before this analysis.
+
+It also sharpens what the nulls close. The tight intervals reported for v17a, v17b, v18 and
+v19w rule out effects of +0.030 and larger with high confidence. They do not rule out
+effects in the +0.010 to +0.025 band, where the gate is a coin flip. "Measurements of
+absence" was too strong a phrase for that band and is corrected here.
+
+### What this changes about what to run next
+
+A 2025 test season was already the stated remedy, and this quantifies why: it is the only
+intervention that raises the batter count, and the batter count is what sets the +0.030
+detection floor. Nothing about seeds, steps or architecture moves it.
+
+Second, the Hit headroom of +0.269 is the largest of the four stats and is now known to be
+real rather than a luck floor. v19w and v20 were the only levers that ever moved hit rate,
+which makes the v21 direction more interesting than its p-value suggested, not less.
+
+Reproduce, CPU only:
+
+```bash
+python -m diamondworldjax.scripts.power_playercorr \
+    --rates data/eval2/prod_rates_v16.npz \
+    --alt data/eval2/prod_rates_v21.npz \
+    --sims 2000 --reps 4000
 ```

@@ -128,7 +128,7 @@ Same 2024 test set, same metric.
 v16's players are on par with a standard projection baseline and 0.060 below Steamer, with
 the largest single gap in hit rate.
 
-### The v17-v21 variant series: nine gated attempts, zero confirmed wins
+### The v17-v21 variant series: ten gated attempts, zero confirmed wins
 
 Every variant is a single lever on v16's exact recipe, gated on a **paired bootstrap
 confidence interval** that must exclude zero (`bootstrap_playercorr.py`). A better point
@@ -154,9 +154,9 @@ inert at weight 1 and actively harmful at weight 4, so the null is a real measur
 rather than a too-weak knob. **Prior**: both ways of relaxing the skill prior regress, so
 the fixed unit prior is doing real regularisation work.
 
-The nulls are tight (AVG interval widths 0.019 to 0.025) against a v15-to-v16 effect of
-+0.017 that the same method resolved comfortably. These are measurements of absence, not
-failures to measure.
+The nulls are tight, with AVG interval widths of 0.019 to 0.025. The power analysis below
+says exactly what that buys: these are measurements of absence for effects of +0.030 and
+larger, and inconclusive below about +0.025.
 
 **The one live thread, and it replicated.** v19w and v20 are independent mechanisms, one
 changing latent structure and one changing input features, and both moved hit rate by an
@@ -196,6 +196,38 @@ fixed, so the paired interval is set by the test set and does not shrink; and th
 share that test set, so their p-values cannot be legitimately pooled. The remedy is
 independent batters, which means a **2025 test season**. That is a data question rather
 than a compute one.
+
+### The gate is honest, and the whole series was underpowered
+
+Ten rejections invite a question the project had never asked: can this gate detect an
+effect of the size these variants produce? `power_playercorr.py` answers it by simulating
+the test season under a known ground truth, no GPU involved.
+
+| true AVG delta | +0.000 | +0.010 | +0.020 | +0.025 | +0.030 | +0.040 | +0.050 |
+|---|---|---|---|---|---|---|---|
+| P(CI excludes zero) | 0.05 | 0.16 | 0.50 | 0.66 | **0.83** | 0.97 | 1.00 |
+
+The false-positive rate at a true delta of zero is 0.053 against a nominal 0.05, so the
+paired bootstrap is calibrated and no rejection was a procedural artifact. But the
+**minimum detectable effect at 80% power is +0.030 AVG**, and every variant in the series
+landed below it. v21 at +0.025 had 66% power and v21b at +0.020 had 50%. Two seeds failing
+at those sizes is close to the most likely outcome if the effect is real, so v21 is
+**unconfirmed rather than null**, and the nulls above close the +0.030-and-larger band
+rather than everything.
+
+**The ceiling was also wrong.** Observed rates are binomial draws around true rates, which
+caps the attainable correlation. Method of moments gives the real bound:
+
+| stat | K | BB | Hit | HR | AVG |
+|---|---|---|---|---|---|
+| max attainable | 0.929 | 0.852 | **0.691** | 0.794 | **0.816** |
+| v16 | 0.769 | 0.645 | 0.422 | 0.607 | 0.611 |
+
+The technique sweep concluded hit rate was luck-limited at 0.39, yet v16 already scores
+0.422. The true bound is 0.691, so hit rate has the **largest** headroom of the four stats,
+not the smallest, and Steamer's 0.510 sits inside that gap. The old number was a ceiling
+over the methods tried, not a property of the data, and it foreclosed the one direction
+v19w, v20 and v21 were actually moving. Details in [RESULTS.md](RESULTS.md).
 
 ### Other findings
 
