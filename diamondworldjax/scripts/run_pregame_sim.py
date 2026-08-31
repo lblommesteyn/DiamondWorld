@@ -23,6 +23,8 @@ Saves data/eval2/calib_<tag>_arrays.npz with the same schema the benchmark reads
 from __future__ import annotations
 
 import argparse
+import gc
+import os
 
 import numpy as np
 import polars as pl
@@ -63,12 +65,55 @@ def main():
     print(f"pre-game sim over {len(games)} games x R={args.r} (hook model, crn off, "
           f"staff={'pregame' if args.pregame_staff else 'REALIZED (leaky)'})", flush=True)
 
-    Hs, As = [], []
-    for i in range(0, len(games), args.chunk):
+    # Each chunk is checkpointed to its own file before the next one starts.
+    #
+    # Three runs of this script have now died mid-sweep with no traceback and no
+    # non-zero exit: job 337 at step 5,000 of 50,000, job 393 at game 250 of 2,429,
+    # job 395 at game 1,000 of 2,429. Detaching the process group (scripts/run_detached.sh)
+    # ruled out the parent-tree hangup, and the deaths still happen, at a DIFFERENT
+    # point each time. A silent SIGKILL that moves around under a box whose 35 GB of
+    # RAM is shared with other jobs is the signature of the kernel OOM killer, not of
+    # a bug in the simulation, so the chunk index is not the thing to debug.
+    #
+    # Rather than keep guessing at the cause, make a death cost one chunk instead of
+    # the whole sweep: write each chunk out, and skip on restart what is already on
+    # disk. A six-hour sweep that has to be perfect to finish is worse than one that
+    # can be resumed six times.
+    ckdir = f"data/chunks/{args.tag}"
+    os.makedirs(ckdir, exist_ok=True)
+    starts = list(range(0, len(games), args.chunk))
+    for i in starts:
+        ck = f"{ckdir}/chunk_{i:06d}.npz"
+        # Resuming is only sound if the chunk on disk covers the SAME games this run
+        # is about to simulate. The game list is rebuilt from scratch each run, so a
+        # change in filtering or ordering would otherwise silently glue together
+        # results for different games. Store the slice's game_pk and check it.
+        want = pk[i:i + args.chunk]
+        if os.path.exists(ck):
+            with np.load(ck) as z:
+                if "pk" in z and np.array_equal(z["pk"], want):
+                    print(f"  {min(i + args.chunk, len(games))}/{len(games)} (cached)",
+                          flush=True)
+                    continue
+            print(f"  chunk {i} on disk covers different games, recomputing", flush=True)
         H, A = s.run(games[i:i + args.chunk], R=args.r, seed=0, skill_mode="mean", crn=False)
-        Hs.append(H); As.append(A)
+        # Write to a temporary name and rename, so a death DURING the write cannot
+        # leave a truncated chunk that a later resume would trust.
+        np.savez(ck + ".tmp.npz", H=H, A=A, pk=want)
+        os.replace(ck + ".tmp.npz", ck)
+        del H, A
+        gc.collect()
         print(f"  {min(i + args.chunk, len(games))}/{len(games)}", flush=True)
+
+    Hs, As = [], []
+    for i in starts:
+        with np.load(f"{ckdir}/chunk_{i:06d}.npz") as z:
+            if not np.array_equal(z["pk"], pk[i:i + args.chunk]):
+                raise SystemExit(f"chunk {i} game_pk mismatch at assembly")
+            Hs.append(z["H"]); As.append(z["A"])
     sh = np.concatenate(Hs, 0); sa = np.concatenate(As, 0)
+    if len(sh) != len(games):
+        raise SystemExit(f"assembled {len(sh)} games, expected {len(games)}")
 
     out = f"data/eval2/calib_{args.tag}_arrays.npz"
     np.savez(out, sim_home=sh, sim_away=sa, sim_total=sh + sa,
