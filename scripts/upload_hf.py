@@ -71,8 +71,13 @@ def pack_raw(outdir: Path) -> list[tuple[str, str]]:
         tarpath = outdir / f"raw_{sub.name}.tar.gz"
         if not tarpath.exists():
             print(f"  packing {sub.name} -> {tarpath.name} (slow)", flush=True)
-            with tarfile.open(tarpath, "w:gz") as tf:
+            # compresslevel=1 deliberately. The input is 45k small JSON files, which
+            # compress roughly 8x even at the fastest setting, and gzip here is
+            # single-threaded: level 9 would spend hours to save a few percent on a
+            # file whose upload is bandwidth-bound anyway.
+            with tarfile.open(tarpath, "w:gz", compresslevel=1) as tf:
                 tf.add(sub, arcname=sub.name)
+            print(f"    packed: {human(tarpath.stat().st_size)}", flush=True)
         out.append((str(tarpath), f"data/raw/{tarpath.name}"))
     return out
 

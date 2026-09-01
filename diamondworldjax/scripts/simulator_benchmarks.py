@@ -101,10 +101,21 @@ def randomized_pit(samples, y, rng):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--arrays", default="data/eval2/calib_v13_nobp_arrays.npz")
-    ap.add_argument("--tag", default="v13-pregame")
+    # No default tag. It used to default to "v13-pregame" independently of --arrays,
+    # so running with only --arrays scored the new arrays and then wrote the report
+    # over simulator_benchmarks_v13-pregame.txt: the baseline was destroyed, and the
+    # surviving file claimed a model it did not contain. Deriving the tag from the
+    # arrays filename keeps the output named after its own input.
+    ap.add_argument("--tag", default=None)
     ap.add_argument("--season-2024-only", action="store_true", default=True,
                     help="Keep only 2024 game_pks (the test season).")
     args = ap.parse_args()
+    if args.tag is None:
+        stem = Path(args.arrays).name
+        for pre, suf in (("calib_", ""), ("", "_arrays.npz")):
+            stem = stem[len(pre):] if pre and stem.startswith(pre) else stem
+            stem = stem[:-len(suf)] if suf and stem.endswith(suf) else stem
+        args.tag = stem
 
     d = np.load(args.arrays)
     sh, sa = d["sim_home"], d["sim_away"]

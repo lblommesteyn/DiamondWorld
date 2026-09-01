@@ -1448,7 +1448,8 @@ unfolded, so the simulator is handed a summary of the game it is meant to be for
 It is not a small technicality for this project specifically, because the game-level
 results are the headline contribution.
 
-**Affected and now provisional:** the win-probability calibration (ECE 0.039, AUC 0.572),
+**Affected, and now re-measured (see the 2026-09-01 section at the end of this file):**
+the win-probability calibration (ECE 0.039, AUC 0.572),
 the run-distribution coverage figures (0.54 / 0.82 / 0.90 at nominal 50 / 80 / 90), and
 every market comparison built on the same arrays. The direction of the bias is optimistic,
 and its size is unquantified.
@@ -1470,3 +1471,69 @@ is always 0.00000, a batter row that is merely unusually productive, and a simul
 is simply well informed all look like success. The lesson the guide-coverage bug taught, to
 assert the invariant rather than eyeball the output, applied here too and was not carried
 across. `tests/test_metric_guards.py` now covers defects 1 and 2.
+
+
+## Defect 3 resolved: the leak-free game-level numbers (2026-09-01)
+
+`sim/pregame_staff.py` replaces the realized bullpen with one selected from prior games
+only, and the full 2429-game sweep has now been re-run under it (job 400,
+`calib_v16-pregame-leakfree_arrays.npz`, R=100). The game-level claims are no longer
+provisional. They are, however, considerably weaker than what the leaky arrays reported.
+
+### Win probability: the apparent skill was the leak
+
+| model | logloss | Brier | AUC | ECE |
+|---|---|---|---|---|
+| base rate (home .521) | 0.6923 | 0.2496 | - | - |
+| **leaky (v15-pregame-hook)** | 0.6881 | 0.2473 | 0.572 | 0.034 |
+| **leak-free (v16)** | **0.6985** | **0.2523** | **0.543** | **0.053** |
+| Log5 (Pythagorean) | 0.6709 | 0.2391 | 0.617 | 0.019 |
+| market (devig close) | 0.6707 | 0.2391 | 0.614 | 0.019 |
+
+Removing the leak moves the simulator from **better than the home-field base rate to worse
+than it** (0.6881 -> 0.6985 against 0.6923), and drops AUC from 0.572 to 0.543. On its own
+terms the simulator has no usable win-probability skill: a constant 52.1% home prediction
+beats it, and Log5, which needs nothing but season win rates, beats it by 0.028 nats.
+
+Read this as an upper bound on the leak's cost rather than a clean measurement. v15 and
+v16 are different models, so the comparison conflates the leak with the version change.
+The clean experiment is v16 scored with the realized staff against v16 scored leak-free,
+which is one more sweep and has not been run.
+
+### Run-total distribution: essentially untouched by the leak
+
+| model | mean | var | P(>=10) | P(<=5) | logscore | KS |
+|---|---|---|---|---|---|---|
+| real | 8.63 | 18.24 | 0.366 | 0.261 | - | - |
+| leak-free sim | 9.08 | 18.02 | 0.407 | 0.224 | 2.855 | 0.058 |
+| independent 2-Poisson | 9.08 | 8.97 | 0.423 | 0.124 | 2.920 | 0.153 |
+| league neg-binomial | 8.63 | 18.20 | 0.371 | 0.249 | 2.875 | 0.012 |
+
+Coverage: 0.535 / 0.819 / 0.908 at the nominal 50 / 80 / 90, against the leaky run's
+0.538 / 0.821 / 0.903. The leak was worth nothing here, which is coherent: knowing which
+relievers appeared tells you who won, not how many runs the two teams combined for.
+
+This is where the simulator is genuinely good. It reproduces the overdispersion of real
+baseball, 1.98x the independent-Poisson variance against a real 2.11x, which a summed
+independent model cannot do at all (KS 0.153 vs 0.058). But note the last row: a league-wide
+negative binomial fit with no team, park or roster information at all is better calibrated
+(KS 0.012) and unbiased in the mean. The simulator beats it on logscore (2.855 vs 2.875)
+and nothing else. Whatever the per-game conditioning is buying, it is not showing up in the
+run-total distribution.
+
+### The mean is biased high
+
+Leak-free sim mean is 9.08 against a real 8.63, a **+0.45 run per game** overproduction,
+where the leaky run was +0.40. Some of that is expected from no longer knowing the actual
+relievers, but a 5% bias in the most basic summary statistic is a calibration target in
+its own right and is not explained by the leak alone.
+
+### A baseline was destroyed and restored
+
+Scoring the new arrays with `--arrays` alone silently wrote the report to
+`simulator_benchmarks_v13-pregame.txt`, because `--tag` defaulted to `v13-pregame`
+independently of the input. That overwrote the v13 baseline with v16 results under the v13
+name. It was regenerated from `calib_v13_nobp_arrays.npz` and verified identical to its
+recorded values. `--tag` now derives from the arrays filename, so a report can no longer be
+named after a model it does not contain. Same silent-failure family as the three defects
+above: no error, just a plausible file with the wrong name.

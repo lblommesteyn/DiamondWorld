@@ -55,10 +55,14 @@ previously reported improvements did not survive: the v21 gain fell from +0.025
 (p=0.054) to +0.015 (p=0.130), and three ablation verdicts flipped.
 
 Defect 3 affects **game-level** results only; the plate-appearance-level numbers
-above are unaffected. The leak-free replacement selects relievers using only prior
-games, and recovers 29.9% of the realized staff, so the previous game-level figures
-were leaning on the leak more than a little. Treat any game-level number in this
-release as provisional.
+above are unaffected. The leak-free sweep has now been run, and the result is worth
+stating plainly: with the leak removed, the simulator's win probabilities are **worse
+than a constant home-field base rate** (log-loss 0.6985 vs 0.6923), where the leaky
+arrays had them better (0.6881). Log5, which uses nothing but season win rates, gets
+0.6709. The run-total distribution is unaffected by the leak and is where the model
+genuinely performs: it reproduces real overdispersion (1.98x independent-Poisson
+variance against a real 2.11x), though a league-wide negative binomial with no team
+information is better calibrated still.
 
 A power analysis over the same test season puts the minimum detectable effect at
 about **+0.030** average correlation at 80% power. Differences smaller than that
