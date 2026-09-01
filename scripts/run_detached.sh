@@ -53,8 +53,38 @@ cleanup() {
 }
 trap cleanup TERM INT EXIT
 
-until [ -f "$MARKER" ]; do
+# Poll for the marker, but ALSO notice if the work dies without writing one.
+#
+# The first version of this loop waited on the marker alone. That is why job 395 held
+# the card for an hour and job 399 held it for TWENTY-TWO HOURS after the work had
+# already died: a job killed by a signal never gets to write DONE, so the holder waits
+# forever on a marker that is never coming, and Slurm keeps the GPU reserved for a
+# process group that no longer exists.
+#
+# The original reason for not liveness-checking was that a single check races under
+# load and false-positives as "died". The answer to a racy check is to debounce it,
+# not to skip it: the group has to look empty on MISSES consecutive polls, 5 minutes
+# apart in total, before we believe it. A real run is never invisible that long, and
+# a genuinely dead one costs at most five extra minutes of held GPU instead of a day.
+MISSES=0
+while [ ! -f "$MARKER" ]; do
   sleep 30
+  [ -f "$MARKER" ] && break
+  if kill -0 -"$CHILD" 2>/dev/null; then
+    MISSES=0
+  else
+    MISSES=$((MISSES + 1))
+    if [ "$MISSES" -ge 10 ]; then
+      # Re-check for the marker once more: the work may have finished and exited
+      # in the gap between the last liveness poll and this decision.
+      sleep 2
+      [ -f "$MARKER" ] && break
+      echo "process group ${CHILD} gone for 5 minutes with no DONE marker; treating as died" >&2
+      echo "died without marker at $(date -u +%FT%TZ)" >> "$STAMP"
+      trap - EXIT
+      exit 1
+    fi
+  fi
 done
 trap - EXIT
 
