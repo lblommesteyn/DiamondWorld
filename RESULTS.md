@@ -1672,3 +1672,35 @@ autoregressive rollout that recomputes the trunk after every pitch with the upda
 count, which is a different and more expensive piece of machinery than this script.
 Until that exists, the pitch-level stack should not be described as improving the
 simulator, and the PA-level model remains the better simulator on the gate.
+
+
+### Park geometry: built, wired, and it changes nothing (2026-09-02)
+
+`diamondworldjax/data/parks/geometry.csv` now holds all 30 parks: both foul lines,
+both gaps, centre field, and three wall heights. Sourced from
+orangemn6/mlb-data-visualization after the prose sources disagreed badly (one put
+Kauffman at 387 down both lines, which is its power alleys). It reproduces every park
+that can be independently checked, exactly, including Fenway 310/302 with the 37-foot
+wall and Minute Maid's 436-foot left-centre being deeper than its centre field.
+
+A and B retrained with it, against the identical run with geometry absent:
+
+| head | geometry off | geometry on | delta |
+|---|---|---|---|
+| pitch type | +0.2693 | +0.2645 | -0.0048 |
+| swing | +0.2298 | +0.2297 | -0.0001 |
+| contact | +0.1270 | +0.1272 | +0.0002 |
+| foul | +0.1465 | +0.1437 | -0.0028 |
+
+A null, slightly negative on average, single seed, all of it well inside run-to-run
+noise. No claim either way beyond "no detectable effect".
+
+This is the physically sensible outcome and not a disappointment. A predicts what
+pitch is thrown and where it crosses the plate; B predicts whether the batter offers
+and what he does to it. Neither of those depends on how far away the wall is. The
+head geometry should inform is the BATTED BALL model deciding whether a fly ball
+carries over the fence, and that head is not in this stack.
+
+So the table is correct, version controlled and connected to the wrong consumers. It
+should be retested when a batted-ball head exists, and until then geometry should not
+be described as part of what makes the super-state work.
