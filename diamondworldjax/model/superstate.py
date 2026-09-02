@@ -67,10 +67,10 @@ def load_geometry(path: str = "data/parks/geometry.csv") -> dict[int, np.ndarray
     table: dict[int, np.ndarray] = {}
     with open(path, newline="") as f:
         for row in csv.DictReader(f):
-            try:
-                pid = int(row["park_id"])
-            except (KeyError, TypeError, ValueError):
+            pid = row.get("park_id")
+            if pid is None or str(pid).strip() == "":
                 continue
+            pid = str(pid).strip()
             vals = []
             ok = True
             for c in GEOMETRY_COLS:
@@ -93,10 +93,13 @@ def geometry_features(park_ids: np.ndarray,
     """
     if table is None:
         table = load_geometry()
-    park_ids = np.asarray(park_ids).reshape(-1)
+    # park_id in the processed data is a STRING team code ("LAA"), not an int.
+    # Coercing to int here raised on every row, so the lookup is done on the key
+    # as given and the table is expected to be keyed the same way.
+    park_ids = list(park_ids) if not isinstance(park_ids, np.ndarray) else         park_ids.reshape(-1).tolist()
     out = np.zeros((len(park_ids), N_GEOMETRY), dtype=np.float32)
     for i, pid in enumerate(park_ids):
-        vec = table.get(int(pid))
+        vec = table.get(pid)
         if vec is None:
             continue
         out[i, :len(GEOMETRY_COLS)] = (vec - _CENTRE) / _SCALE
