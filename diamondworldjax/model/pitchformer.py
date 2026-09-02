@@ -93,7 +93,19 @@ class CausalBlock(nn.Module):
             num_heads=self.n_heads, qkv_features=self.d_model,
             dropout_rate=self.dropout, deterministic=not train,
         )(h, h, mask=mask)
-        x = x + h
+        # The FIRST pitch of a sequence has no history, so its attention row is
+        # fully masked. That does not raise: softmax over all-masked logits returns
+        # a UNIFORM mix over every key, padding included, and position 1 then reads
+        # that contaminated vector, so the padding propagates forward through the
+        # whole stack. Measured before this line existed: perturbing only padded
+        # positions moved the t=0 output by 1.77 and t=1 by 0.81.
+        #
+        # Zeroing the attention contribution on a fully-masked row leaves the
+        # residual stream carrying the super-state alone, which is the intended
+        # meaning of "first pitch, no history: predict from who is up, the count,
+        # and the park".
+        has_key = mask.any(axis=-1)[:, 0, :, None]        # (B, T, 1)
+        x = x + h * has_key.astype(h.dtype)
         h = nn.LayerNorm()(x)
         h = nn.Dense(4 * self.d_model)(h)
         h = nn.gelu(h)
