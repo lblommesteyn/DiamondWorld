@@ -60,8 +60,27 @@ _CENTRE = np.array([330.0, 375.0, 405.0, 375.0, 330.0, 10.0, 10.0, 10.0, 500.0])
 _SCALE = np.array([25.0, 25.0, 20.0, 25.0, 25.0, 8.0, 8.0, 8.0, 900.0])
 
 
-def load_geometry(path: str = "data/parks/geometry.csv") -> dict[int, np.ndarray]:
-    """park_id -> raw geometry vector. Missing file yields an empty table."""
+# The canonical table ships INSIDE the package. data/ is a symlink to the Windows
+# side of the machine, so anything under it is beyond a symbolic link as far as git
+# is concerned and cannot be tracked; a reference table that is not version
+# controlled is one that silently differs between checkouts.
+_PACKAGED = os.path.join(os.path.dirname(__file__), "..", "data", "parks",
+                         "geometry.csv")
+
+
+def load_geometry(path: str | None = None) -> dict[str, np.ndarray]:
+    """park_id -> raw geometry vector. Missing file yields an empty table.
+
+    Looks for an explicit path first, then data/parks/geometry.csv for a local
+    override, then the packaged table.
+    """
+    if path is None:
+        for cand in ("data/parks/geometry.csv", os.path.normpath(_PACKAGED)):
+            if os.path.exists(cand):
+                path = cand
+                break
+        else:
+            return {}
     if not os.path.exists(path):
         return {}
     table: dict[int, np.ndarray] = {}
@@ -71,15 +90,26 @@ def load_geometry(path: str = "data/parks/geometry.csv") -> dict[int, np.ndarray
             if pid is None or str(pid).strip() == "":
                 continue
             pid = str(pid).strip()
-            vals = []
-            ok = True
-            for c in GEOMETRY_COLS:
+            # A BLANK single field reads as league-average rather than
+            # disqualifying the whole park. Requiring all nine meant one missing
+            # column (elevation, which has no source as trustworthy as the rest)
+            # threw away eight verified measurements per park. A blank becomes the
+            # centre value, so it normalises to 0 and contributes nothing, which is
+            # the right default for a linear head. has_geometry still means "this
+            # park has real measurements", because a row with nothing usable is
+            # skipped below.
+            vals, n_present = [], 0
+            for i, c in enumerate(GEOMETRY_COLS):
                 v = row.get(c, "")
                 if v is None or str(v).strip() == "":
-                    ok = False
-                    break
-                vals.append(float(v))
-            if ok:
+                    vals.append(_CENTRE[i])
+                else:
+                    try:
+                        vals.append(float(v))
+                        n_present += 1
+                    except ValueError:
+                        vals.append(_CENTRE[i])
+            if n_present:
                 table[pid] = np.asarray(vals, dtype=np.float32)
     return table
 
