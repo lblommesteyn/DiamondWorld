@@ -107,11 +107,27 @@ def _ctx(df: pl.DataFrame) -> np.ndarray:
 D_CTX = 16
 
 
+EVENT_FLAGS = ("wild_pitch", "passed_ball", "balk", "steal", "caught_stealing",
+               "pickoff", "error", "defensive_indiff")
+
+
 def make_sequences(df: pl.DataFrame, maps: dict, max_len: int = 160,
-                   geometry_table=None):
-    """(game, half) sequences -> padded arrays for the A/B transformers."""
+                   geometry_table=None, events: pl.DataFrame | None = None):
+    """(game, half) sequences -> padded arrays for the A/B/C transformers.
+
+    `events` is the table from data/extract_events.py. It is LEFT-joined, so a
+    pitch with no event row gets zeros: absence of an event row means the event
+    did not happen, not that the label is missing. That is only true because the
+    extractor emits a row for every pitch that had any event at all, which the
+    join-rate check in extract_events.verify is what establishes.
+    """
     if geometry_table is None:
         geometry_table = load_geometry()
+
+    if events is not None and events.height:
+        df = df.join(events, on=["game_pk", "at_bat_number", "pitch_number"],
+                     how="left").with_columns(
+            [pl.col(f).fill_null(0).cast(pl.Int8) for f in EVENT_FLAGS])
 
     df = df.sort(["game_pk", "half", "at_bat_number", "pitch_number"])
     ctx_all = _ctx(df)
@@ -139,6 +155,12 @@ def make_sequences(df: pl.DataFrame, maps: dict, max_len: int = 160,
     stuff_valid = np.isfinite(stuff).all(-1).astype(np.float32)
     stuff = np.nan_to_num(stuff)
     stuff = (stuff - STUFF_CENTRE) / STUFF_SCALE
+
+    if all(f in df.columns for f in EVENT_FLAGS):
+        ev_all = np.stack([df[f].to_numpy().astype(np.float32)
+                           for f in EVENT_FLAGS], -1)
+    else:
+        ev_all = None
 
     # swing/contact/foul are Booleans with no nulls.
     swing = df["swing"].to_numpy().astype(np.float32)
@@ -177,6 +199,8 @@ def make_sequences(df: pl.DataFrame, maps: dict, max_len: int = 160,
         "foul": np.zeros((n, max_len), np.float32),
         "valid": np.zeros((n, max_len), np.float32),
     }
+    if ev_all is not None:
+        out["events"] = np.zeros((n, max_len, len(EVENT_FLAGS)), np.float32)
     for i, (a, b) in enumerate(spans):
         L = b - a
         out["pitcher_idx"][i, :L] = pit[a:b]
@@ -192,6 +216,8 @@ def make_sequences(df: pl.DataFrame, maps: dict, max_len: int = 160,
         out["contact"][i, :L] = contact[a:b]
         out["foul"][i, :L] = foul[a:b]
         out["valid"][i, :L] = 1.0
+        if ev_all is not None:
+            out["events"][i, :L] = ev_all[a:b]
     return out
 
 

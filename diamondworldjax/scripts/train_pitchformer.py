@@ -38,9 +38,11 @@ import jax.numpy as jnp
 import numpy as np
 import optax
 
-from ..data.pitch_seq import build_id_maps, load_seasons, make_sequences
+from ..data.pitch_seq import (build_id_maps, load_seasons, make_sequences,
+                              EVENT_FLAGS)
 from ..model.pitchformer import (TransformerA, TransformerB, loss_a, loss_b,
                                  N_PITCH_TYPES)
+from ..model.transformer_c import TransformerC, loss_c
 
 
 def batches(arrs, bs, rng=None, shuffle=True):
@@ -183,6 +185,9 @@ def main():
                     help="smoke-test escape hatch; None uses everything")
     ap.add_argument("--out", default="checkpoints/pitchformer")
     ap.add_argument("--tag", default="ab")
+    ap.add_argument("--stack", default="ab",
+                    help="which heads to train: any of a, b, c")
+    ap.add_argument("--events", default="data/processed/events.parquet")
     args = ap.parse_args()
 
     seasons = [int(s) for s in args.train_seasons.split(",")]
@@ -199,8 +204,12 @@ def main():
           f"parks={maps['n_park']} (index 0 reserved for unknown)", flush=True)
 
     import polars as pl
-    train = make_sequences(pl.concat(tr_dfs), maps, args.max_len)
-    test = make_sequences(pl.concat(te_dfs), maps, args.max_len)
+    ev = None
+    if "c" in args.stack:
+        ev = pl.read_parquet(args.events)
+        print(f"events table: {ev.height:,} rows", flush=True)
+    train = make_sequences(pl.concat(tr_dfs), maps, args.max_len, events=ev)
+    test = make_sequences(pl.concat(te_dfs), maps, args.max_len, events=ev)
     print(f"train seqs {train['valid'].shape}, pitches {int(train['valid'].sum()):,}",
           flush=True)
     print(f"test  seqs {test['valid'].shape}, pitches {int(test['valid'].sum()):,}",
@@ -213,25 +222,44 @@ def main():
               n_parks=maps["n_park"], d_model=args.d_model,
               n_layers=args.layers, n_heads=args.heads)
 
-    res_a = run(TransformerA(**kw), loss_a, train, test, steps=args.steps,
-                bs=args.bs, lr=args.lr, seed=args.seed, name=f"A_{args.tag}",
-                out_dir=args.out)
-    res_b = run(TransformerB(**kw), loss_b, train, test, steps=args.steps,
-                bs=args.bs, lr=args.lr, seed=args.seed, name=f"B_{args.tag}",
-                out_dir=args.out)
+    report = {"baselines": base, "config": vars(args), "improvement_nats": {}}
 
-    report = {
-        "baselines": base,
-        "A": res_a,
-        "B": res_b,
-        "improvement_nats": {
-            "type": base["type"] - res_a["nll_type"],
-            "swing": base["swing"] - res_b["nll_swing"],
-            "contact": base["contact"] - res_b["nll_contact"],
-            "foul": base["foul"] - res_b["nll_foul"],
-        },
-        "config": vars(args),
-    }
+    if "a" in args.stack:
+        res_a = run(TransformerA(**kw), loss_a, train, test, steps=args.steps,
+                    bs=args.bs, lr=args.lr, seed=args.seed, name=f"A_{args.tag}",
+                    out_dir=args.out)
+        report["A"] = res_a
+        report["improvement_nats"]["type"] = base["type"] - res_a["nll_type"]
+
+    if "b" in args.stack:
+        res_b = run(TransformerB(**kw), loss_b, train, test, steps=args.steps,
+                    bs=args.bs, lr=args.lr, seed=args.seed, name=f"B_{args.tag}",
+                    out_dir=args.out)
+        report["B"] = res_b
+        for k in ("swing", "contact", "foul"):
+            report["improvement_nats"][k] = base[k] - res_b[f"nll_{k}"]
+
+    if "c" in args.stack:
+        # Each event head is scored against its own BASE RATE, fitted on train
+        # and evaluated on test. These events are rare enough (a balk is 0.016%
+        # of pitches) that a head predicting zero everywhere scores a superb
+        # loss, so the absolute NLL says nothing and only the lift does.
+        cb = {}
+        for i, f in enumerate(EVENT_FLAGS):
+            vtr = train["valid"] > 0
+            rate = float(np.clip(train["events"][..., i][vtr].mean(), 1e-7, 1 - 1e-7))
+            vte = test["valid"] > 0
+            y = test["events"][..., i][vte]
+            cb[f] = float(-(y * np.log(rate) + (1 - y) * np.log(1 - rate)).mean())
+            cb[f"{f}_rate"] = rate
+        report["baselines_c"] = cb
+
+        res_c = run(TransformerC(**kw), loss_c, train, test, steps=args.steps,
+                    bs=args.bs, lr=args.lr, seed=args.seed, name=f"C_{args.tag}",
+                    out_dir=args.out)
+        report["C"] = res_c
+        for f in EVENT_FLAGS:
+            report["improvement_nats"][f] = cb[f] - res_c[f"nll_{f}"]
     Path("data/eval2").mkdir(parents=True, exist_ok=True)
     out = f"data/eval2/pitchformer_{args.tag}.json"
     with open(out, "w") as f:
