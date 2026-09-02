@@ -1629,3 +1629,46 @@ and nothing more. Whether better pitch-level conditionals produce a better SIMUL
 is a separate question that the game-level benchmark answers, and it has not been
 asked yet. Given that v1-v5 improved components and made the simulator worse, that
 step should be measured, not assumed.
+
+
+### Simulating every pitch does NOT beat the PA-level model on the gate
+
+A and B were used to play out every 2024 plate appearance pitch by pitch, scored on
+the project's actual gate: cross-player correlation over batters with 150+ PA.
+
+| metric | pitch-level sim | v16 (PA-level) |
+|---|---|---|
+| K correlation | 0.602 | **0.792** |
+| BB correlation | 0.204 | **0.651** |
+
+| rate check | sim | real |
+|---|---|---|
+| K per PA | 0.221 | 0.226 |
+| BB per PA | **0.254** | 0.081 |
+| sampled pitches in the strike zone | 0.451 | 0.477 |
+
+So the answer to "would simming every pitch help" is, as built, no. Better
+conditionals did not produce a better simulator, which is the third time this
+project has seen that: v1-v5 improved components and made the simulator worse, and
+JEPA had the best per-PA NLL of any variant while differentiating players not at all.
+
+### Why, mechanically
+
+The K rate is essentially exact at 0.221 against 0.226, and nothing in the pipeline
+tunes it: it falls out of A's location model plus a fixed geometric zone. The zone is
+not the problem either, since sampled pitches land in it 45.1% of the time against a
+real 47.7%.
+
+The walk rate is 3x too high, and that isolates the cause. Each PA is rolled out
+conditioned on the REAL pitches preceding it, so the model's inputs carry the REAL
+ball-strike count, while the simulation's own count evolves separately. The count
+feedback loop is therefore broken: at a simulated 3-0 the model is still answering as
+though the count were whatever it really was. Strikeouts survive this because whiffs
+are relatively count-insensitive; walks do not, because a walk IS a count trajectory.
+
+That is a limitation of the rollout, not evidence about A and B, whose held-out
+likelihoods are unaffected and remain strong. Fixing it means a genuinely
+autoregressive rollout that recomputes the trunk after every pitch with the updated
+count, which is a different and more expensive piece of machinery than this script.
+Until that exists, the pitch-level stack should not be described as improving the
+simulator, and the PA-level model remains the better simulator on the gate.
