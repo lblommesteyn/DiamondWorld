@@ -1537,3 +1537,95 @@ name. It was regenerated from `calib_v13_nobp_arrays.npz` and verified identical
 recorded values. `--tag` now derives from the arrays filename, so a report can no longer be
 named after a model it does not contain. Same silent-failure family as the three defects
 above: no error, just a plausible file with the wrong name.
+
+
+## Transformers A, B and C on a shared super-state (2026-09-02)
+
+Built and trained. All three heads share one super-state per pitch: pitcher, batter
+and park embeddings, game state (count, outs, bases, score, inning, TTO), an explicit
+home/away flag, the handedness matchup, and a slot for rules-based arena geometry.
+Trained by direct maximum likelihood rather than inside joint.py's SVI, so each is
+measurable on its own before anything is asked of the joint model.
+
+Train 2015-2023 (5.75M pitches), test 2024 (711,898 pitches). Split by SEASON, never
+by row: pitches within a game are far too dependent for a random split to measure
+generalisation.
+
+### A and B beat their baselines by a wide margin
+
+| head | baseline NLL | model NLL | improvement |
+|---|---|---|---|
+| pitch type (8-way) | 1.9528 | 1.6835 | **+0.269** |
+| swing | 0.6612 | 0.4314 | **+0.230** |
+| contact given swing | 0.5415 | 0.4144 | **+0.127** |
+| foul given contact | 0.6921 | 0.5455 | **+0.147** |
+
+Baselines are not strawmen: the swing baseline is the count-conditional swing rate,
+which is most of what a naive model gets right.
+
+The comparison that matters is against the PA level, where per-PA NLL is saturated
+and every variant from v10 to v21 sits within 0.06 nats of the marginal entropy of
+1.495. That is why the PA-level likelihood could not rank models and the cross-player
+correlation gate had to exist. These pitch-level improvements are two to four times
+that entire spread. **The pitch-level signal is not saturated.**
+
+### C: every transition head beats its base rate
+
+C was blocked on data, not modelling. transition.py has declared heads for error,
+wild pitch, passed ball, balk and steals since v0, and the processed parquet has
+none of those columns, so all of them have been sampling from their priors with
+obs=None for the whole project. 183,608 event rows were extracted from 22,763 raw
+feed_live games to unblock it.
+
+| event | rate | base NLL | C NLL | reduction |
+|---|---|---|---|---|
+| wild pitch | 0.225% | 0.01376 | 0.00552 | **59.9%** |
+| passed ball | 0.040% | 0.00275 | 0.00204 | 25.9% |
+| balk | 0.015% | 0.00160 | 0.00128 | 20.0% |
+| steal | 0.310% | 0.02857 | 0.01506 | **47.3%** |
+| caught stealing | 0.052% | 0.00458 | 0.00338 | 26.2% |
+| pickoff | 1.360% | 0.05854 | 0.04105 | 29.9% |
+| error | 0.167% | 0.01235 | 0.00901 | 27.0% |
+| defensive indifference | 0.036% | 0.00341 | 0.00119 | **65.3%** |
+
+Read the reduction column, not the lift: these events are rare enough that a head
+predicting zero everywhere scores an excellent absolute NLL, so only lift over the
+event's own base rate carries information.
+
+### What C deliberately does not do
+
+It does not sample runs or base advancement. v1-v5 used neural heads for that and
+blew up game-level variance; v6's empirical table is what made the run distribution
+match reality, and the leak-free benchmark says that distribution is the one part of
+the simulator that works (1.98x overdispersion against a real 2.11x, KS 0.058, where
+independent Poisson manages 0.153). Replacing it with a learned sampler would risk
+the only game-level result worth having in order to fix nothing that is broken. If C
+is later shown to beat the table on PIT and coverage, that is the argument for
+extending it. It is not an assumption to build in now.
+
+### Two honest gaps
+
+**Arena geometry is structurally present but inert.** `data/parks/geometry.csv` does
+not exist, so every park takes the has_geometry = 0 path and the geometry block
+contributes nothing. Writing thirty stadiums' dimensions from memory is exactly the
+kind of plausible fabrication this file already records being burned by, so the slot
+is wired and empty until a real source fills it. Populating it later changes
+behaviour without invalidating what was trained before, because the flag lets a head
+distinguish "no data" from "a park whose dimensions are zero".
+
+**The label extraction undercounts two events.** Wild pitches come in at 0.55/game
+against a real ~0.8, and balks at 0.048 against ~0.1, so some are recorded inside
+pitch details rather than as separate playEvents. Steals (1.29/game), errors
+(0.49/game) and pickoffs match real rates. The join convention was verified against
+data rather than assumed: 87% match on at_bat_number+1 against 68% for the
+off-by-one, and every unmatched row is a pitch_number 0 event that happened before
+the plate appearance's first pitch.
+
+### Not yet done
+
+A, B and C are trained and measured, but **not yet wired into the simulator**. The
+numbers above are held-out conditional likelihoods, which is what they claim to be
+and nothing more. Whether better pitch-level conditionals produce a better SIMULATOR
+is a separate question that the game-level benchmark answers, and it has not been
+asked yet. Given that v1-v5 improved components and made the simulator worse, that
+step should be measured, not assumed.
