@@ -62,6 +62,11 @@ def main() -> None:
     parser.add_argument("--outcome-only", action="store_true")
     parser.add_argument("--fatigue", action="store_true")
     parser.add_argument("--platoon", action="store_true")
+    parser.add_argument("--pitchformer", action="store_true")
+    parser.add_argument("--pitchformer-dim", type=int, default=128)
+    parser.add_argument("--pitchformer-layers", type=int, default=2)
+    parser.add_argument("--pitchformer-heads", type=int, default=4)
+    parser.add_argument("--pitchformer-dropout", type=float, default=0.0)
     parser.add_argument("--use-park", action="store_true")
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
@@ -101,6 +106,14 @@ def main() -> None:
     model_kwargs = {name: True for name, value in {
         "outcome_only": args.outcome_only, "fatigue": args.fatigue, "platoon": args.platoon,
     }.items() if value}
+    if args.pitchformer:
+        model_kwargs.update(
+            pitchformer=True,
+            pitchformer_dim=args.pitchformer_dim,
+            pitchformer_layers=args.pitchformer_layers,
+            pitchformer_heads=args.pitchformer_heads,
+            pitchformer_dropout=args.pitchformer_dropout,
+        )
     model_fn = partial(pa_model, **model_kwargs) if model_kwargs else pa_model
     chunks = [games[i:i + args.batch] for i in range(0, len(games), args.batch)]
 
@@ -115,6 +128,7 @@ def main() -> None:
                 jax.random.fold_in(master_key, season * len(chunks) + batch_number), 1,
                 seed=args.seed + season * len(chunks) + batch_number,
                 platoon=args.platoon,
+                pitchformer=args.pitchformer,
             )
             all_away.append(draws["away"][0]); all_home.append(draws["home"][0])
             all_away_hits.append(draws["away_hits"][0]); all_home_hits.append(draws["home_hits"][0])

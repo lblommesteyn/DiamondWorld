@@ -68,6 +68,32 @@ def make_player_skills_guide(P: int, skill_dim: int = SKILL_DIM, kl_scale: float
     raise ValueError(f"unknown skill_prior {skill_prior!r}")
 
 
+def make_shared_task_skills_guide(
+    P: int,
+    skill_dim: int = SKILL_DIM,
+    kl_scale: float = 1.0,
+):
+    """Mean-field guide for the shared-plus-task-residual hierarchy."""
+    def _normal_site(name: str, scale: float):
+        mu = numpyro.param(
+            f"{name}_mu", jnp.zeros((P, skill_dim)),
+            constraint=constraints.interval(-5.0, 5.0),
+        )
+        sigma = numpyro.param(
+            f"{name}_sigma", jnp.full((P, skill_dim), scale),
+            constraint=constraints.interval(0.05, 2.0),
+        )
+        numpyro.sample(name, dist.Normal(mu, sigma).to_event(2))
+
+    def guide(batch, player_table, teacher_force=True):
+        del batch, player_table, teacher_force
+        with nhandlers.scale(scale=kl_scale):
+            _normal_site("shared_player_skills", 0.3)
+            _normal_site("pa_skill_residual", 0.15)
+            _normal_site("pitch_skill_residual", 0.15)
+    return guide
+
+
 def _guide_scaled(P: int, skill_dim: int, kl_scale: float, lkj: bool):
     """Guide for the learned-scale and LKJ priors.
 
@@ -187,7 +213,12 @@ def _eval_metrics(
 ) -> dict[str, float]:
     """No-gradient forward pass to extract per-site NLLs from the trace."""
     params = svi.get_params(svi_state)
-    valid  = jnp.asarray(batch.get("pitch_valid", batch.get("pa_valid")))  # (B, T)
+    # Multi-task batches nest the two independently padded sequence types. Use
+    # the pitch batch for the compact diagnostic below; its sample sites are
+    # scoped by multitask_model.
+    is_multitask = "pitch" in batch and "pa" in batch
+    metric_batch = batch["pitch"] if is_multitask else batch
+    valid = jnp.asarray(metric_batch.get("pitch_valid", metric_batch.get("pa_valid")))
     n      = float(jnp.sum(valid))
     if n == 0:
         return {}
@@ -198,8 +229,9 @@ def _eval_metrics(
                 model(batch, player_table, teacher_force=True)
 
     out: dict[str, float] = {}
+    site_prefix = "pitch/" if is_multitask else ""
     for site_name in ("pitch_type", "swing", "contact"):
-        site = tr.get(site_name)
+        site = tr.get(site_prefix + site_name)
         if site is None:
             continue
         lp = site.get("log_prob")
@@ -330,6 +362,7 @@ def train(
                                     # uncovered by the guide and are silently resampled
                                     # from the prior every step instead of being learned
     n_seasons: int        = 1,      # season axis, only used by skill_prior="walk"
+    shared_task_skills: bool = False,
 ) -> tuple[Any, Any, list[float]]:
     """
     Run SVI training.
@@ -355,8 +388,12 @@ def train(
 
     first_batch, first_player_table = next(batch_iter)
     P = first_player_table["stats"].shape[0]
-    guide = make_player_skills_guide(P, kl_scale=kl_scale,
-                                     skill_prior=skill_prior, n_seasons=n_seasons)
+    guide = (
+        make_shared_task_skills_guide(P, kl_scale=kl_scale)
+        if shared_task_skills else
+        make_player_skills_guide(P, kl_scale=kl_scale,
+                                 skill_prior=skill_prior, n_seasons=n_seasons)
+    )
     print(f"  player_skills KL scale = {kl_scale:.6g}", flush=True)
 
     svi = SVI(

@@ -81,6 +81,12 @@ def main() -> None:
                              "for pre-v9 checkpoints, which trained on park_idx=0 (all-zeros).")
     parser.add_argument("--platoon", action="store_true",
                         help="Model trained with platoon (batter side + pitcher hand), v11+.")
+    parser.add_argument("--pitchformer", action="store_true",
+                        help="Evaluate a causal PA-transformer checkpoint.")
+    parser.add_argument("--pitchformer-dim", type=int, default=128)
+    parser.add_argument("--pitchformer-layers", type=int, default=2)
+    parser.add_argument("--pitchformer-heads", type=int, default=4)
+    parser.add_argument("--pitchformer-dropout", type=float, default=0.0)
     parser.add_argument("--recency-halflife", type=float, default=None,
                         help="Match a recency-trained model (v12+): same half-life as training.")
     parser.add_argument("--skill-mode", choices=["prior", "mean"], default="prior",
@@ -139,6 +145,14 @@ def main() -> None:
         _mkw["fatigue"] = True
     if args.platoon:
         _mkw["platoon"] = True
+    if args.pitchformer:
+        _mkw.update(
+            pitchformer=True,
+            pitchformer_dim=args.pitchformer_dim,
+            pitchformer_layers=args.pitchformer_layers,
+            pitchformer_heads=args.pitchformer_heads,
+            pitchformer_dropout=args.pitchformer_dropout,
+        )
     model_fn = partial(pa_model, **_mkw) if _mkw else pa_model
 
     sim_counts = np.zeros((P, 9), dtype=np.float64)

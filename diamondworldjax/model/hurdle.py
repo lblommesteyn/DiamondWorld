@@ -16,8 +16,7 @@ import dataclasses
 # ---------------------------------------------------------------------------
 
 D_MODEL          = 128    # shared_context dimension
-D_EXECUTION      = 8      # pitch_execution features (e.g. velocity, break, spin)
-D_CONTEXT_TOTAL  = D_MODEL + D_EXECUTION   # 136 — input to all hurdle heads
+D_PRE_PITCH      = 3      # pitch_count_game, times through order, base state
 
 N_PITCH_TYPES    = 8      # categorical pitch-type vocabulary
 
@@ -32,7 +31,7 @@ class BinaryHead(nn.Module):
 
     @nn.compact
     def __call__(self, x: jnp.ndarray) -> jnp.ndarray:
-        # x: (..., D_CONTEXT_TOTAL)
+        # x: (..., feature width)
         h = nn.Dense(self.hidden_dim)(x)
         h = nn.relu(h)
         logit = nn.Dense(1)(h)[..., 0]   # (...,)
@@ -46,7 +45,7 @@ class CategoricalHead(nn.Module):
 
     @nn.compact
     def __call__(self, x: jnp.ndarray) -> jnp.ndarray:
-        # x: (..., D_CONTEXT_TOTAL)
+        # x: (..., feature width)
         h = nn.Dense(self.hidden_dim)(x)
         h = nn.relu(h)
         logits = nn.Dense(self.n_classes)(h)   # (..., K)
@@ -59,7 +58,7 @@ class ContinuousHead(nn.Module):
 
     @nn.compact
     def __call__(self, x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
-        # x: (..., D_CONTEXT_TOTAL)
+        # x: (..., feature width)
         h = nn.Dense(self.hidden_dim)(x)
         h = nn.relu(h)
         params = nn.Dense(2)(h)               # (..., 2)
@@ -79,7 +78,7 @@ class UmpireNoiseLayer(nn.Module):
 
     @nn.compact
     def __call__(self, base_logit: jnp.ndarray, x: jnp.ndarray) -> jnp.ndarray:
-        # base_logit: (...,)   x: (..., D_CONTEXT_TOTAL)
+        # base_logit: (...,)   x: (..., feature width)
         noise = nn.Dense(self.hidden_dim)(x)
         noise = nn.tanh(noise)
         noise = nn.Dense(1)(noise)[..., 0]   # (...,)  small correction
@@ -98,8 +97,10 @@ class HurdleNet(nn.Module):
 
     Inputs
     ------
-    context  : float32  (B, T, D_MODEL)    — from PitchTransformer
-    execution: float32  (B, T, D_EXECUTION) — pitch execution features
+    context       : float32  (B, T, D_MODEL) — from PitchTransformer
+    pre_pitch     : float32  (B, T, D_PRE_PITCH) — state known before a pitch
+    realised_pitch: float32  (B, T, N_PITCH_TYPES + 3) — sampled/observed
+                     pitch type (one-hot), release speed, plate x, plate z
 
     Outputs  (see field names)
     -------
@@ -111,27 +112,30 @@ class HurdleNet(nn.Module):
     @nn.compact
     def __call__(
         self,
-        context: jnp.ndarray,    # (B, T, D_MODEL)
-        execution: jnp.ndarray,  # (B, T, D_EXECUTION)
+        context: jnp.ndarray,
+        pre_pitch: jnp.ndarray,
+        realised_pitch: jnp.ndarray,
     ) -> Dict[str, Any]:
 
-        x = jnp.concatenate([context, execution], axis=-1)  # (B, T, 136)
+        generation_x = jnp.concatenate([context, pre_pitch], axis=-1)
+        response_x = jnp.concatenate([generation_x, realised_pitch], axis=-1)
 
-        # --- hurdle nodes ---
-        swing_logit          = BinaryHead(self.hidden_dim, name="head_swing")(x)
-        called_strike_logit  = BinaryHead(self.hidden_dim, name="head_cs_base")(x)
-        called_strike_logit  = UmpireNoiseLayer(name="head_cs_umpire")(called_strike_logit, x)
-        contact_logit        = BinaryHead(self.hidden_dim, name="head_contact")(x)
-        foul_logit           = BinaryHead(self.hidden_dim, name="head_foul")(x)
+        # Pitch characteristics are generated strictly from information known
+        # before the pitch.  They must not be conditioned on their own observed
+        # values, or free rollouts would leak the test labels.
+        pitch_type_logits = CategoricalHead(self.n_pitch_types, self.hidden_dim,
+                                            name="head_pitch_type")(generation_x)
+        plate_x_mu, plate_x_sigma = ContinuousHead(self.hidden_dim, name="head_px")(generation_x)
+        plate_z_mu, plate_z_sigma = ContinuousHead(self.hidden_dim, name="head_pz")(generation_x)
+        speed_mu, speed_sigma = ContinuousHead(self.hidden_dim, name="head_speed")(generation_x)
 
-        # --- pitch type distribution ---
-        pitch_type_logits    = CategoricalHead(self.n_pitch_types, self.hidden_dim,
-                                               name="head_pitch_type")(x)
-
-        # --- continuous pitch execution outcomes ---
-        plate_x_mu,    plate_x_sigma    = ContinuousHead(self.hidden_dim, name="head_px")(x)
-        plate_z_mu,    plate_z_sigma    = ContinuousHead(self.hidden_dim, name="head_pz")(x)
-        speed_mu,      speed_sigma      = ContinuousHead(self.hidden_dim, name="head_speed")(x)
+        # Response nodes may condition on the realised pitch, which is observed
+        # under teacher forcing and sampled during a free rollout.
+        swing_logit = BinaryHead(self.hidden_dim, name="head_swing")(response_x)
+        called_strike_logit = BinaryHead(self.hidden_dim, name="head_cs_base")(response_x)
+        called_strike_logit = UmpireNoiseLayer(name="head_cs_umpire")(called_strike_logit, response_x)
+        contact_logit = BinaryHead(self.hidden_dim, name="head_contact")(response_x)
+        foul_logit = BinaryHead(self.hidden_dim, name="head_foul")(response_x)
 
         return dict(
             swing_logit         = swing_logit,           # (B, T)
@@ -174,7 +178,7 @@ class HurdleOutcomes:
 
 def hurdle_numpyro(
     shared_context: jnp.ndarray,          # (B, T, 128)
-    pitch_execution: jnp.ndarray,         # (B, T, 8)
+    pre_pitch: jnp.ndarray,               # (B, T, D_PRE_PITCH)
     # observed values for teacher-forcing (None = free rollout)
     obs_pitch_type: Optional[jnp.ndarray]   = None,   # (B, T) int
     obs_plate_x: Optional[jnp.ndarray]      = None,   # (B, T) float
@@ -217,10 +221,15 @@ def hurdle_numpyro(
         name,
         HurdleNet(),
         jnp.ones((B, T, D_MODEL)),
-        jnp.ones((B, T, D_EXECUTION)),
+        jnp.ones((B, T, D_PRE_PITCH)),
+        jnp.ones((B, T, N_PITCH_TYPES + 3)),
     )
 
-    raw = net(shared_context, pitch_execution)
+    generation_raw = net(
+        shared_context,
+        pre_pitch,
+        jnp.zeros((B, T, N_PITCH_TYPES + 3)),
+    )
 
     def _sample(site, distribution, obs, mask):
         # Keep a dense sample for generated rollouts, but score observed values
@@ -233,27 +242,33 @@ def hurdle_numpyro(
     # ------------------------------------------------------------------ #
     # 1. pitch_type  — Categorical(K=8)                                   #
     # ------------------------------------------------------------------ #
-    pt_probs = jax.nn.softmax(raw["pitch_type_logits"], axis=-1)  # (B, T, K)
+    pt_probs = jax.nn.softmax(generation_raw["pitch_type_logits"], axis=-1)  # (B, T, K)
     pitch_type = _sample("pitch_type", dist.Categorical(probs=pt_probs),
                          obs_pitch_type, pitch_type_mask)  # (B, T) int
 
     # ------------------------------------------------------------------ #
     # 2. plate_x  — Normal                                                #
     # ------------------------------------------------------------------ #
-    plate_x = _sample("plate_x", dist.Normal(raw["plate_x_mu"], raw["plate_x_sigma"]),
+    plate_x = _sample("plate_x", dist.Normal(generation_raw["plate_x_mu"], generation_raw["plate_x_sigma"]),
                       obs_plate_x, plate_x_mask)  # (B, T) float
 
     # ------------------------------------------------------------------ #
     # 3. plate_z  — Normal                                                #
     # ------------------------------------------------------------------ #
-    plate_z = _sample("plate_z", dist.Normal(raw["plate_z_mu"], raw["plate_z_sigma"]),
+    plate_z = _sample("plate_z", dist.Normal(generation_raw["plate_z_mu"], generation_raw["plate_z_sigma"]),
                       obs_plate_z, plate_z_mask)  # (B, T) float
 
     # ------------------------------------------------------------------ #
     # 4. release_speed  — Normal                                          #
     # ------------------------------------------------------------------ #
-    release_speed = _sample("release_speed", dist.Normal(raw["speed_mu"], raw["speed_sigma"]),
+    release_speed = _sample("release_speed", dist.Normal(generation_raw["speed_mu"], generation_raw["speed_sigma"]),
                             obs_release_speed, release_speed_mask)  # (B, T) float
+
+    realised_pitch = jnp.concatenate([
+        jax.nn.one_hot(jnp.clip(pitch_type, 0, N_PITCH_TYPES - 1), N_PITCH_TYPES),
+        release_speed[..., None], plate_x[..., None], plate_z[..., None],
+    ], axis=-1)
+    raw = net(shared_context, pre_pitch, realised_pitch)
 
     # ------------------------------------------------------------------ #
     # 5. swing  — Bernoulli                                               #

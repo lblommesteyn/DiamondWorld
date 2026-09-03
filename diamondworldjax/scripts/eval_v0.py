@@ -73,15 +73,8 @@ def main() -> None:
     parser.add_argument("--limit-games", type=int, default=0,
                         help="If >0, evaluate only this many games (debug)")
     parser.add_argument("--legacy-hybrid", action="store_true",
-                        help="Run the old hybrid posterior-predictive diagnostic; its game metrics "
-                             "are not valid free-rollout metrics.")
+                        help="Removed: retained only for CLI compatibility.")
     args = parser.parse_args()
-
-    if not args.legacy_hybrid:
-        parser.error(
-            "eval_v0 cannot evaluate generated games: it conditions on real test-game structure. "
-            "Use eval_games.py, or pass --legacy-hybrid for diagnostics only."
-        )
 
     print("Importing JAX + NumPyro...", flush=True)
     import jax
@@ -91,7 +84,7 @@ def main() -> None:
     import polars as pl
     from diamondworldjax.data.pipeline import load_seasons
     from diamondworldjax.model.joint import diamondworld_model
-    from diamondworldjax.simulate.rollout import free_rollout_samples, extract_game_runs
+    from diamondworldjax.simulate.rollout import autoregressive_joint_rollout_samples
     from diamondworldjax.eval.calibration import game_run_metrics
     from diamondworldjax.train.svi import make_player_skills_guide
 
@@ -142,12 +135,11 @@ def main() -> None:
             continue
 
         rng, key = jax.random.split(rng)
-        samples = free_rollout_samples(
+        samples = autoregressive_joint_rollout_samples(
             diamondworld_model, guide, params,
             batch, player_table, key, num_samples=args.samples,
         )
-        # extract_game_runs returns (num_samples, B) — average over samples.
-        per_game = extract_game_runs(samples, batch["terminal_mask"])  # jnp
+        per_game = samples["runs_scored"].sum(axis=-1)  # (samples, games)
         per_game_np = np.asarray(per_game).mean(axis=0)                # (B,)
         sim_runs_per_game.append(per_game_np)
 

@@ -177,6 +177,12 @@ def main() -> None:
                              "park_idx fix; pre-v9 park embeddings trained on all-zeros).")
     parser.add_argument("--outcome-only", action="store_true",
                         help="Evaluate a v6 outcome-only checkpoint (single pa_outcome head).")
+    parser.add_argument("--pitchformer", action="store_true",
+                        help="Evaluate a causal PA-transformer checkpoint.")
+    parser.add_argument("--pitchformer-dim", type=int, default=128)
+    parser.add_argument("--pitchformer-layers", type=int, default=2)
+    parser.add_argument("--pitchformer-heads", type=int, default=4)
+    parser.add_argument("--pitchformer-dropout", type=float, default=0.0)
     args = parser.parse_args()
 
     mode = ("engine-rollout" if args.engine_rollout
@@ -254,6 +260,14 @@ def main() -> None:
         _mkw["outcome_only"] = True
     if args.fatigue:
         _mkw["fatigue"] = True
+    if args.pitchformer:
+        _mkw.update(
+            pitchformer=True,
+            pitchformer_dim=args.pitchformer_dim,
+            pitchformer_layers=args.pitchformer_layers,
+            pitchformer_heads=args.pitchformer_heads,
+            pitchformer_dropout=args.pitchformer_dropout,
+        )
     model_fn = _partial(pa_model, **_mkw) if _mkw else pa_model
 
     if args.free_rollout:
@@ -283,6 +297,7 @@ def main() -> None:
                 model_fn, params, pt, game_chunk, jax.random.fold_in(master_key, b_idx),
                 args.samples, seed=args.seed + b_idx,
                 recal=args.recal, recal_vec=RECAL_VECTOR,
+                pitchformer=args.pitchformer,
             )
             sim_chunks.append(away + home)
             if b_idx % 10 == 0 or b_idx + 1 == len(game_chunks):

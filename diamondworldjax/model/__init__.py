@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from .joint import diamondworld_model
+from .multitask import multitask_model, task_checkpoint_params
 from .embeddings import PlayerSeasonEncoder, PlayerRegistry, encode_players_numpyro
 from .fatigue import FatigueCell, fatigue_rollout, FATIGUE_DIM
 from .manager import ManagerNet, ManagerDecisions, manager_decisions_numpyro
@@ -23,6 +24,8 @@ from .transition import (
 __all__ = [
     # joint model
     "diamondworld_model",
+    "multitask_model",
+    "task_checkpoint_params",
     # embeddings
     "PlayerSeasonEncoder",
     "PlayerRegistry",

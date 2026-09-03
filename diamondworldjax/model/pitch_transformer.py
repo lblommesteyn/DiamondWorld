@@ -197,6 +197,7 @@ class PitchTransformer(nn.Module):
     n_heads: int = N_HEADS
     n_layers: int = N_LAYERS
     history_len: int = HISTORY_LEN
+    player_context_dim: int = 0
 
     @nn.compact
     def __call__(
@@ -208,6 +209,7 @@ class PitchTransformer(nn.Module):
         history_mask: jnp.ndarray,      # (B, T, H) bool
         fatigue_state: jnp.ndarray,     # (B, T, 16)
         manager_decision: jnp.ndarray,  # (B, T, M)
+        player_context: Optional[jnp.ndarray] = None,  # (B, T, player_context_dim)
         deterministic: bool = True,
     ) -> jnp.ndarray:                   # (B, T, d_model)
 
@@ -270,7 +272,10 @@ class PitchTransformer(nn.Module):
         # --- concatenate fatigue and manager decision ---
         M = manager_decision.shape[-1]
         augmented = jnp.concatenate([cls_out, fatigue_state, manager_decision], axis=-1)
-        # augmented: (B, T, D + 16 + M)
+        if self.player_context_dim:
+            if player_context is None or player_context.shape[-1] != self.player_context_dim:
+                raise ValueError("player_context must match player_context_dim")
+            augmented = jnp.concatenate([augmented, player_context], axis=-1)
 
         # --- final projection back to d_model ---
         shared_context = nn.Dense(D, name="final_proj")(augmented)   # (B, T, D)
@@ -291,6 +296,8 @@ def pitch_transformer_numpyro(
     history_mask: jnp.ndarray,       # (B, T, H) bool
     fatigue_state: jnp.ndarray,      # (B, T, 16)
     manager_decision: jnp.ndarray,   # (B, T, M)
+    pitcher_z: Optional[jnp.ndarray] = None,  # (B, T, D_player)
+    batter_z: Optional[jnp.ndarray] = None,   # (B, T, D_player)
     name: str = "pitch_transformer",
     deterministic: bool = True,
 ) -> jnp.ndarray:
@@ -301,9 +308,14 @@ def pitch_transformer_numpyro(
     B, T, H = hist_pitch_type.shape
     M = manager_decision.shape[-1]
 
+    if (pitcher_z is None) != (batter_z is None):
+        raise ValueError("pitcher_z and batter_z must be provided together")
+    player_context = None if pitcher_z is None else jnp.concatenate([pitcher_z, batter_z], axis=-1)
+    player_context_dim = 0 if player_context is None else player_context.shape[-1]
+
     transformer = flax_module(
         name,
-        PitchTransformer(),
+        PitchTransformer(player_context_dim=player_context_dim),
         jnp.zeros((B, T, H), dtype=jnp.int32),
         jnp.ones((B, T, H, 4)),
         jnp.zeros((B, T, H), dtype=jnp.int32),
@@ -311,11 +323,12 @@ def pitch_transformer_numpyro(
         jnp.ones((B, T, H), dtype=bool),
         jnp.ones((B, T, 16)),
         jnp.ones((B, T, M)),
+        None if player_context is None else jnp.ones((B, T, player_context_dim)),
     )
 
     shared_context = transformer(
         hist_pitch_type, hist_location, hist_outcome, hist_game_state,
-        history_mask, fatigue_state, manager_decision,
+        history_mask, fatigue_state, manager_decision, player_context,
         deterministic=deterministic,
     )
     return shared_context  # (B, T, 128)

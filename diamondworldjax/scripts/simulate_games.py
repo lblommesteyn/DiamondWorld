@@ -564,6 +564,11 @@ def main() -> None:
     ap.add_argument("--pitchformer", action="store_true",
                     help="Use the causal PA-level transformer for context (must match "
                          "the checkpoint's training flag).")
+    ap.add_argument("--pitchformer-dim", type=int, default=128,
+                    help="PA transformer hidden width; must match the checkpoint.")
+    ap.add_argument("--pitchformer-layers", type=int, default=2)
+    ap.add_argument("--pitchformer-heads", type=int, default=4)
+    ap.add_argument("--pitchformer-dropout", type=float, default=0.0)
     ap.add_argument("--use-park", action="store_true",
                     help="Feed real park indices (v9+ checkpoints trained with the "
                          "park_idx fix; pre-v9 park embeddings trained on all-zeros).")
@@ -628,7 +633,13 @@ def main() -> None:
     if args.platoon:
         mkw["platoon"] = True
     if args.pitchformer:
-        mkw["pitchformer"] = True
+        mkw.update(
+            pitchformer=True,
+            pitchformer_dim=args.pitchformer_dim,
+            pitchformer_layers=args.pitchformer_layers,
+            pitchformer_heads=args.pitchformer_heads,
+            pitchformer_dropout=args.pitchformer_dropout,
+        )
     model_fn = partial(pa_model, **mkw) if mkw else pa_model
 
     if args.recal_file is not None:

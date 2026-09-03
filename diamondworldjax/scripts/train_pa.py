@@ -370,6 +370,14 @@ def main() -> None:
                              "adapted from the pitchformer architecture. Each PA attends to "
                              "all previous PAs in the game. Fresh train (changes context dim). "
                              "Eval/sim scripts must pass the same flag.")
+    parser.add_argument("--pitchformer-dim", type=int, default=128,
+                        help="PA transformer hidden width; must match evaluation and checkpoint.")
+    parser.add_argument("--pitchformer-layers", type=int, default=2,
+                        help="Number of PA transformer blocks.")
+    parser.add_argument("--pitchformer-heads", type=int, default=4,
+                        help="Number of PA transformer attention heads.")
+    parser.add_argument("--pitchformer-dropout", type=float, default=0.0,
+                        help="PA transformer dropout rate during training.")
     parser.add_argument("--tag", type=str, default=None,
                         help="Checkpoint/log dir tag override (e.g. v6).")
     parser.add_argument("--train-end", type=int, default=2022,
@@ -451,7 +459,13 @@ def main() -> None:
         _mkw["player_agg_weight"] = args.player_agg_weight
         _mkw["player_agg_shrink"] = args.player_agg_shrink
     if args.pitchformer:
-        _mkw["pitchformer"] = True
+        _mkw.update(
+            pitchformer=True,
+            pitchformer_dim=args.pitchformer_dim,
+            pitchformer_layers=args.pitchformer_layers,
+            pitchformer_heads=args.pitchformer_heads,
+            pitchformer_dropout=args.pitchformer_dropout,
+        )
     _mkw["kl_scale"] = kl_scale
     model_fn = partial(pa_model, **_mkw)
 

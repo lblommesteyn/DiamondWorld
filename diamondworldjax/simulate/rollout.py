@@ -17,7 +17,7 @@ import jax.numpy as jnp
 import numpyro
 from numpyro.infer import Predictive
 
-from diamondworldjax.domain import ArrayGameState, PitchResult, apply_pitch_result
+from diamondworldjax.domain import ArrayGameState, PitchResult, apply_pitch_result, batting_score_diff
 
 
 class StepDistribution(NamedTuple):
@@ -322,6 +322,164 @@ def free_rollout_samples(
         player_table,
         teacher_force = False,
     )
+
+
+def autoregressive_joint_rollout_samples(
+    model: Callable,
+    guide: Any,
+    params: dict,
+    batch: dict,
+    player_table: dict,
+    rng_key: jax.Array,
+    num_samples: int = 1,
+) -> dict:
+    """Generate the joint pitch model without replaying observed pitch history.
+
+    The legacy posterior-predictive route calls the model once on a complete
+    recorded game, which makes position ``t`` read the real pitches at
+    ``< t``.  This routine instead calls the model once per pitch, writes the
+    sampled pitch back into its history buffer, and advances balls, strikes,
+    bases, outs, scores, and pitch counts with :func:`apply_pitch_result`.
+
+    Player/park IDs and rule-era settings remain exogenous.  This is therefore a
+    generated *pitch and game-state* rollout on an observed roster schedule, not
+    yet a lineup/roster generator.
+    """
+    import numpy as np
+    import numpyro.handlers as handlers
+
+    valid = np.asarray(batch["pitch_valid"], dtype=bool)
+    B, T = valid.shape
+    if num_samples < 1:
+        raise ValueError("num_samples must be positive")
+
+    # Only exogenous covariates survive from the supplied recorded batch. Every
+    # generated pitch/state field starts neutral and is filled causally below.
+    preserve = {"pitch_valid", "pitcher_ids", "batter_ids", "park_ids", "game_ids",
+                "shift_restricted", "pitch_clock"}
+    template: dict[str, np.ndarray] = {}
+    for name, value in batch.items():
+        array = np.asarray(value)
+        if name in preserve or array.shape != (B, T):
+            template[name] = array.copy()
+        else:
+            template[name] = np.zeros_like(array)
+
+    def _draw_player_skills(key):
+        with handlers.seed(rng_seed=key):
+            with handlers.substitute(data=params):
+                with handlers.trace() as trace:
+                    guide(batch, player_table, teacher_force=False)
+        try:
+            return trace["player_skills"]["value"]
+        except KeyError as exc:
+            raise ValueError(
+                "joint autoregressive rollout requires a guide with a player_skills site"
+            ) from exc
+
+    def _write_state(rolling: dict[str, np.ndarray], state: ArrayGameState, t: int):
+        rolling["inning"][:, t] = np.asarray((state.inning - 1) / 8.0)
+        rolling["half"][:, t] = np.asarray(state.half)
+        rolling["balls"][:, t] = np.asarray(state.balls / 3.0)
+        rolling["strikes"][:, t] = np.asarray(state.strikes / 2.0)
+        rolling["outs"][:, t] = np.asarray(state.outs / 2.0)
+        rolling["base_state"][:, t] = np.asarray(state.base_state / 7.0)
+        rolling["score_diff"][:, t] = np.asarray(batting_score_diff(state) / 10.0)
+        rolling["pitch_count_game"][:, t] = np.asarray(state.pitch_count_game / 120.0)
+        rolling["pitch_count_inning"][:, t] = np.asarray(state.pitch_count_inning / 30.0)
+        rolling["pitch_count_pa"][:, t] = np.asarray(state.pitch_count_pa / 10.0)
+        rolling["tto"][:, t] = np.asarray(state.tto / 3.0)
+
+    samples: list[dict[str, np.ndarray]] = []
+    sample_keys = jax.random.split(rng_key, num_samples)
+    for sample_key in sample_keys:
+        sample_key, guide_key = jax.random.split(sample_key)
+        player_skills = _draw_player_skills(guide_key)
+        rolling = {name: value.copy() for name, value in template.items()}
+        state = initial_game_state(B)
+        game_over = jnp.zeros((B,), dtype=bool)
+        record_dtypes = {
+            "pitch_type": batch["pitch_type"].dtype,
+            "plate_x": batch["plate_x"].dtype,
+            "plate_z": batch["plate_z"].dtype,
+            "release_speed": batch["release_speed"].dtype,
+            "swing": batch["obs_swing"].dtype,
+            "called_strike": batch["obs_called_strike"].dtype,
+            "contact": batch["obs_contact"].dtype,
+            "foul": batch["obs_foul"].dtype,
+            "launch_speed": batch["launch_speed"].dtype,
+            "launch_angle": batch["launch_angle"].dtype,
+            "spray_angle": batch["spray_angle"].dtype,
+            "hit_distance": batch["hit_distance"].dtype,
+            "pa_outcome": batch["pa_outcome"].dtype,
+            "runs_scored": batch["runs_scored"].dtype,
+            "base_state_after": batch["base_state_after"].dtype,
+            "outs_added": batch["outs_added"].dtype,
+        }
+        records = {name: np.zeros((B, T), dtype=dtype) for name, dtype in record_dtypes.items()}
+        records["pa_terminal"] = np.zeros((B, T), dtype=bool)
+
+        for t in range(T):
+            active = jnp.asarray(valid[:, t]) & ~game_over
+            if not bool(np.any(np.asarray(active))):
+                continue
+            _write_state(rolling, state, t)
+            sample_key, step_key = jax.random.split(sample_key)
+            model_batch = {name: jnp.asarray(value) for name, value in rolling.items()}
+            with handlers.seed(rng_seed=step_key):
+                with handlers.substitute(data={**params, "player_skills": player_skills}):
+                    with handlers.trace() as trace:
+                        model(model_batch, player_table, teacher_force=False)
+
+            def value(name):
+                return jnp.asarray(trace[name]["value"])[:, t]
+
+            pitch_type = value("pitch_type")
+            plate_x = value("plate_x")
+            plate_z = value("plate_z")
+            release_speed = value("release_speed")
+            swing, called_strike = value("swing"), value("called_strike")
+            contact, foul = value("contact"), value("foul")
+            runs_scored = value("runs_scored")
+            base_after, outs_added = value("base_state_after"), value("outs_added")
+            pa_outcome = value("pa_outcome")
+            previous_state = state
+            stepped = apply_pitch_result(
+                state,
+                PitchResult(swing, called_strike, contact, foul, runs_scored,
+                            base_after, outs_added, pa_outcome),
+            )
+            state = _keep_active_state(state, stepped.state, active)
+            terminal = stepped.pa_terminal & active
+            game_over = game_over | (stepped.game_over & active)
+
+            generated = {
+                "pitch_type": pitch_type, "plate_x": plate_x, "plate_z": plate_z,
+                "release_speed": release_speed,
+            }
+            for name, generated_value in generated.items():
+                previous = jnp.asarray(rolling[name][:, t])
+                rolling[name][:, t] = np.asarray(jnp.where(active, generated_value, previous))
+            # The model has no movement generator. Neutral movement is already
+            # present in the buffer and avoids carrying observed pfx values.
+
+            for name in records:
+                if name == "pa_terminal":
+                    records[name][:, t] = np.asarray(terminal)
+                elif name == "runs_scored":
+                    # Record realised scoreboard movement, not a raw transition
+                    # draw that might be irrelevant on a non-terminal pitch.
+                    records[name][:, t] = np.asarray(
+                        (state.home_score + state.away_score)
+                        - (previous_state.home_score + previous_state.away_score)
+                    )
+                elif name == "pa_outcome":
+                    records[name][:, t] = np.asarray(jnp.where(terminal, stepped.outcome, -1))
+                else:
+                    records[name][:, t] = np.asarray(jnp.where(active, value(name), 0))
+        samples.append(records)
+    return {name: jnp.asarray(np.stack([sample[name] for sample in samples], axis=0))
+            for name in samples[0]}
 
 
 # ---------------------------------------------------------------------------

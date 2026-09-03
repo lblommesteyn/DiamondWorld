@@ -29,10 +29,8 @@ class PATransformer(nn.Module):
     Parameters
     ----------
     d_model : int
-        Hidden dimension.  128 matches the PA model's existing CONTEXT_DIM
-        convention and keeps the outcome head's first Dense layer the same width
-        as without the transformer, so a checkpoint trained without --pitchformer
-        can't accidentally be loaded with it (the shape would mismatch).
+        Hidden dimension.  128 is the default, but the value is part of the
+        checkpoint architecture and must be supplied again at evaluation time.
     n_layers : int
         Number of CausalBlock layers.  2 by default — PA sequences are shorter
         (~70 PAs per game) than pitch sequences (~300), so depth matters less
@@ -86,6 +84,10 @@ class PATransformer(nn.Module):
 def pa_transformer_numpyro(
     context_raw: jnp.ndarray,    # (B, T, C)
     valid_mask: jnp.ndarray,     # (B, T)
+    d_model: int = 128,
+    n_layers: int = 2,
+    n_heads: int = 4,
+    dropout: float = 0.0,
     name: str = "pa_transformer",
 ) -> jnp.ndarray:
     """Register PATransformer as a flax_module site and return (B, T, d_model).
@@ -94,12 +96,24 @@ def pa_transformer_numpyro(
     module's parameters become point-estimated NumPyro sites that SVI optimises
     alongside the probabilistic latents.
     """
+    if d_model <= 0 or n_layers <= 0 or n_heads <= 0:
+        raise ValueError("pitchformer dim, layers, and heads must all be positive")
+    if d_model % n_heads:
+        raise ValueError("pitchformer dim must be divisible by pitchformer heads")
+    if not 0.0 <= dropout < 1.0:
+        raise ValueError("pitchformer dropout must be in [0, 1)")
+
     B, T = valid_mask.shape
     C = context_raw.shape[-1]
 
     transformer = flax_module(
         name,
-        PATransformer(),
+        PATransformer(
+            d_model=d_model,
+            n_layers=n_layers,
+            n_heads=n_heads,
+            dropout=dropout,
+        ),
         jnp.ones((B, T, C)),           # context_raw dummy
         jnp.ones((B, T), dtype=bool),   # valid_mask dummy
     )

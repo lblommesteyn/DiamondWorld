@@ -306,6 +306,11 @@ def pa_model(
     season_base: int = 2015,
     n_seasons: int = 9,
     pitchformer: bool = False,
+    pitchformer_dim: int = 128,
+    pitchformer_layers: int = 2,
+    pitchformer_heads: int = 4,
+    pitchformer_dropout: float = 0.0,
+    player_skills_override: jnp.ndarray | None = None,
 ) -> None:
     B, T = batch["pa_valid"].shape
     P    = player_table["stats"].shape[0]
@@ -331,60 +336,56 @@ def pa_model(
     #             correlation in the PRIOR (hence in the KL), not new expressive
     #             power. Included so the redundancy can be measured rather than
     #             assumed.
-    with _nph.scale(scale=kl_scale):
-        if skill_prior == "iso":
-            skill_dist = dist.Normal(
-                jnp.zeros((P, SKILL_DIM)), jnp.ones((P, SKILL_DIM))
-            ).to_event(2)
-        elif skill_prior == "learned":
-            tau = numpyro.sample(
-                "skill_tau", dist.HalfNormal(jnp.ones(SKILL_DIM)).to_event(1)
-            )
-            skill_dist = dist.Normal(
-                jnp.zeros((P, SKILL_DIM)), jnp.broadcast_to(tau, (P, SKILL_DIM))
-            ).to_event(2)
-        elif skill_prior == "lkj":
-            tau = numpyro.sample(
-                "skill_tau", dist.HalfNormal(jnp.ones(SKILL_DIM)).to_event(1)
-            )
-            L_omega = numpyro.sample(
-                "skill_L", dist.LKJCholesky(SKILL_DIM, concentration=2.0)
-            )
-            scale_tril = tau[:, None] * L_omega
-            skill_dist = dist.MultivariateNormal(
-                jnp.zeros((P, SKILL_DIM)), scale_tril=scale_tril
-            ).to_event(1)
-        elif skill_prior == "walk":
-            # Per-(player, season) skill following a random walk across seasons:
-            #   z[p, 0] ~ N(0, 1),  z[p, s] ~ N(z[p, s-1], sigma_walk).
-            # This is the principled version of the recency lever. Recency weighting
-            # (v12+) hand-builds a "current form" prior by exponentially discounting
-            # older seasons in the FEATURES; a random walk instead lets the model
-            # infer how fast talent actually drifts, and it is the same structure age
-            # curves would need. Sampled in non-centred form (innovations, then
-            # cumsum) because a centred hierarchy of this depth funnels badly under
-            # mean-field SVI.
-            sigma_walk = numpyro.sample("skill_walk_sigma", dist.HalfNormal(0.3))
-            eps = numpyro.sample(
-                "player_skill_eps",
-                dist.Normal(jnp.zeros((P, n_seasons, SKILL_DIM)),
-                            jnp.ones((P, n_seasons, SKILL_DIM))).to_event(3),
-            )
-            steps = jnp.concatenate(
-                [eps[:, :1, :], eps[:, 1:, :] * sigma_walk], axis=1
-            )
-            player_skills = numpyro.deterministic(
-                "player_skills_walk", jnp.cumsum(steps, axis=1)
-            )
-            skill_dist = None
-        else:
-            raise ValueError(f"unknown skill_prior {skill_prior!r}")
-        if skill_dist is not None:
-            player_skills = numpyro.sample("player_skills", skill_dist)
+    if player_skills_override is not None:
+        if player_skills_override.shape[0] != P:
+            raise ValueError("player_skills_override must have one row per player")
+        player_skills = player_skills_override
+    else:
+        with _nph.scale(scale=kl_scale):
+            if skill_prior == "iso":
+                skill_dist = dist.Normal(
+                    jnp.zeros((P, SKILL_DIM)), jnp.ones((P, SKILL_DIM))
+                ).to_event(2)
+            elif skill_prior == "learned":
+                tau = numpyro.sample(
+                    "skill_tau", dist.HalfNormal(jnp.ones(SKILL_DIM)).to_event(1)
+                )
+                skill_dist = dist.Normal(
+                    jnp.zeros((P, SKILL_DIM)), jnp.broadcast_to(tau, (P, SKILL_DIM))
+                ).to_event(2)
+            elif skill_prior == "lkj":
+                tau = numpyro.sample(
+                    "skill_tau", dist.HalfNormal(jnp.ones(SKILL_DIM)).to_event(1)
+                )
+                L_omega = numpyro.sample(
+                    "skill_L", dist.LKJCholesky(SKILL_DIM, concentration=2.0)
+                )
+                scale_tril = tau[:, None] * L_omega
+                skill_dist = dist.MultivariateNormal(
+                    jnp.zeros((P, SKILL_DIM)), scale_tril=scale_tril
+                ).to_event(1)
+            elif skill_prior == "walk":
+                sigma_walk = numpyro.sample("skill_walk_sigma", dist.HalfNormal(0.3))
+                eps = numpyro.sample(
+                    "player_skill_eps",
+                    dist.Normal(jnp.zeros((P, n_seasons, SKILL_DIM)),
+                                jnp.ones((P, n_seasons, SKILL_DIM))).to_event(3),
+                )
+                steps = jnp.concatenate(
+                    [eps[:, :1, :], eps[:, 1:, :] * sigma_walk], axis=1
+                )
+                player_skills = numpyro.deterministic(
+                    "player_skills_walk", jnp.cumsum(steps, axis=1)
+                )
+                skill_dist = None
+            else:
+                raise ValueError(f"unknown skill_prior {skill_prior!r}")
+            if skill_dist is not None:
+                player_skills = numpyro.sample("player_skills", skill_dist)
 
     # Player embeddings
     season_idx = None
-    if skill_prior == "walk":
+    if skill_prior == "walk" and player_skills_override is None:
         # Clamp into [0, n_seasons-1]. The clamp is what makes the test season work:
         # 2024 is unseen in training, so it maps to the last TRAINED season's skill,
         # which is exactly the "most recent form" quantity the recency lever
@@ -429,7 +430,14 @@ def pa_model(
 
     if pitchformer:
         from .pa_transformer import pa_transformer_numpyro
-        context = pa_transformer_numpyro(context_raw, batch["pa_valid"])  # (B, T, 128)
+        context = pa_transformer_numpyro(
+            context_raw,
+            batch["pa_valid"],
+            d_model=pitchformer_dim,
+            n_layers=pitchformer_layers,
+            n_heads=pitchformer_heads,
+            dropout=pitchformer_dropout,
+        )
     else:
         context = context_raw
 
