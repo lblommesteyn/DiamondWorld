@@ -52,8 +52,20 @@ def build_batch(df: pl.DataFrame, max_t: int = MAX_T) -> dict[str, Any]:
     terminal_mask = _alloc_b()
     in_play_mask  = _alloc_b()
     swing_mask    = _alloc_b()
+    called_strike_mask = _alloc_b()
     contact_mask  = _alloc_b()
+    foul_mask     = _alloc_b()
+    mgr_pitch_change_mask = _alloc_b()
+    mgr_steal_mask = _alloc_b()
     batted_mask   = _alloc_b()
+    runs_mask     = _alloc_b()
+    base_after_mask = _alloc_b()
+    outs_added_mask = _alloc_b()
+    pa_outcome_mask = _alloc_b()
+    launch_speed_mask = _alloc_b()
+    launch_angle_mask = _alloc_b()
+    spray_angle_mask = _alloc_b()
+    hit_distance_mask = _alloc_b()
 
     # State
     inning       = _alloc_f()
@@ -65,6 +77,7 @@ def build_batch(df: pl.DataFrame, max_t: int = MAX_T) -> dict[str, Any]:
     score_diff   = _alloc_f()
     pc_game      = _alloc_f()
     pc_inning    = _alloc_f()
+    pc_pa        = _alloc_f()
     tto_arr      = _alloc_f()
     shift_restr  = _alloc_f()
     pitch_clock  = _alloc_f()
@@ -94,6 +107,7 @@ def build_batch(df: pl.DataFrame, max_t: int = MAX_T) -> dict[str, Any]:
     pa_outcome   = _alloc_i(-1)
     runs_scored  = _alloc_i(0)
     bs_after     = _alloc_i(0)
+    outs_added   = _alloc_i(-1)
 
     # Player IDs
     pitcher_ids  = _alloc_i(0)
@@ -106,13 +120,22 @@ def build_batch(df: pl.DataFrame, max_t: int = MAX_T) -> dict[str, Any]:
 
     def _get(col, default=0.0): return _col(col, default)
 
+    def _observed(*names: str, missing: float = -1.0) -> np.ndarray:
+        """Return the first available observed label, preserving null as NaN."""
+        for name in names:
+            if name in df.columns:
+                return df[name].to_numpy().astype(np.float64)
+        return np.full(len(df), missing, dtype=np.float64)
+
     raw_inning   = _get("inning", 1)
     raw_half     = _col("half_bin", 0) if "half_bin" in df.columns else np.zeros(len(df))
     raw_balls    = _get("balls")
     raw_strikes  = _get("strikes")
     raw_outs     = _get("outs")
     raw_bs       = _get("base_state")
-    raw_sd       = (_get("home_score") - _get("away_score"))
+    raw_sd       = _get("score_diff") if "score_diff" in df.columns else (
+        _get("home_score") - _get("away_score")
+    )
     raw_pcg      = _get("pitch_count_game")
     raw_pci      = _get("pitch_count_inning")
     raw_tto      = _get("tto", 1)
@@ -131,14 +154,26 @@ def build_batch(df: pl.DataFrame, max_t: int = MAX_T) -> dict[str, Any]:
     raw_pao      = _col("pa_outcome_idx", -1)
     raw_runs     = _get("runs_scored")
     raw_bsa      = _get("base_state_after")
+    raw_outs_added = _observed("outs_added")
     raw_pit      = _get("pitcher_id") if "pitcher_id" in df.columns else _get("pitcher_idx")
     raw_bat      = _get("batter_id") if "batter_id" in df.columns else _get("batter_idx")
-    raw_park     = _get("park_idx")
+    if "park_idx" in df.columns:
+        raw_park = _get("park_idx")
+    elif "park_id" in df.columns and np.issubdtype(df["park_id"].to_numpy().dtype, np.number):
+        raw_park = _get("park_id")
+    else:
+        raw_park = np.zeros(len(df))
     raw_terminal = _col("pa_terminal", False).astype(bool)
-    # Hurdle observations (encoded int8 by pipeline.py; -1 = missing)
-    raw_swing_obs    = _col("swing_obs",    -1).astype(np.float64)
-    raw_contact_obs  = _col("contact_obs",  -1).astype(np.float64)
-    raw_foul_obs     = _col("foul_obs",     -1).astype(np.float64)
+    raw_pitch_number = _get("pitch_number", 1)
+    raw_pc_pa = _get("pitch_count_pa") if "pitch_count_pa" in df.columns else raw_pitch_number - 1
+    # Hurdle observations (encoded int8 by pipeline.py; -1 = missing).
+    raw_swing_obs = _observed("swing_obs", "swing")
+    raw_cs_obs = _observed("called_strike_obs", "called_strike")
+    raw_contact_obs = _observed("contact_obs", "contact")
+    raw_foul_obs = _observed("foul_obs", "foul")
+    raw_in_play_obs = _observed("in_play_obs", "in_play")
+    raw_mgr_pitch_change = _observed("mgr_pitch_change")
+    raw_mgr_steal = _observed("mgr_steal")
 
     sort_key1 = _get("at_bat_number") if "at_bat_number" in df.columns else _get("game_pk")
     sort_key2 = _get("pitch_number")
@@ -167,6 +202,7 @@ def build_batch(df: pl.DataFrame, max_t: int = MAX_T) -> dict[str, Any]:
         _fill(score_diff,  raw_sd / 10.0)
         _fill(pc_game,     raw_pcg / 100.0)
         _fill(pc_inning,   raw_pci / 30.0)
+        _fill(pc_pa,       raw_pc_pa / 10.0)
         _fill(tto_arr,     raw_tto / 3.0)
         _fill(shift_restr, raw_sr)
         _fill(pitch_clock, raw_pc)
@@ -183,20 +219,67 @@ def build_batch(df: pl.DataFrame, max_t: int = MAX_T) -> dict[str, Any]:
         _fill(pa_outcome,  raw_pao, fill=-1)
         _fill(runs_scored, raw_runs)
         _fill(bs_after,    raw_bsa)
+        _fill(outs_added,  raw_outs_added, fill=-1)
         _fill(pitcher_ids, raw_pit, fill=0)
         _fill(batter_ids,  raw_bat, fill=0)
         _fill(park_ids,    raw_park, fill=0)
 
         terminal_slice = raw_terminal[mask][order][:n]
-        terminal_mask[b_idx, :n] = terminal_slice
-        in_play_mask[b_idx, :n]  = terminal_slice  # proxy
-        swing_mask[b_idx, :n]    = True  # all valid pitches have a swing decision
-        batted_mask[b_idx, :n]   = terminal_slice
+        swing_slice = raw_swing_obs[mask][order][:n]
+        contact_slice = raw_contact_obs[mask][order][:n]
+        called_strike_slice = raw_cs_obs[mask][order][:n]
+        foul_slice = raw_foul_obs[mask][order][:n]
+        mgr_pitch_change_slice = raw_mgr_pitch_change[mask][order][:n]
+        mgr_steal_slice = raw_mgr_steal[mask][order][:n]
+        in_play_slice = raw_in_play_obs[mask][order][:n]
+        outcome_slice = raw_pao[mask][order][:n]
+        runs_slice = raw_runs[mask][order][:n]
+        base_after_slice = raw_bsa[mask][order][:n]
+        outs_added_slice = raw_outs_added[mask][order][:n]
+        launch_speed_slice = raw_ls[mask][order][:n]
+        launch_angle_slice = raw_la[mask][order][:n]
+        spray_angle_slice = raw_sa[mask][order][:n]
+        hit_distance_slice = raw_hd[mask][order][:n]
 
-        # Fill hurdle obs from data (pipeline encodes swing/contact/foul as int8)
+        terminal_mask[b_idx, :n] = terminal_slice
+        swing_mask[b_idx, :n] = np.isfinite(swing_slice) & (swing_slice >= 0)
+        called_strike_mask[b_idx, :n] = (
+            (swing_slice == 0) & np.isfinite(called_strike_slice) & (called_strike_slice >= 0)
+        )
+        contact_mask[b_idx, :n] = (
+            (swing_slice == 1) & np.isfinite(contact_slice) & (contact_slice >= 0)
+        )
+        foul_mask[b_idx, :n] = (
+            (contact_slice == 1) & np.isfinite(foul_slice) & (foul_slice >= 0)
+        )
+        mgr_pitch_change_mask[b_idx, :n] = (
+            np.isfinite(mgr_pitch_change_slice) & (mgr_pitch_change_slice >= 0)
+        )
+        mgr_steal_mask[b_idx, :n] = np.isfinite(mgr_steal_slice) & (mgr_steal_slice >= 0)
+        in_play_mask[b_idx, :n] = np.isfinite(in_play_slice) & (in_play_slice == 1)
+        batted_mask[b_idx, :n] = in_play_mask[b_idx, :n]
+        runs_mask[b_idx, :n] = terminal_slice & np.isfinite(runs_slice)
+        base_after_mask[b_idx, :n] = terminal_slice & np.isfinite(base_after_slice)
+        outs_added_mask[b_idx, :n] = (
+            terminal_slice
+            & np.isfinite(outs_added_slice)
+            & (outs_added_slice >= 0)
+            & (outs_added_slice <= 3)
+        )
+        pa_outcome_mask[b_idx, :n] = terminal_slice & np.isfinite(outcome_slice) & (outcome_slice >= 0)
+        launch_speed_mask[b_idx, :n] = batted_mask[b_idx, :n] & np.isfinite(launch_speed_slice)
+        launch_angle_mask[b_idx, :n] = batted_mask[b_idx, :n] & np.isfinite(launch_angle_slice)
+        spray_angle_mask[b_idx, :n] = batted_mask[b_idx, :n] & np.isfinite(spray_angle_slice)
+        hit_distance_mask[b_idx, :n] = batted_mask[b_idx, :n] & np.isfinite(hit_distance_slice)
+
+        # Fill hurdle obs from data (pipeline encodes swing/contact/foul as int8).
         _fill(swing_obs,   raw_swing_obs,   fill=-1)
+        _fill(cs_obs,      raw_cs_obs,      fill=-1)
         _fill(contact_obs, raw_contact_obs, fill=-1)
         _fill(foul_obs,    raw_foul_obs,    fill=-1)
+        _fill(in_play_obs, raw_in_play_obs, fill=-1)
+        _fill(mgr_pitch_change, raw_mgr_pitch_change, fill=-1)
+        _fill(mgr_steal, raw_mgr_steal, fill=-1)
 
     return {
         # Masks
@@ -204,8 +287,20 @@ def build_batch(df: pl.DataFrame, max_t: int = MAX_T) -> dict[str, Any]:
         "terminal_mask": jnp.array(terminal_mask),
         "in_play_mask":  jnp.array(in_play_mask),
         "swing_mask":    jnp.array(swing_mask),
+        "called_strike_mask": jnp.array(called_strike_mask),
         "contact_mask":  jnp.array(contact_mask),
+        "foul_mask":     jnp.array(foul_mask),
+        "mgr_pitch_change_mask": jnp.array(mgr_pitch_change_mask),
+        "mgr_steal_mask": jnp.array(mgr_steal_mask),
         "batted_mask":   jnp.array(batted_mask),
+        "runs_mask":     jnp.array(runs_mask),
+        "base_state_after_mask": jnp.array(base_after_mask),
+        "outs_added_mask": jnp.array(outs_added_mask),
+        "pa_outcome_mask": jnp.array(pa_outcome_mask),
+        "launch_speed_mask": jnp.array(launch_speed_mask),
+        "launch_angle_mask": jnp.array(launch_angle_mask),
+        "spray_angle_mask": jnp.array(spray_angle_mask),
+        "hit_distance_mask": jnp.array(hit_distance_mask),
         # State
         "inning":        jnp.array(inning),
         "half":          jnp.array(half_bin),
@@ -216,6 +311,7 @@ def build_batch(df: pl.DataFrame, max_t: int = MAX_T) -> dict[str, Any]:
         "score_diff":    jnp.array(score_diff),
         "pitch_count_game":    jnp.array(pc_game),
         "pitch_count_inning":  jnp.array(pc_inning),
+        "pitch_count_pa":      jnp.array(pc_pa),
         "tto":           jnp.array(tto_arr),
         "shift_restricted": jnp.array(shift_restr),
         "pitch_clock":   jnp.array(pitch_clock),
@@ -226,11 +322,11 @@ def build_batch(df: pl.DataFrame, max_t: int = MAX_T) -> dict[str, Any]:
         "plate_z":       jnp.array(plate_z),
         "pfx_x":         jnp.array(pfx_x),
         "pfx_z":         jnp.array(pfx_z),
-        # Hurdle observations (called_strike and in_play are never populated
-        # from the raw data so they are omitted; batch.get() returns None)
         "obs_swing":     jnp.array(swing_obs),
+        "obs_called_strike": jnp.array(cs_obs),
         "obs_contact":   jnp.array(contact_obs),
         "obs_foul":      jnp.array(foul_obs),
+        "obs_in_play":   jnp.array(in_play_obs),
         # Batted ball
         "launch_speed":  jnp.array(launch_spd),
         "launch_angle":  jnp.array(launch_ang),
@@ -240,6 +336,7 @@ def build_batch(df: pl.DataFrame, max_t: int = MAX_T) -> dict[str, Any]:
         "pa_outcome":    jnp.array(pa_outcome),
         "runs_scored":   jnp.array(runs_scored),
         "base_state_after": jnp.array(bs_after),
+        "outs_added":    jnp.array(outs_added),
         # Player IDs
         "pitcher_ids":   jnp.array(pitcher_ids),
         "batter_ids":    jnp.array(batter_ids),

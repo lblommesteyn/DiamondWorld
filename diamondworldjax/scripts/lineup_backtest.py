@@ -36,13 +36,14 @@ def main():
     args = ap.parse_args()
 
     s = Sim()
+    unknown = s.unknown_idx
     bstat = s.stats
     bq = bstat[:, 0] + 1.8 * bstat[:, 3] + 0.7 * bstat[:, 1] - 0.3 * bstat[:, 2]     # wOBA-ish
     obp = bstat[:, 0] + 0.7 * bstat[:, 1]
     games = [g for g in s.real_games(2024, limit=1500)
-             if g["park"] != 0 and g["home_staff"] and g["home_staff"][0] != 0
-             and g["away_staff"] and g["away_staff"][0] != 0
-             and sum(1 for x in g["home_lineup"] if x != 0) == 9][:args.games]
+             if g["park"] != 0 and g["home_staff"] and g["home_staff"][0] != unknown
+             and g["away_staff"] and g["away_staff"][0] != unknown
+             and sum(1 for x in g["home_lineup"] if x != unknown) == 9][:args.games]
     print(f"{len(games)} games; {args.cands} candidate orders each", flush=True)
 
     rng = np.random.default_rng(0)

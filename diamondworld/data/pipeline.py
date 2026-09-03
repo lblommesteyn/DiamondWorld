@@ -13,6 +13,7 @@ from diamondworld.data.mlb_api import fetch_live_feed, fetch_play_by_play, home_
 from diamondworld.data.paths import ensure_data_dirs, processed_root
 from diamondworld.data.schema import OUTCOME_BY_EVENT, PITCH_COLUMNS, PITCH_SCHEMA
 from diamondworld.data.statcast import fetch_statcast_season
+from diamondworld.data.transitions import annotate_terminal_outs
 from diamondworld.data.validate import validate_parquet
 
 SWING_DESCRIPTIONS = {
@@ -119,7 +120,7 @@ def build_pitch_rows(
         runner_state = runner_states.get(game_pk, {}).get(at_bat, AtBatRunnerState())
         current_sources = base_sources[(game_pk, inning, half)]
         history = reached_history[(game_pk, half)]
-        reached = outcome in {"BB", "HBP", "1B", "2B", "3B", "HR"}
+        reached = outcome in {"BB", "HBP", "1B", "2B", "3B", "HR", "E"}
         mean_velo = first_inning_velo.get((game_pk, pitcher_id))
         release_speed = raw.get("release_speed")
 
@@ -181,6 +182,7 @@ def build_pitch_rows(
         if current["game_pk"] == nxt["game_pk"]:
             current["base_state_after"] = nxt["base_state"]
 
+    annotate_terminal_outs(output)
     return output
 
 

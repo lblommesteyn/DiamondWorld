@@ -1,8 +1,12 @@
 """DiamondWorldJAX v0 evaluation.
 
-Loads a trained checkpoint and simulates test-season games via free rollout
-(teacher_force=False).  Produces the standard game-level run distribution
-metrics so the JAX model can be compared directly against PyTorch baselines.
+Loads a legacy pitch-level checkpoint for posterior-predictive diagnostics.
+
+This script is intentionally *not* a valid game simulator: its old
+posterior-predictive path retains real test-game pitch slots and terminal masks.
+It therefore refuses to report game-simulation metrics unless the caller opts
+into the explicitly labelled legacy diagnostic mode. Use ``eval_games.py`` for
+the causal PA outcome simulator.
 
 Usage
 -----
@@ -68,7 +72,16 @@ def main() -> None:
                         default=_RESULTS_DIR / "dwjax_v0.json")
     parser.add_argument("--limit-games", type=int, default=0,
                         help="If >0, evaluate only this many games (debug)")
+    parser.add_argument("--legacy-hybrid", action="store_true",
+                        help="Run the old hybrid posterior-predictive diagnostic; its game metrics "
+                             "are not valid free-rollout metrics.")
     args = parser.parse_args()
+
+    if not args.legacy_hybrid:
+        parser.error(
+            "eval_v0 cannot evaluate generated games: it conditions on real test-game structure. "
+            "Use eval_games.py, or pass --legacy-hybrid for diagnostics only."
+        )
 
     print("Importing JAX + NumPyro...", flush=True)
     import jax

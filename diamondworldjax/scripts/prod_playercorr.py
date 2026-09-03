@@ -113,14 +113,15 @@ def main():
 
     # per-batter accumulators
     P = len(ptab["hand"])
+    unknown_idx = ptab["unknown_index"]
     sumK = np.zeros(P); sumBB = np.zeros(P); sumHit = np.zeros(P); sumHR = np.zeros(P)
     rK = np.zeros(P); rBB = np.zeros(P); rHit = np.zeros(P); rHR = np.zeros(P); cnt = np.zeros(P)
     for i in range(0, len(gids), 64):
         df = te.filter(pl.col("game_pk").is_in(gids[i:i+64].tolist())).sort(["game_pk", "at_bat_number"])
         b = build_pa_batch(df)
-        batmap = np.vectorize(lambda x: id2i.get(int(x), 0))(np.array(b["batter_ids"]))
+        batmap = np.vectorize(lambda x: id2i.get(int(x), unknown_idx))(np.array(b["batter_ids"]))
         for k in ("pitcher_ids", "batter_ids"):
-            b[k] = np.vectorize(lambda x: id2i.get(int(x), 0))(np.array(b[k]))
+            b[k] = np.vectorize(lambda x: id2i.get(int(x), unknown_idx))(np.array(b[k]))
         for k in list(b):
             if k != "game_ids": b[k] = jnp.array(np.array(b[k]))
         with nh.seed(rng_seed=0):
@@ -132,22 +133,17 @@ def main():
         valid = np.array(b["pa_valid"]); y = np.array(b["pa_outcome"])
         m = valid & (y >= 0)
         bidx = batmap[m]; pv = pp[m]; yi = np.clip(y[m], 0, 8)
+        known = (bidx >= 0) & (bidx < P)
+        bidx, pv, yi = bidx[known], pv[known], yi[known]
         np.add.at(sumK, bidx, pv[:, KIDX]); np.add.at(sumHR, bidx, pv[:, HRIDX])
         np.add.at(sumBB, bidx, pv[:, BB_IDX].sum(1)); np.add.at(sumHit, bidx, pv[:, HIT_IDX].sum(1))
         np.add.at(rK, bidx, (yi == KIDX)); np.add.at(rHR, bidx, (yi == HRIDX))
         np.add.at(rBB, bidx, np.isin(yi, BB_IDX)); np.add.at(rHit, bidx, np.isin(yi, HIT_IDX))
         np.add.at(cnt, bidx, 1.0)
 
-    # Index 0 is the UNKNOWN-PLAYER SINK: _build_player_table enumerates real
-    # player ids with no reserved sentinel, so slot 0 is a real player, and every
-    # id missing from the training table is folded onto him by the id_to_idx.get(
-    # ..., 0) fallback used throughout. His row therefore mixes one real batter
-    # with every unseen batter in the test season and is not a player at all.
-    # game_extract.py and simulate_games.py already exclude it; this scorer did
-    # not, and the row cleared the >= 150 PA filter with ~11.8k PA, so it entered
-    # every published correlation. Excluding it moves v16 AVG 0.611 -> 0.624.
+    # Unseen players use a one-past-the-table sentinel and are excluded above;
+    # no real player row is reserved or discarded here.
     keep = (cnt >= 150)
-    keep[0] = False
     def corr(s, r): return float(np.corrcoef((s[keep] / cnt[keep]), (r[keep] / cnt[keep]))[0, 1])
     cK, cBB, cHit, cHR = corr(sumK, rK), corr(sumBB, rBB), corr(sumHit, rHit), corr(sumHR, rHR)
     rookie_kept = int((keep[-n_rookie:]).sum()) if n_rookie else 0

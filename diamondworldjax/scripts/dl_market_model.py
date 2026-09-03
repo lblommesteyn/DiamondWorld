@@ -67,16 +67,24 @@ def build_features():
 
     test_pa = load_seasons(TEST, data_root=processed_root()).filter(pl.col("pa_terminal"))
     # park run factor: avg runs/game per park (training), as one scalar feature
-    games = extract_games(test_pa, id_to_idx, park_map=park_map)
+    unknown_idx = ptab["unknown_index"]
+    games = extract_games(test_pa, id_to_idx, park_map=park_map, unknown_idx=unknown_idx)
 
     rows, pks = [], []
     for g in games:
         hl, al = np.array(g["home_lineup"]), np.array(g["away_lineup"])
-        hsp = g["home_staff"][0] if g["home_staff"] else 0   # home starter (faces away)
-        asp = g["away_staff"][0] if g["away_staff"] else 0    # away starter (faces home)
+        hsp = g["home_staff"][0] if g["home_staff"] else unknown_idx   # home starter (faces away)
+        asp = g["away_staff"][0] if g["away_staff"] else unknown_idx    # away starter (faces home)
+        known_hl = hl[hl < P]; known_al = al[al < P]
+        # A neutral league mean is a better fallback than assigning the first
+        # real player to every unseen 2023-24 player.
+        home_bat = bat[known_hl].mean(0) if len(known_hl) else bat.mean(0)
+        away_bat = bat[known_al].mean(0) if len(known_al) else bat.mean(0)
+        home_pit = pit[hsp] if hsp < P else pit.mean(0)
+        away_pit = pit[asp] if asp < P else pit.mean(0)
         feat = np.concatenate([
-            bat[hl].mean(0), bat[al].mean(0),      # home & away lineup batting
-            pit[asp], pit[hsp],                    # pitcher home-bats-vs, away-bats-vs
+            home_bat, away_bat,                    # home & away lineup batting
+            away_pit, home_pit,                    # pitcher home-bats-vs, away-bats-vs
         ])
         rows.append(feat)
         pks.append(g["game_pk"])

@@ -5,6 +5,7 @@ import jax.numpy as jnp
 import flax.linen as nn
 import numpyro
 import numpyro.distributions as dist
+import numpyro.handlers as handlers
 from numpyro.contrib.module import flax_module
 from typing import Optional, Dict, Any
 import dataclasses
@@ -183,6 +184,14 @@ def hurdle_numpyro(
     obs_called_strike: Optional[jnp.ndarray]= None,   # (B, T) int
     obs_contact: Optional[jnp.ndarray]      = None,   # (B, T) int
     obs_foul: Optional[jnp.ndarray]         = None,   # (B, T) int
+    pitch_type_mask: Optional[jnp.ndarray] = None,    # (B, T) bool
+    plate_x_mask: Optional[jnp.ndarray] = None,       # (B, T) bool
+    plate_z_mask: Optional[jnp.ndarray] = None,       # (B, T) bool
+    release_speed_mask: Optional[jnp.ndarray] = None, # (B, T) bool
+    swing_mask: Optional[jnp.ndarray] = None,         # (B, T) bool
+    called_strike_mask: Optional[jnp.ndarray] = None, # (B, T) bool
+    contact_mask: Optional[jnp.ndarray] = None,       # (B, T) bool
+    foul_mask: Optional[jnp.ndarray] = None,          # (B, T) bool
     name: str = "hurdle_net",
 ) -> HurdleOutcomes:
     """
@@ -213,51 +222,44 @@ def hurdle_numpyro(
 
     raw = net(shared_context, pitch_execution)
 
+    def _sample(site, distribution, obs, mask):
+        # Keep a dense sample for generated rollouts, but score observed values
+        # only where their node in the hurdle tree is defined.
+        if mask is None:
+            return numpyro.sample(site, distribution, obs=obs)
+        with handlers.mask(mask=mask.astype(bool)):
+            return numpyro.sample(site, distribution, obs=obs)
+
     # ------------------------------------------------------------------ #
     # 1. pitch_type  — Categorical(K=8)                                   #
     # ------------------------------------------------------------------ #
     pt_probs = jax.nn.softmax(raw["pitch_type_logits"], axis=-1)  # (B, T, K)
-    pitch_type = numpyro.sample(
-        "pitch_type",
-        dist.Categorical(probs=pt_probs),
-        obs=obs_pitch_type,
-    )  # (B, T) int
+    pitch_type = _sample("pitch_type", dist.Categorical(probs=pt_probs),
+                         obs_pitch_type, pitch_type_mask)  # (B, T) int
 
     # ------------------------------------------------------------------ #
     # 2. plate_x  — Normal                                                #
     # ------------------------------------------------------------------ #
-    plate_x = numpyro.sample(
-        "plate_x",
-        dist.Normal(raw["plate_x_mu"], raw["plate_x_sigma"]),
-        obs=obs_plate_x,
-    )  # (B, T) float
+    plate_x = _sample("plate_x", dist.Normal(raw["plate_x_mu"], raw["plate_x_sigma"]),
+                      obs_plate_x, plate_x_mask)  # (B, T) float
 
     # ------------------------------------------------------------------ #
     # 3. plate_z  — Normal                                                #
     # ------------------------------------------------------------------ #
-    plate_z = numpyro.sample(
-        "plate_z",
-        dist.Normal(raw["plate_z_mu"], raw["plate_z_sigma"]),
-        obs=obs_plate_z,
-    )  # (B, T) float
+    plate_z = _sample("plate_z", dist.Normal(raw["plate_z_mu"], raw["plate_z_sigma"]),
+                      obs_plate_z, plate_z_mask)  # (B, T) float
 
     # ------------------------------------------------------------------ #
     # 4. release_speed  — Normal                                          #
     # ------------------------------------------------------------------ #
-    release_speed = numpyro.sample(
-        "release_speed",
-        dist.Normal(raw["speed_mu"], raw["speed_sigma"]),
-        obs=obs_release_speed,
-    )  # (B, T) float
+    release_speed = _sample("release_speed", dist.Normal(raw["speed_mu"], raw["speed_sigma"]),
+                            obs_release_speed, release_speed_mask)  # (B, T) float
 
     # ------------------------------------------------------------------ #
     # 5. swing  — Bernoulli                                               #
     # ------------------------------------------------------------------ #
-    swing = numpyro.sample(
-        "swing",
-        dist.Bernoulli(logits=raw["swing_logit"]),
-        obs=obs_swing,
-    )  # (B, T) int {0,1}
+    swing = _sample("swing", dist.Bernoulli(logits=raw["swing_logit"]),
+                    obs_swing, swing_mask)  # (B, T) int {0,1}
 
     # ------------------------------------------------------------------ #
     # 6. called_strike  — Bernoulli (valid when swing == 0)               #
@@ -272,11 +274,8 @@ def hurdle_numpyro(
     swing_f = swing.astype(jnp.float32)   # (B, T)
     cs_logit_masked = cs_logit * (1.0 - swing_f) - 1e4 * swing_f
 
-    called_strike = numpyro.sample(
-        "called_strike",
-        dist.Bernoulli(logits=cs_logit_masked),
-        obs=obs_called_strike,
-    )  # (B, T) int
+    called_strike = _sample("called_strike", dist.Bernoulli(logits=cs_logit_masked),
+                            obs_called_strike, called_strike_mask)  # (B, T) int
 
     # ------------------------------------------------------------------ #
     # 7. contact  — Bernoulli (valid when swing == 1)                     #
@@ -285,11 +284,8 @@ def hurdle_numpyro(
     # Zero out for no-swing positions.
     contact_logit_masked = contact_logit * swing_f - 1e4 * (1.0 - swing_f)
 
-    contact = numpyro.sample(
-        "contact",
-        dist.Bernoulli(logits=contact_logit_masked),
-        obs=obs_contact,
-    )  # (B, T) int
+    contact = _sample("contact", dist.Bernoulli(logits=contact_logit_masked),
+                      obs_contact, contact_mask)  # (B, T) int
 
     # ------------------------------------------------------------------ #
     # 8. foul  — Bernoulli (valid when contact == 1)                      #
@@ -298,11 +294,8 @@ def hurdle_numpyro(
     foul_logit = raw["foul_logit"]   # (B, T)
     foul_logit_masked = foul_logit * contact_f - 1e4 * (1.0 - contact_f)
 
-    foul = numpyro.sample(
-        "foul",
-        dist.Bernoulli(logits=foul_logit_masked),
-        obs=obs_foul,
-    )  # (B, T) int
+    foul = _sample("foul", dist.Bernoulli(logits=foul_logit_masked),
+                   obs_foul, foul_mask)  # (B, T) int
 
     # ------------------------------------------------------------------ #
     # in_play  — deterministic                                            #

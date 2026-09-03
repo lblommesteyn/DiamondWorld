@@ -220,7 +220,10 @@ def _build_player_table(pitches, recency_halflife: float | None = None,
 
     return {"stats": stats, "league": league, "hand": hand,
             "bat_hand": bat_hand, "pit_hand": pit_hand,
-            "id_to_idx": id_to_idx, "all_ids": all_ids}
+            "id_to_idx": id_to_idx, "all_ids": all_ids,
+            # P is deliberately outside the parameter table. PlayerRegistry
+            # maps it to a neutral embedding without shifting existing indices.
+            "unknown_index": P}
 
 
 def _build_park_index(pitches) -> dict:
@@ -254,12 +257,16 @@ def apply_park_idx(df, park_map: dict):
     )
 
 
-def _map_player_ids(batch: dict, id_to_idx: dict) -> dict:
+def _map_player_ids(batch: dict, id_to_idx: dict, unknown_index: int | None = None) -> dict:
+    """Map raw ids to table rows; unseen and padding ids use a neutral sentinel."""
     import jax.numpy as jnp
+
+    if unknown_index is None:
+        unknown_index = max(id_to_idx.values(), default=-1) + 1
 
     def remap(arr):
         arr_np = np.array(arr)
-        out = np.vectorize(lambda x: id_to_idx.get(int(x), 0))(arr_np)
+        out = np.vectorize(lambda x: id_to_idx.get(int(x), unknown_index))(arr_np)
         return jnp.array(out.astype(np.int32))
 
     batch["pitcher_ids"] = remap(batch["pitcher_ids"])
@@ -302,8 +309,8 @@ def main() -> None:
     parser.add_argument("--batch",  type=int,   default=64,
                         help="Games per mini-batch (PA model is lightweight — 64 fits easily)")
     parser.add_argument("--resume",    type=str,   default=None)
-    parser.add_argument("--ss-rate",   type=float, default=0.5,
-                        help="Max scheduled sampling rate (0=disabled)")
+    parser.add_argument("--ss-rate",   type=float, default=0.25,
+                        help="Max fraction of complete games with generated state histories (0=disabled)")
     parser.add_argument("--ss-warmup", type=int,   default=20_000,
                         help="Steps to ramp ss_rate from 0 to ss_max_rate")
     parser.add_argument("--cosine-alpha", type=float, default=0.0,
@@ -317,9 +324,8 @@ def main() -> None:
                         help="Train the outcome-only model (v6): single pa_outcome head, "
                              "runs + base_state handled by the rules engine at eval.")
     parser.add_argument("--engine-ss", action="store_true",
-                        help="Phase-2 DAgger: anneal in self-generated base states derived "
-                             "from the rules engine (legal by construction). Use with "
-                             "--ss-rate (e.g. 0.25) and --outcome-only, resuming a v6 ckpt.")
+                        help="Deprecated compatibility flag; scheduled sampling now always rolls "
+                             "complete game states through the rules engine.")
     parser.add_argument("--fatigue", action="store_true",
                         help="Phase-4: add pitcher cumulative game pitch count to the model "
                              "context (STATE_DIM 8 -> 9). Fresh train (changes context dim).")
@@ -359,6 +365,11 @@ def main() -> None:
                              "measured stabilisation constant (K 200 PA, BB 400, hit/HR 2200) "
                              "instead of feeding raw rates. Changes the input distribution, so "
                              "eval scripts must pass the same flag.")
+    parser.add_argument("--pitchformer", action="store_true",
+                        help="Replace the flat context with a causal PA-level transformer "
+                             "adapted from the pitchformer architecture. Each PA attends to "
+                             "all previous PAs in the game. Fresh train (changes context dim). "
+                             "Eval/sim scripts must pass the same flag.")
     parser.add_argument("--tag", type=str, default=None,
                         help="Checkpoint/log dir tag override (e.g. v6).")
     parser.add_argument("--train-end", type=int, default=2022,
@@ -439,6 +450,8 @@ def main() -> None:
     if args.player_agg_weight > 0:
         _mkw["player_agg_weight"] = args.player_agg_weight
         _mkw["player_agg_shrink"] = args.player_agg_shrink
+    if args.pitchformer:
+        _mkw["pitchformer"] = True
     _mkw["kl_scale"] = kl_scale
     model_fn = partial(pa_model, **_mkw)
 

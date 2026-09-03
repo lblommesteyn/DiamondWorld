@@ -118,7 +118,12 @@ def starter_pull_prob(pas, inning, tto, ra, model: dict) -> np.ndarray:
     return 1.0 / (1.0 + np.exp(-np.clip(Xs @ model["beta"], -30, 30)))
 
 
-def extract_games(test_pa: pl.DataFrame, id_to_idx: dict, park_map: dict | None = None) -> list[dict]:
+def extract_games(
+    test_pa: pl.DataFrame,
+    id_to_idx: dict,
+    park_map: dict | None = None,
+    unknown_idx: int | None = None,
+) -> list[dict]:
     """Per game: lineups (9 batter idx each), pitching staffs in appearance
     order, park idx.
 
@@ -135,11 +140,14 @@ def extract_games(test_pa: pl.DataFrame, id_to_idx: dict, park_map: dict | None 
     away batting) is pitched by the HOME staff and vice versa. (The v1
     extractor tagged these crossed, so every lineup faced its own starter.)
 
-    Unknown players (not in 2015-22 training) map to index 0 to keep full
-    game coverage; index 0 is excluded from player-stat REPORTING so its
-    stats aren't corrupted. (Requiring 9 known starters skipped ~63% of
-    2023-24 games and biased the sample.)
+    Unknown players map to a dedicated one-past-the-table sentinel.  The model
+    converts that sentinel to a neutral embedding, so an unseen player no longer
+    impersonates whichever real player happens to occupy index 0.  The sentinel
+    keeps full game coverage without changing checkpoint parameter shapes.
     """
+    if unknown_idx is None:
+        unknown_idx = max(id_to_idx.values(), default=-1) + 1
+
     bcol = "batter_id" if "batter_id" in test_pa.columns else "batter_idx"
     pcol = "pitcher_id" if "pitcher_id" in test_pa.columns else "pitcher_idx"
     games = []
@@ -152,7 +160,7 @@ def extract_games(test_pa: pl.DataFrame, id_to_idx: dict, park_map: dict | None 
             if len(h) == 0:
                 ok = False
                 break
-            bats = [id_to_idx.get(int(b), 0) for b in h[bcol].to_list()]
+            bats = [id_to_idx.get(int(b), unknown_idx) for b in h[bcol].to_list()]
             seen, lineup = set(), []
             for b in bats:
                 if b not in seen:
@@ -161,7 +169,7 @@ def extract_games(test_pa: pl.DataFrame, id_to_idx: dict, park_map: dict | None 
                 if len(lineup) == 9:
                     break
             while len(lineup) < 9:
-                lineup.append(lineup[0] if lineup else 0)
+                lineup.append(lineup[0] if lineup else unknown_idx)
             rec[f"{batting}_lineup"] = lineup
 
             staff, pseen = [], set()
@@ -169,7 +177,7 @@ def extract_games(test_pa: pl.DataFrame, id_to_idx: dict, park_map: dict | None 
                 p = int(p)
                 if p not in pseen:
                     pseen.add(p)
-                    staff.append(id_to_idx.get(p, 0))
+                    staff.append(id_to_idx.get(p, unknown_idx))
                 if len(staff) == MAX_STAFF:
                     break
             rec[f"{fielding}_staff"] = staff
@@ -201,13 +209,15 @@ def cap_walkoff_runs(
     return np.where(nonhr_walkoff, fld_score + 1 - bat_score, runs)
 
 
-def pad_staffs(games: list[dict], key: str) -> tuple[np.ndarray, np.ndarray]:
+def pad_staffs(
+    games: list[dict], key: str, unknown_idx: int = 0
+) -> tuple[np.ndarray, np.ndarray]:
     """(G, MAX_STAFF) staff idx padded with the last pitcher + (G,) lengths."""
     G = len(games)
     out = np.zeros((G, MAX_STAFF), dtype=np.int64)
     lens = np.zeros(G, dtype=np.int64)
     for i, g in enumerate(games):
-        s = g[key] or [0]
+        s = g[key] or [unknown_idx]
         lens[i] = len(s)
         out[i, : len(s)] = s
         out[i, len(s):] = s[-1]

@@ -148,7 +148,8 @@ def main() -> None:
     # identify which half_bin label is the home side (bottom). Values seen: 0/1 or top/bot.
     print(f"half_bin columns: {hb_cols}", flush=True)
 
-    games = extract_games(test_pa, ptab["id_to_idx"], park_map=park_map)
+    games = extract_games(test_pa, ptab["id_to_idx"], park_map=park_map,
+                          unknown_idx=ptab["unknown_index"])
     game_pks = [g["game_pk"] for g in games]
     real_map = {row["game_pk"]: row for row in pv.iter_rows(named=True)}
 

@@ -173,7 +173,18 @@ class PlayerRegistry:
         -------
         embeddings : float32  (..., D)
         """
-        return self._table[ids]  # uses JAX advanced indexing
+        # Player tables intentionally contain only observed players, so their
+        # parameter shapes remain compatible with existing checkpoints.  The
+        # mapper reserves the one-past-the-end index P for an unseen player
+        # (rather than aliasing a real player at index 0).  Safe indexing avoids
+        # JAX's negative/out-of-range indexing behaviour, then the explicit zero
+        # vector makes every invalid id the same neutral unknown embedding.
+        n_players = self._table.shape[0]
+        ids = ids.astype(jnp.int32)
+        known = (ids >= 0) & (ids < n_players)
+        safe_ids = jnp.clip(ids, 0, n_players - 1)
+        embedding = self._table[safe_ids]
+        return jnp.where(known[..., None], embedding, jnp.zeros_like(embedding))
 
 
 # ---------------------------------------------------------------------------

@@ -83,7 +83,7 @@ BATTED_COLS = [
 # ---------------------------------------------------------------------------
 TRANSITION_COLS = [
     "pa_outcome",
-    "runs_scored", "base_state_after",
+    "runs_scored", "base_state_after", "outs_added",
     "balls_after", "strikes_after", "outs_after",
     "error_flag", "steal_flag", "wild_pitch_flag",
     "passed_ball_flag", "balk_flag",

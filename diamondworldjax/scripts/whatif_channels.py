@@ -60,7 +60,8 @@ def main():
 
     te = load_seasons([2024], data_root=processed_root()).filter(pl.col("pa_terminal"))
     te = apply_park_idx(te, park_map)
-    games = extract_games(te, id2i, park_map=park_map)
+    unknown_idx = ptab["unknown_index"]
+    games = extract_games(te, id2i, park_map=park_map, unknown_idx=unknown_idx)
 
     _, pkt = team_rates_2024()
     odds = pl.read_csv("data/eval2/odds_2023_2024.csv")
@@ -72,9 +73,11 @@ def main():
         pk = int(g["game_pk"])
         if pk not in om or pk not in pkt or g["park"] == 0:
             continue
-        if not g["home_staff"] or not g["away_staff"] or g["home_staff"][0] == 0 or g["away_staff"][0] == 0:
+        if (not g["home_staff"] or not g["away_staff"]
+                or g["home_staff"][0] == unknown_idx or g["away_staff"][0] == unknown_idx):
             continue
-        hl = [i for i in g["home_lineup"] if i != 0]; al = [i for i in g["away_lineup"] if i != 0]
+        hl = [i for i in g["home_lineup"] if i != unknown_idx]
+        al = [i for i in g["away_lineup"] if i != unknown_idx]
         if len(hl) < 8 or len(al) < 8:
             continue
         Ho = np.mean([woba_bat(stats[i]) for i in hl]); Ao = np.mean([woba_bat(stats[i]) for i in al])

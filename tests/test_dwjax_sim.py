@@ -11,6 +11,7 @@ import pytest
 
 from diamondworldjax.sim.rules_engine import (
     BS_AFTER,
+    EmpiricalEngine,
     OUT_INC,
     PA_OUTCOME_IDX,
     RUNS,
@@ -78,6 +79,54 @@ class TestRulesEngine:
         np.testing.assert_array_equal(out["bs_after"], BS_AFTER[bs, oc])
         np.testing.assert_array_equal(out["out_inc"], OUT_INC[oc])
 
+    def test_empirical_engine_preserves_multi_out_plays(self):
+        # The same state/outcome has both an ordinary out and a double play.
+        # Sampling must return the observed out increment from that transition
+        # row, rather than deriving one from the coarse "out" outcome class.
+        pa = pl.DataFrame(
+            {
+                "pa_outcome": ["out", "out"],
+                "base_state": [1, 1],
+                "outs": [0, 0],
+                "base_state_after": [1, 0],
+                "runs_scored": [0, 0],
+                "outs_added": [1, 2],
+            }
+        )
+        engine = EmpiricalEngine().fit(pa)
+        outcome = np.array([_oc("out"), _oc("out")])
+        sampled = engine.sample(
+            np.array([1, 1]),
+            np.array([0, 0]),
+            outcome,
+            np.random.default_rng(0),
+            u=np.array([0.01, 0.99]),
+        )
+        assert sampled["out_inc"].tolist() == [1, 2]
+        assert sampled["bs_after"].tolist() == [1, 0]
+
+    def test_empirical_engine_derives_multi_out_plays_from_legacy_data(self):
+        # Existing processed parquet files do not need to be rebuilt before
+        # the simulator can use the new behavior.
+        pa = pl.DataFrame(
+            {
+                "game_pk": [1, 1, 1],
+                "inning": [1, 1, 1],
+                "half": ["top", "top", "bot"],
+                "at_bat_number": [2, 1, 3],
+                "pitch_number": [1, 1, 1],
+                "pa_outcome": ["BB", "out", "out"],
+                "base_state": [0, 1, 0],
+                "outs": [2, 0, 0],
+                "base_state_after": [1, 0, 0],
+                "runs_scored": [0, 0, 0],
+            }
+        )
+        sampled = EmpiricalEngine().fit(pa).sample(
+            np.array([1]), np.array([0]), np.array([_oc("out")]), np.random.default_rng(0)
+        )
+        assert sampled["out_inc"].tolist() == [2]
+
 
 def _mk_pa_df(rows: list[dict]) -> pl.DataFrame:
     return pl.DataFrame(
@@ -128,13 +177,14 @@ class TestExtractGames:
         assert g["away_lineup"] == [i - 90 for i in range(100, 109)]
         assert g["home_lineup"] == [i - 90 for i in range(110, 119)]
 
-    def test_unknown_players_map_to_zero(self):
+    def test_unknown_players_use_a_dedicated_sentinel(self):
         top = _rows(1, 0, [999] * 9, [120] * 9)
         bot = _rows(1, 1, list(range(110, 119)), [888] * 9, ab_start=2)
         games = extract_games(_mk_pa_df(top + bot), self.id_to_idx)
         g = games[0]
-        assert g["away_lineup"][0] == 0
-        assert g["away_staff"] == [0]
+        unknown_idx = max(self.id_to_idx.values()) + 1
+        assert g["away_lineup"][0] == unknown_idx
+        assert g["away_staff"] == [unknown_idx]
 
     def test_park_mapping(self):
         top = _rows(1, 0, list(range(100, 109)), [120] * 9, park_id="COL")

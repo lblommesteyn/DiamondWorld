@@ -52,7 +52,7 @@ import polars as pl
 from diamondworldjax.paths import processed_root, checkpoints_root
 from diamondworldjax.data.pipeline import load_seasons
 from diamondworldjax.model.pa_model import pa_model
-from diamondworldjax.sim.rules_engine import EmpiricalEngine, OUT_INC, PA_OUTCOME_IDX
+from diamondworldjax.sim.rules_engine import EmpiricalEngine, PA_OUTCOME_IDX
 from diamondworldjax.sim.game_extract import (
     cap_walkoff_runs,
     extract_games,
@@ -99,7 +99,8 @@ def simulate(
     model_fn, params, pt, games, rng_key,
     shift=1.0, clock=1.0, recal=False, recal_scale=1.0, recal_vec=RECAL_V6,
     fixed_nine=False, no_bullpen=False, seed=0, platoon=False, recal_temp=1.0,
-    skill_mode="prior", crn_keys=None, hook_model=None,
+    skill_mode="prior", crn_keys=None, hook_model=None, max_pa_per_half=40,
+    pitchformer=False,
 ):
     """Vectorized simulation across all games with real game structure.
 
@@ -114,10 +115,19 @@ def simulate(
     scenario B replica r are paired. Hooks use a separate per-game stream, so a
     pitching-change timing difference does not scramble the outcome stream. When
     None, a single global generator is used (the original behaviour).
+
+    max_pa_per_half: safety cap for a generated half-inning. ``None`` disables
+    truncation. When the cap is reached, the result records affected games in
+    ``truncated`` rather than silently presenting them as complete.
     """
     import jax
     import jax.numpy as jnp
     import numpyro.handlers as nh
+
+    if max_pa_per_half == 0:
+        max_pa_per_half = None
+    elif max_pa_per_half is not None and max_pa_per_half < 0:
+        raise ValueError("max_pa_per_half must be positive or None")
 
     # Skill handling: the SVI player-skill latent collapsed to the prior
     # (player_mu ~ 0, player_sigma ~ 1), so by default the model samples it from
@@ -135,8 +145,10 @@ def simulate(
     G = len(games)
     away_lineup = np.array([g["away_lineup"] for g in games], dtype=np.int64)  # (G,9)
     home_lineup = np.array([g["home_lineup"] for g in games], dtype=np.int64)
-    home_staff, home_staff_len = pad_staffs(games, "home_staff")  # pitches top halves
-    away_staff, away_staff_len = pad_staffs(games, "away_staff")  # pitches bottom halves
+    P = int(np.asarray(pt["stats"]).shape[0])
+    unknown_idx = int(pt.get("unknown_index", P))
+    home_staff, home_staff_len = pad_staffs(games, "home_staff", unknown_idx)  # pitches top halves
+    away_staff, away_staff_len = pad_staffs(games, "away_staff", unknown_idx)  # pitches bottom halves
     park = np.array([g["park"] for g in games], dtype=np.int64)
     engine = pt["_engine"]
     starter_pas, reliever_pas = pt["_hook_dists"]
@@ -157,6 +169,8 @@ def simulate(
 
     away_score = np.zeros(G)
     home_score = np.zeros(G)
+    away_hits = np.zeros(G)
+    home_hits = np.zeros(G)
     away9 = np.full(G, np.nan)   # score snapshot after 9 innings (pre-extras)
     home9 = np.full(G, np.nan)
     away_ptr = np.zeros(G, dtype=np.int64)
@@ -187,19 +201,47 @@ def simulate(
     home_ps = _staff_state()  # home staff state (faces away lineup)
     away_ps = _staff_state()
 
+    # --- Pitchformer: PA history buffer for causal attention ---------------
+    # When pitchformer=True, the model needs to see all previous PAs in the
+    # game. We allocate a fixed-size buffer per game and fill it as PAs are
+    # played. Each model call sends (B, t_max) where t_max is the furthest
+    # any active game has progressed, and pa_valid masks unused positions.
+    MAX_PAS = 120   # generous upper bound (~70 real PAs per game)
+    if pitchformer:
+        pa_hist = {
+            "inning":           np.zeros((G, MAX_PAS), np.float32),
+            "half":             np.zeros((G, MAX_PAS), np.float32),
+            "outs":             np.zeros((G, MAX_PAS), np.float32),
+            "base_state":       np.zeros((G, MAX_PAS), np.float32),
+            "score_diff":       np.zeros((G, MAX_PAS), np.float32),
+            "tto":              np.zeros((G, MAX_PAS), np.float32),
+            "shift_restricted": np.zeros((G, MAX_PAS), np.float32),
+            "pitch_clock":      np.zeros((G, MAX_PAS), np.float32),
+            "pitcher_ids":      np.zeros((G, MAX_PAS), np.int64),
+            "batter_ids":       np.zeros((G, MAX_PAS), np.int64),
+            "park_ids":         np.zeros((G, MAX_PAS), np.int64),
+            "pitch_count_game": np.zeros((G, MAX_PAS), np.float32),
+            "pa_valid":         np.zeros((G, MAX_PAS), bool),
+        }
+        if platoon:
+            pa_hist["bat_side"] = np.full((G, MAX_PAS), 0.5, np.float32)
+            pa_hist["pit_hand"] = np.full((G, MAX_PAS), 0.5, np.float32)
+        pa_step = np.zeros(G, dtype=np.int64)  # next write position per game
+
     game_over = np.zeros(G, dtype=bool)
     occ_on = 0.0
     occ_n = 0.0
-    P = int(np.asarray(pt["stats"]).shape[0])
     pcounts = np.zeros((P, 9), dtype=np.float64)
     runs_by_inning = np.zeros(9)   # innings 1-9 (shape test); extras tracked apart
     extra_runs = 0.0
     n_walkoffs = 0
+    truncated = np.zeros(G, dtype=bool)
+    truncated_half_innings = 0
     PITCHES_PER_PA = 3.9
 
     def play_half(inning, half, mask):
         """Play one half-inning for every game in `mask` (bool, (G,))."""
-        nonlocal occ_on, occ_n, extra_runs, n_walkoffs, rng_key
+        nonlocal occ_on, occ_n, extra_runs, n_walkoffs, rng_key, truncated_half_innings
         if not mask.any():
             return
         walkoff = (not fixed_nine) and half == 1 and inning >= 9
@@ -218,7 +260,9 @@ def simulate(
         bases = np.full(G, 2 if ghost else 0, dtype=np.int64)
         active = mask.copy()
 
-        for _ in range(40):  # safety cap on PAs per half-inning
+        pa_number = 0
+        while active.any() and (max_pa_per_half is None or pa_number < max_pa_per_half):
+            pa_number += 1
             if not active.any():
                 break
             idx = np.where(active)[0]
@@ -258,43 +302,130 @@ def simulate(
             tto = np.minimum(cyc[idx, slot], 3)
 
             B = len(idx)
-            tb = {
-                "pa_valid": jnp.ones((B, 1), bool),
-                "inning": jnp.full((B, 1), (inning - 1) / 8.0, jnp.float32),
-                "half": jnp.full((B, 1), float(half), jnp.float32),
-                "outs": jnp.array((outs[idx] / 2.0)[:, None], jnp.float32),
-                "base_state": jnp.array((bases[idx] / 7.0)[:, None], jnp.float32),
-                "score_diff": jnp.array((np.clip(bat_score[idx] - fld_score[idx], -10, 10) / 10.0)[:, None], jnp.float32),
-                "tto": jnp.array((tto / 3.0)[:, None], jnp.float32),
-                "shift_restricted": jnp.full((B, 1), shift, jnp.float32),
-                "pitch_clock": jnp.full((B, 1), clock, jnp.float32),
-                "pitcher_ids": jnp.array(pitcher[:, None]),
-                "batter_ids": jnp.array(batter[:, None]),
-                "park_ids": jnp.array(park[idx][:, None]),
-                "pitch_count_game": jnp.array(
-                    np.clip(ps["pa"][idx] * PITCHES_PER_PA / 120.0, 0, 1.5)[:, None], jnp.float32),
-            }
-            if platoon:
-                tb["bat_side"] = jnp.array(pt["bat_hand"][batter][:, None], jnp.float32)
-                tb["pit_hand"] = jnp.array(pt["pit_hand"][pitcher][:, None], jnp.float32)
-            rng_key, k = jax.random.split(rng_key)
-            with nh.seed(rng_seed=k):
-                with nh.substitute(data=params):
-                    with nh.trace() as tr:
-                        model_fn(tb, pt, teacher_force=False)
-            if recal:
-                logits = (np.array(tr["pa_outcome"]["fn"].logits)[:, 0, :] + recal_scale * recal_vec) / recal_temp
-                # Per-game gumbel from the replica-keyed stream when CRN is on, so
-                # the same replica of two scenarios draws the same outcome noise.
-                gum = (np.stack([out_rng[g].gumbel(size=logits.shape[1]) for g in idx])
-                       if crn else rng_np.gumbel(size=logits.shape))
-                oc = np.argmax(logits + gum, axis=-1).astype(np.int64)
+
+            # --- Compute per-PA feature values (shared by both paths) ------
+            _inn_val = (inning - 1) / 8.0
+            _outs_val = outs[idx] / 2.0
+            _bs_val = bases[idx] / 7.0
+            _sd_val = np.clip(bat_score[idx] - fld_score[idx], -10, 10) / 10.0
+            _tto_val = tto / 3.0
+            _pc_val = np.clip(ps["pa"][idx] * PITCHES_PER_PA / 120.0, 0, 1.5).astype(np.float32)
+
+            if pitchformer:
+                # Write current PA features into the history buffer.
+                for i_loc, g_idx in enumerate(idx):
+                    s = pa_step[g_idx]
+                    pa_hist["inning"][g_idx, s] = _inn_val
+                    pa_hist["half"][g_idx, s] = float(half)
+                    pa_hist["outs"][g_idx, s] = _outs_val[i_loc]
+                    pa_hist["base_state"][g_idx, s] = _bs_val[i_loc]
+                    pa_hist["score_diff"][g_idx, s] = _sd_val[i_loc]
+                    pa_hist["tto"][g_idx, s] = _tto_val[i_loc]
+                    pa_hist["shift_restricted"][g_idx, s] = shift
+                    pa_hist["pitch_clock"][g_idx, s] = clock
+                    pa_hist["pitcher_ids"][g_idx, s] = pitcher[i_loc]
+                    pa_hist["batter_ids"][g_idx, s] = batter[i_loc]
+                    pa_hist["park_ids"][g_idx, s] = park[g_idx]
+                    pa_hist["pitch_count_game"][g_idx, s] = _pc_val[i_loc]
+                    pa_hist["pa_valid"][g_idx, s] = True
+                    if platoon:
+                        P_ = P  # avoid shadowing
+                        b_known = (batter[i_loc] >= 0) & (batter[i_loc] < P_)
+                        p_known = (pitcher[i_loc] >= 0) & (pitcher[i_loc] < P_)
+                        pa_hist["bat_side"][g_idx, s] = (
+                            np.asarray(pt["bat_hand"])[batter[i_loc]] if b_known else 0.5)
+                        pa_hist["pit_hand"][g_idx, s] = (
+                            np.asarray(pt["pit_hand"])[pitcher[i_loc]] if p_known else 0.5)
+
+                # Build tb from the full history, padded to MAX_PAS so JAX
+                # sees one fixed shape and compiles once (not per-T).
+                steps = pa_step[idx] + 1       # per-game sequence length
+                pos = (steps - 1).astype(np.int64)  # index of the current PA
+                cols = np.arange(MAX_PAS)
+                tb = {
+                    "pa_valid":         jnp.array(pa_hist["pa_valid"][np.ix_(idx, cols)]),
+                    "inning":           jnp.array(pa_hist["inning"][np.ix_(idx, cols)]),
+                    "half":             jnp.array(pa_hist["half"][np.ix_(idx, cols)]),
+                    "outs":             jnp.array(pa_hist["outs"][np.ix_(idx, cols)]),
+                    "base_state":       jnp.array(pa_hist["base_state"][np.ix_(idx, cols)]),
+                    "score_diff":       jnp.array(pa_hist["score_diff"][np.ix_(idx, cols)]),
+                    "tto":              jnp.array(pa_hist["tto"][np.ix_(idx, cols)]),
+                    "shift_restricted": jnp.array(pa_hist["shift_restricted"][np.ix_(idx, cols)]),
+                    "pitch_clock":      jnp.array(pa_hist["pitch_clock"][np.ix_(idx, cols)]),
+                    "pitcher_ids":      jnp.array(pa_hist["pitcher_ids"][np.ix_(idx, cols)]),
+                    "batter_ids":       jnp.array(pa_hist["batter_ids"][np.ix_(idx, cols)]),
+                    "park_ids":         jnp.array(pa_hist["park_ids"][np.ix_(idx, cols)]),
+                    "pitch_count_game": jnp.array(pa_hist["pitch_count_game"][np.ix_(idx, cols)]),
+                }
+                if platoon:
+                    tb["bat_side"] = jnp.array(pa_hist["bat_side"][np.ix_(idx, cols)])
+                    tb["pit_hand"] = jnp.array(pa_hist["pit_hand"][np.ix_(idx, cols)])
+
+                rng_key, k = jax.random.split(rng_key)
+                with nh.seed(rng_seed=k):
+                    with nh.substitute(data=params):
+                        with nh.trace() as tr:
+                            model_fn(tb, pt, teacher_force=False)
+
+                # Extract logits/value at each game's CURRENT position.
+                if recal:
+                    full_logits = np.array(tr["pa_outcome"]["fn"].logits)  # (B, MAX_PAS, 9)
+                    logits_cur = full_logits[np.arange(B), pos, :]         # (B, 9)
+                    logits_cur = (logits_cur + recal_scale * recal_vec) / recal_temp
+                    gum = (np.stack([out_rng[g].gumbel(size=logits_cur.shape[1]) for g in idx])
+                           if crn else rng_np.gumbel(size=logits_cur.shape))
+                    oc = np.argmax(logits_cur + gum, axis=-1).astype(np.int64)
+                else:
+                    # Use NumPyro's traced sample at the current position so
+                    # the JAX RNG stream is respected (preserves CRN pairing).
+                    oc = np.array(tr["pa_outcome"]["value"])[np.arange(B), pos].astype(np.int64)
+
+                # Advance the step counter AFTER extracting logits.
+                pa_step[idx] += 1
+
             else:
-                oc = np.array(tr["pa_outcome"]["value"])[:, 0].astype(np.int64)
+                # Original (G, 1) path — no history needed.
+                tb = {
+                    "pa_valid": jnp.ones((B, 1), bool),
+                    "inning": jnp.full((B, 1), _inn_val, jnp.float32),
+                    "half": jnp.full((B, 1), float(half), jnp.float32),
+                    "outs": jnp.array(_outs_val[:, None], jnp.float32),
+                    "base_state": jnp.array(_bs_val[:, None], jnp.float32),
+                    "score_diff": jnp.array(_sd_val[:, None], jnp.float32),
+                    "tto": jnp.array(_tto_val[:, None], jnp.float32),
+                    "shift_restricted": jnp.full((B, 1), shift, jnp.float32),
+                    "pitch_clock": jnp.full((B, 1), clock, jnp.float32),
+                    "pitcher_ids": jnp.array(pitcher[:, None]),
+                    "batter_ids": jnp.array(batter[:, None]),
+                    "park_ids": jnp.array(park[idx][:, None]),
+                    "pitch_count_game": jnp.array(_pc_val[:, None], jnp.float32),
+                }
+                if platoon:
+                    bat_known = (batter >= 0) & (batter < P)
+                    pit_known = (pitcher >= 0) & (pitcher < P)
+                    bat_side = np.full(B, 0.5, dtype=np.float32)
+                    pit_side = np.full(B, 0.5, dtype=np.float32)
+                    bat_side[bat_known] = np.asarray(pt["bat_hand"])[batter[bat_known]]
+                    pit_side[pit_known] = np.asarray(pt["pit_hand"])[pitcher[pit_known]]
+                    tb["bat_side"] = jnp.array(bat_side[:, None])
+                    tb["pit_hand"] = jnp.array(pit_side[:, None])
+                rng_key, k = jax.random.split(rng_key)
+                with nh.seed(rng_seed=k):
+                    with nh.substitute(data=params):
+                        with nh.trace() as tr:
+                            model_fn(tb, pt, teacher_force=False)
+                if recal:
+                    logits = (np.array(tr["pa_outcome"]["fn"].logits)[:, 0, :] + recal_scale * recal_vec) / recal_temp
+                    gum = (np.stack([out_rng[g].gumbel(size=logits.shape[1]) for g in idx])
+                           if crn else rng_np.gumbel(size=logits.shape))
+                    oc = np.argmax(logits + gum, axis=-1).astype(np.int64)
+                else:
+                    oc = np.array(tr["pa_outcome"]["value"])[:, 0].astype(np.int64)
 
             occ_on += (bases[idx] > 0).sum()
             occ_n += B
-            np.add.at(pcounts, (batter, oc), 1.0)
+            known_batters = (batter >= 0) & (batter < P)
+            np.add.at(pcounts, (batter[known_batters], oc[known_batters]), 1.0)
             # Base advancement: one per-game uniform from the same stream (drawn
             # after the gumbel, so the per-game order is fixed) feeds the engine's
             # CRN path; else the shared generator.
@@ -306,12 +437,18 @@ def simulate(
                 runs = cap_walkoff_runs(bat_score[idx], fld_score[idx], runs, oc == HR_IDX)
 
             bat_score[idx] += runs
+            hits = np.isin(oc, (PA_OUTCOME_IDX["1B"], PA_OUTCOME_IDX["2B"],
+                                 PA_OUTCOME_IDX["3B"], PA_OUTCOME_IDX["HR"])).astype(float)
+            if half == 0:
+                away_hits[idx] += hits
+            else:
+                home_hits[idx] += hits
             if inning <= 9:
                 runs_by_inning[inning - 1] += runs.sum()
             else:
                 extra_runs += runs.sum()
 
-            oi = OUT_INC[oc]
+            oi = e["out_inc"]
             new_outs = outs[idx] + oi
             third = new_outs >= 3
             bases[idx] = np.where(third, 0, e["bs_after"])
@@ -326,6 +463,10 @@ def simulate(
                 game_over[idx[won]] = True
                 still = still & ~won
             active[idx] = still
+
+        if active.any():
+            truncated[active] = True
+            truncated_half_innings += int(active.sum())
 
     n_extra_games = 0
     last_inning = 9 if fixed_nine else MAX_INNINGS
@@ -360,6 +501,8 @@ def simulate(
     return {
         "away": away_score,
         "home": home_score,
+        "away_hits": away_hits,
+        "home_hits": home_hits,
         "away9": away9,
         "home9": home9,
         "occ": occ_on / max(occ_n, 1),
@@ -369,6 +512,9 @@ def simulate(
         "n_extra_games": n_extra_games,
         "n_walkoffs": n_walkoffs,
         "n_ties": n_ties,
+        "truncated": truncated,
+        "n_truncated": int(truncated.sum()),
+        "truncated_half_innings": truncated_half_innings,
     }
 
 
@@ -415,6 +561,9 @@ def main() -> None:
                     help="Legacy v1 pitching: the starter pitches the whole game.")
     ap.add_argument("--platoon", action="store_true",
                     help="Feed batter side + pitcher throw hand (v11+ platoon models).")
+    ap.add_argument("--pitchformer", action="store_true",
+                    help="Use the causal PA-level transformer for context (must match "
+                         "the checkpoint's training flag).")
     ap.add_argument("--use-park", action="store_true",
                     help="Feed real park indices (v9+ checkpoints trained with the "
                          "park_idx fix; pre-v9 park embeddings trained on all-zeros).")
@@ -427,6 +576,8 @@ def main() -> None:
                     help="Save per-game away/home final and after-9 scores to this .npz "
                          "(for tie/margin/extras diagnostics).")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--max-pa-per-half", type=int, default=40,
+                    help="Safety cap for generated half-innings; 0 disables truncation.")
     args = ap.parse_args()
 
     import jax
@@ -458,11 +609,15 @@ def main() -> None:
     ) / test_pa["game_pk"].n_unique() * 100
 
     print(f"Extracting lineups for {test_pa['game_pk'].n_unique()} games...", flush=True)
-    games = extract_games(test_pa, ptab["id_to_idx"], park_map=park_map)
+    games = extract_games(
+        test_pa, ptab["id_to_idx"], park_map=park_map,
+        unknown_idx=ptab["unknown_index"],
+    )
     print(f"  {len(games)} games usable", flush=True)
 
     pt = {"stats": jnp.array(ptab["stats"]), "league": jnp.array(ptab["league"]),
           "hand": jnp.array(ptab["hand"]),
+          "unknown_index": ptab["unknown_index"],
           "bat_hand": np.asarray(ptab["bat_hand"]), "pit_hand": np.asarray(ptab["pit_hand"]),
           "_engine": engine, "_hook_dists": hook_dists}
     mkw = {}
@@ -472,6 +627,8 @@ def main() -> None:
         mkw["fatigue"] = True
     if args.platoon:
         mkw["platoon"] = True
+    if args.pitchformer:
+        mkw["pitchformer"] = True
     model_fn = partial(pa_model, **mkw) if mkw else pa_model
 
     if args.recal_file is not None:
@@ -480,12 +637,16 @@ def main() -> None:
     else:
         _recal_vec = RECAL_VECS[args.recal_version]
 
+    if args.max_pa_per_half < 0:
+        ap.error("--max-pa-per-half must be non-negative")
     t0 = time.time()
     res = simulate(
         model_fn, params, pt, games, jax.random.PRNGKey(args.seed),
         recal=args.recal, recal_scale=args.recal_scale, recal_vec=_recal_vec,
         fixed_nine=args.fixed_nine, no_bullpen=args.no_bullpen, seed=args.seed,
         platoon=args.platoon, recal_temp=args.recal_temp, skill_mode=args.skill_mode,
+        max_pa_per_half=None if args.max_pa_per_half == 0 else args.max_pa_per_half,
+        pitchformer=args.pitchformer,
     )
     away, home, total = res["away"], res["home"], res["away"] + res["home"]
     G = len(games)
@@ -518,6 +679,10 @@ def main() -> None:
           f"home-win {np.mean(home > away)*100:.1f}%  (ties {res['n_ties']})", flush=True)
     print(f"  extras      real {real_extra_rate:.1f}%   sim {res['n_extra_games']/G*100:.1f}%   "
           f"walk-offs {res['n_walkoffs']/G*100:.1f}%   extra-inning runs {res['extra_runs']/G:.2f}/g", flush=True)
+    if res["n_truncated"]:
+        print(f"  WARNING: truncated {res['n_truncated']}/{G} games across "
+              f"{res['truncated_half_innings']} half-innings; exclude these draws or rerun "
+              "with --max-pa-per-half 0.", flush=True)
 
     if args.dump_runs is not None:
         np.save(args.dump_runs, total)
@@ -536,7 +701,6 @@ def main() -> None:
             if oc in PA_OUTCOME_IDX and int(bid) in ptab["id_to_idx"]:
                 real_counts[ptab["id_to_idx"][int(bid)], PA_OUTCOME_IDX[oc]] += 1
         keep_idx = np.where(real_counts.sum(1) >= args.min_pa)[0]
-        keep_idx = keep_idx[keep_idx != 0]  # exclude index 0 (unknown-player sink)
         mets = ["AVG", "OBP", "SLG", "K%", "HR%"]
         rv = {m: [] for m in mets}
         sv = {m: [] for m in mets}

@@ -141,24 +141,6 @@ def _make_game_state_8(batch: dict) -> jnp.ndarray:
     ], axis=-1)  # (B, T, 8)
 
 
-def _derive_outcome_type(batch: dict) -> jnp.ndarray:
-    """
-    Map pa_outcome integer to transition outcome_type code.
-
-    0 = strikeout, 1 = walk/HBP, 2 = in_play, 3 = no_outcome
-    """
-    pa_out   = batch["pa_outcome"]      # -1 for non-terminal
-    in_play  = batch["in_play_mask"]
-
-    is_k      = (pa_out == 0)
-    is_bb_hbp = (pa_out == 1) | (pa_out == 2)
-    is_ip     = in_play.astype(bool)
-
-    return jnp.where(is_k, 0,
-           jnp.where(is_bb_hbp, 1,
-           jnp.where(is_ip, 2, 3))).astype(jnp.int32)
-
-
 def _as_int_field(normalised: jnp.ndarray, scale: float) -> jnp.ndarray:
     """Recover integer field from batch float. E.g. base_state: ×7 → round."""
     return jnp.round(normalised * scale).astype(jnp.int32)
@@ -235,9 +217,9 @@ def diamondworld_model(
     pitch_pkg_12     = _make_pitch_pkg_12(batch)                # (B, T, 12)
     game_state_scalar = batch["pitch_count_game"][..., None]    # (B, T, 1) proxy
 
-    # pitch_count_plate_appearance: 0 triggers reset.  Use a zeros proxy so
-    # fatigue resets every pitch — conservative but safe for v0.
-    pc_pa_int = jnp.zeros((B, T), dtype=jnp.int32)
+    # A zero pre-pitch count marks a genuine PA boundary; it must not reset
+    # fatigue on every pitch.
+    pc_pa_int = _as_int_field(batch["pitch_count_pa"], 10.0)
 
     fatigue_state = fatigue_rollout(
         pitcher_z                    = pitcher_z,
@@ -278,13 +260,13 @@ def diamondworld_model(
     pitch_execution = _make_pitch_execution(batch)
     in_play_mask    = batch["in_play_mask"]
     outs_int        = _as_int_field(batch["outs"], 2.0)
-    outcome_type    = _derive_outcome_type(batch)
 
     # ------------------------------------------------------------------ #
     # All (B, T) sample sites live inside these plates so that            #
     # AutoGuides can distinguish batch from event dimensions.             #
     # ------------------------------------------------------------------ #
-    with numpyro.plate("games", B, dim=-2), numpyro.plate("pitches", T, dim=-1):
+    with (numpyro.plate("games", B, dim=-2), numpyro.plate("pitches", T, dim=-1),
+          numpyro.handlers.mask(mask=batch["pitch_valid"])):
 
         # Manager decisions (sampled before transformer since mgr_vec feeds it)
         mgr = manager_decisions_numpyro(
@@ -300,6 +282,8 @@ def diamondworld_model(
             obs_steal           = _obs_or_none(batch.get("mgr_steal"))        if teacher_force else None,
             obs_runner_send     = None,
             obs_alignment       = None,
+            pitching_change_mask = batch.get("mgr_pitch_change_mask") if teacher_force else None,
+            steal_mask           = batch.get("mgr_steal_mask") if teacher_force else None,
         )
 
         # Use soft probabilities (not sampled ints) so shape is stable under
@@ -333,6 +317,14 @@ def diamondworld_model(
             obs_called_strike = _obs_or_none(batch.get("obs_called_strike")) if teacher_force else None,
             obs_contact       = _obs_or_none(batch["obs_contact"])          if teacher_force else None,
             obs_foul          = _obs_or_none(batch["obs_foul"])             if teacher_force else None,
+            pitch_type_mask   = batch["pitch_type"] >= 0 if teacher_force else None,
+            plate_x_mask      = batch["pitch_valid"] if teacher_force else None,
+            plate_z_mask      = batch["pitch_valid"] if teacher_force else None,
+            release_speed_mask = batch["pitch_valid"] if teacher_force else None,
+            swing_mask        = batch.get("swing_mask") if teacher_force else None,
+            called_strike_mask = batch.get("called_strike_mask") if teacher_force else None,
+            contact_mask      = batch.get("contact_mask") if teacher_force else None,
+            foul_mask         = batch.get("foul_mask") if teacher_force else None,
         )
 
         # Batted-ball physics
@@ -347,6 +339,10 @@ def diamondworld_model(
             obs_launch_angle  = batch["launch_angle"]  if teacher_force else None,
             obs_spray_angle   = batch["spray_angle"]   if teacher_force else None,
             obs_hit_distance  = batch["hit_distance"]  if teacher_force else None,
+            launch_speed_mask = batch.get("launch_speed_mask") if teacher_force else None,
+            launch_angle_mask = batch.get("launch_angle_mask") if teacher_force else None,
+            spray_angle_mask  = batch.get("spray_angle_mask") if teacher_force else None,
+            hit_distance_mask = batch.get("hit_distance_mask") if teacher_force else None,
         )
 
         # State transition
@@ -359,13 +355,13 @@ def diamondworld_model(
             batted_ball_features = batted_ball_features,
             base_state           = base_state_int,
             outs                 = outs_int,
-            outcome_type         = outcome_type,
             in_play_mask         = in_play_mask,
+            obs_pa_outcome       = _obs_or_none(batch["pa_outcome"]) if teacher_force else None,
             obs_runs_scored      = _obs_or_none(batch["runs_scored"])       if teacher_force else None,
             obs_base_state_after = _obs_or_none(batch["base_state_after"])  if teacher_force else None,
-            obs_error_flag       = None,
-            obs_outs_added       = None,
-            obs_wild_pitch       = None,
-            obs_passed_ball      = None,
-            obs_balk             = None,
+            obs_outs_added       = _obs_or_none(batch["outs_added"]) if teacher_force else None,
+            pa_outcome_mask      = batch.get("pa_outcome_mask") if teacher_force else None,
+            runs_mask            = batch.get("runs_mask") if teacher_force else None,
+            base_state_after_mask = batch.get("base_state_after_mask") if teacher_force else None,
+            outs_added_mask       = batch.get("outs_added_mask") if teacher_force else None,
         )

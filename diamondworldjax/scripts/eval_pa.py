@@ -4,8 +4,11 @@ Two eval modes:
   conditioned  (default): uses real game states as context each PA — fast,
                            comparable to baselines.
   free-rollout (--free-rollout): feeds model's own base_state_after back in
-                           as base_state for the next PA — true autoregressive;
-                           slower (~5-10min for full test set at --samples 1).
+                           as base_state for the next recorded PA. This is an
+                           event-sequence diagnostic, not a generated game.
+  engine-rollout (--engine-rollout): generates complete games, including outs,
+                           innings, walk-offs, and extras, through the rules
+                           engine. Use this mode for game-distribution metrics.
 
 Usage
 -----
@@ -53,6 +56,12 @@ def _observed_runs_per_game(pa_df) -> np.ndarray:
     return df["runs"].to_numpy().astype(float)
 
 
+def _observed_runs_by_game(pa_df) -> dict[int, float]:
+    import polars as pl
+    rows = pa_df.group_by("game_pk").agg(pl.col("runs_scored").sum().alias("runs"))
+    return {int(row["game_pk"]): float(row["runs"]) for row in rows.iter_rows(named=True)}
+
+
 def _conditioned_sample(pa_model, params, batch, pt, rng_key, n_samples):
     """Sample runs using real game states as context (fast)."""
     import jax
@@ -61,7 +70,7 @@ def _conditioned_sample(pa_model, params, batch, pt, rng_key, n_samples):
 
     B    = batch["pa_valid"].shape[0]
     valid = np.array(batch["pa_valid"])
-    total = np.zeros(B)
+    draws = []
 
     for _ in range(n_samples):
         rng_key, key = jax.random.split(rng_key)
@@ -70,9 +79,9 @@ def _conditioned_sample(pa_model, params, batch, pt, rng_key, n_samples):
                 with nh.trace() as tr:
                     pa_model(batch, pt, teacher_force=False)
         runs = np.array(tr["runs_scored"]["value"])  # (B, T)
-        total += (runs * valid).sum(axis=1)
+        draws.append((runs * valid).sum(axis=1))
 
-    return total / n_samples, rng_key
+    return np.stack(draws), rng_key
 
 
 def _free_rollout_sample(pa_model, params, batch, pt, rng_key, n_samples):
@@ -83,7 +92,7 @@ def _free_rollout_sample(pa_model, params, batch, pt, rng_key, n_samples):
 
     B, T  = batch["pa_valid"].shape
     valid = np.array(batch["pa_valid"])  # (B, T)
-    total = np.zeros(B)
+    draws = []
 
     for _ in range(n_samples):
         # Start from real initial base states
@@ -122,9 +131,9 @@ def _free_rollout_sample(pa_model, params, batch, pt, rng_key, n_samples):
                     valid[:, t], bs_after_t / 7.0, current_bs[:, t+1]
                 )
 
-        total += sample_runs
+        draws.append(sample_runs)
 
-    return total / n_samples, rng_key
+    return np.stack(draws), rng_key
 
 
 # Per-class logit recalibration = log(real_freq / model_freq), measured by
@@ -143,71 +152,6 @@ RECAL_VECTOR = np.array([
 ], dtype=np.float64)
 
 
-def _engine_rollout_sample(pa_model, params, batch, pt, rng_key, n_samples, engine=None, recal=False):
-    """Sample pa_outcome from the model; derive runs + base_state from the rules engine.
-
-    Phase-1 rollout: the model predicts only the 9-way PA outcome. The empirical
-    rules engine maps (base_state, outs, outcome) -> (runs, base_state_after),
-    which is unbiased in aggregate (validated at -0.45% run bias). Base state is
-    rolled out autoregressively and reset to empty at each half-inning boundary
-    (detected from the real inning/half sequence).
-    """
-    import jax
-    import jax.numpy as jnp
-    import numpyro.handlers as nh
-
-    B, T   = batch["pa_valid"].shape
-    valid  = np.array(batch["pa_valid"])                       # (B, T)
-    real_outs   = np.clip(np.rint(np.array(batch["outs"]) * 2.0), 0, 2).astype(np.int64)  # (B,T)
-    inning_norm = np.array(batch["inning"])                    # (B, T)
-    half_arr    = np.rint(np.array(batch["half"])).astype(np.int64)  # (B, T)
-    rng_np = np.random.default_rng(0)
-
-    total = np.zeros(B)
-    for _ in range(n_samples):
-        current_bs = np.array(batch["base_state"])             # (B, T) normalised 0-1
-        sample_runs = np.zeros(B)
-        for t in range(T):
-            if not valid[:, t].any():
-                break
-
-            t_batch = {}
-            for k, v in batch.items():
-                if hasattr(v, "ndim"):
-                    arr = np.array(v)
-                    t_batch[k] = jnp.array(arr[:, t:t+1] if arr.ndim == 2 else arr)
-            t_batch["base_state"] = jnp.array(current_bs[:, t:t+1])
-
-            rng_key, step_key = jax.random.split(rng_key)
-            with nh.seed(rng_seed=step_key):
-                with nh.substitute(data=params):
-                    with nh.trace() as tr:
-                        pa_model(t_batch, pt, teacher_force=False)
-
-            if recal:
-                # Re-sample outcome from recalibrated logits (Gumbel-max).
-                logits = np.array(tr["pa_outcome"]["fn"].logits)[:, 0, :]  # (B, 9)
-                logits = logits + RECAL_VECTOR
-                gumbel = rng_np.gumbel(size=logits.shape)
-                outcome_t = np.argmax(logits + gumbel, axis=-1).astype(np.int64)
-            else:
-                outcome_t = np.array(tr["pa_outcome"]["value"])[:, 0].astype(np.int64)  # (B,)
-            bs_int    = np.clip(np.rint(current_bs[:, t] * 7.0), 0, 7).astype(np.int64)
-
-            eo = engine.sample(bs_int, real_outs[:, t], outcome_t, rng_np)
-            sample_runs += eo["runs"] * valid[:, t]
-
-            if t + 1 < T:
-                # Reset bases at a half-inning boundary, else carry engine state.
-                boundary = (inning_norm[:, t+1] != inning_norm[:, t]) | (half_arr[:, t+1] != half_arr[:, t])
-                next_bs = np.where(boundary, 0, eo["bs_after"]).astype(np.float64) / 7.0
-                current_bs[:, t+1] = np.where(valid[:, t], next_bs, current_bs[:, t+1])
-
-        total += sample_runs
-
-    return total / n_samples, rng_key
-
-
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--ckpt",         type=Path,  default=_DEFAULT_CKPT)
@@ -218,10 +162,10 @@ def main() -> None:
     parser.add_argument("--limit-games",  type=int,   default=0)
     parser.add_argument("--free-rollout", action="store_true",
                         help="Feed base_state_after back autoregressively "
-                             "(slower; use --samples 1 for speed)")
+                             "across recorded PA opportunities (diagnostic only).")
     parser.add_argument("--engine-rollout", action="store_true",
-                        help="Sample only pa_outcome from the model; derive runs + "
-                             "base_state from the empirical rules engine (Phase 1).")
+                        help="Generate full games through the empirical rules engine; "
+                             "use this for game-distribution metrics.")
     parser.add_argument("--recal", action="store_true",
                         help="Apply per-class logit recalibration to pa_outcome "
                              "(test whether outcome miscalibration is the gap).")
@@ -267,10 +211,14 @@ def main() -> None:
     print(f"  {P:,} players, {len(park_map)} parks.", flush=True)
 
     engine = None
+    hook_dists = None
     if args.engine_rollout:
+        from diamondworldjax.sim.game_extract import fit_hook_dists
         from diamondworldjax.sim.rules_engine import EmpiricalEngine
         print("  Fitting empirical rules engine on training PAs...", flush=True)
-        engine = EmpiricalEngine().fit(train_pitches.filter(pl.col("pa_terminal")))
+        train_pa = train_pitches.filter(pl.col("pa_terminal"))
+        engine = EmpiricalEngine().fit(train_pa)
+        hook_dists = fit_hook_dists(train_pa)
     del train_pitches
 
     print(f"Loading test seasons {TEST_SEASONS}...", flush=True)
@@ -297,6 +245,7 @@ def main() -> None:
         "stats":  jnp.array(player_table_np["stats"]),
         "league": jnp.array(player_table_np["league"]),
         "hand":   jnp.array(player_table_np["hand"]),
+        "unknown_index": player_table_np["unknown_index"],
     }
 
     from functools import partial as _partial
@@ -307,40 +256,64 @@ def main() -> None:
         _mkw["fatigue"] = True
     model_fn = _partial(pa_model, **_mkw) if _mkw else pa_model
 
-    if args.engine_rollout:
-        from functools import partial
-        sample_fn = partial(_engine_rollout_sample, engine=engine, recal=args.recal)
-    elif args.free_rollout:
+    if args.free_rollout:
         sample_fn = _free_rollout_sample
     else:
         sample_fn = _conditioned_sample
 
-    rng = jax.random.PRNGKey(args.seed)
-    sim_runs_per_game: list[np.ndarray] = []
     t0 = time.time()
+    if args.engine_rollout:
+        # Do not replay real outs, half-inning boundaries, or PA opportunities:
+        # this path is the generated-game evaluator used for run metrics.
+        from diamondworldjax.sim.game_evaluation import simulate_score_draws
+        from diamondworldjax.sim.game_extract import extract_games
 
-    for b_idx, chunk in enumerate(chunks):
-        chunk_df = test_pa.filter(pl.col("game_pk").is_in(chunk.tolist()))
-        if len(chunk_df) == 0:
-            continue
+        pt["_engine"] = engine
+        pt["_hook_dists"] = hook_dists
+        games = extract_games(test_pa, player_table_np["id_to_idx"],
+                              park_map=park_map if args.use_park else None,
+                              unknown_idx=player_table_np["unknown_index"])
+        observed_by_game = _observed_runs_by_game(test_pa)
+        games = [game for game in games if game["game_pk"] in observed_by_game]
+        game_chunks = [games[i:i + args.batch] for i in range(0, len(games), args.batch)]
+        sim_chunks = []
+        master_key = jax.random.PRNGKey(args.seed)
+        for b_idx, game_chunk in enumerate(game_chunks):
+            away, home = simulate_score_draws(
+                model_fn, params, pt, game_chunk, jax.random.fold_in(master_key, b_idx),
+                args.samples, seed=args.seed + b_idx,
+                recal=args.recal, recal_vec=RECAL_VECTOR,
+            )
+            sim_chunks.append(away + home)
+            if b_idx % 10 == 0 or b_idx + 1 == len(game_chunks):
+                print(f"  batch {b_idx+1:4d}/{len(game_chunks)}  "
+                      f"elapsed={time.time()-t0:.0f}s", flush=True)
+        sim_runs = np.concatenate(sim_chunks, axis=1).astype(float)
+        obs_runs = np.array([observed_by_game[game["game_pk"]] for game in games])
+    else:
+        rng = jax.random.PRNGKey(args.seed)
+        sim_runs_per_game: list[np.ndarray] = []  # each item is (samples, games)
+        for b_idx, chunk in enumerate(chunks):
+            chunk_df = test_pa.filter(pl.col("game_pk").is_in(chunk.tolist()))
+            if len(chunk_df) == 0:
+                continue
 
-        batch = build_pa_batch(chunk_df)
-        batch = _map_player_ids(batch, player_table_np["id_to_idx"])
+            batch = build_pa_batch(chunk_df)
+            batch = _map_player_ids(batch, player_table_np["id_to_idx"])
+            game_runs, rng = sample_fn(model_fn, params, batch, pt, rng, args.samples)
+            sim_runs_per_game.append(game_runs)
 
-        game_runs, rng = sample_fn(model_fn, params, batch, pt, rng, args.samples)
-        sim_runs_per_game.append(game_runs)
+            if b_idx % 10 == 0 or b_idx + 1 == len(chunks):
+                done = sum(x.shape[1] for x in sim_runs_per_game)
+                print(f"  batch {b_idx+1:4d}/{len(chunks)}  games={done}  "
+                      f"elapsed={time.time()-t0:.0f}s", flush=True)
+        sim_runs = np.concatenate(sim_runs_per_game, axis=1).astype(float)
 
-        if b_idx % 10 == 0 or b_idx + 1 == len(chunks):
-            done = sum(len(x) for x in sim_runs_per_game)
-            print(f"  batch {b_idx+1:4d}/{len(chunks)}  games={done}  "
-                  f"elapsed={time.time()-t0:.0f}s", flush=True)
-
-    sim_runs = np.concatenate(sim_runs_per_game).astype(float)
+    assert sim_runs.shape == (args.samples, len(obs_runs))
     print(f"\nSimulated ({mode}): mean={sim_runs.mean():.2f}, "
-          f"std={sim_runs.std():.2f}, n={len(sim_runs)}", flush=True)
+          f"std={sim_runs.std():.2f}, n={sim_runs.size} draws", flush=True)
 
-    n = min(len(obs_runs), len(sim_runs))
-    metrics = game_run_metrics(sim_runs[:n], obs_runs[:n])
+    metrics = game_run_metrics(sim_runs.reshape(-1), np.tile(obs_runs, args.samples))
 
     print(f"\n=== PA model [{mode}] game-level metrics ===")
     for k, v in metrics.items():

@@ -184,6 +184,7 @@ def main():
                                contact_quality=args.contact_quality)
     park_map = _build_park_index(train)
     id2i = ptab["id_to_idx"]
+    unknown_idx = ptab["unknown_index"]
     # pitcher season K-rate baseline (2015-2022)
     tp = train.filter(pl.col("pa_terminal") & pl.col("pa_outcome").is_not_null())
     pcol = "pitcher_id" if "pitcher_id" in tp.columns else "pitcher_idx"
@@ -203,6 +204,7 @@ def main():
 
     pt = {"stats": jnp.array(ptab["stats"]), "league": jnp.array(ptab["league"]),
           "hand": jnp.array(ptab["hand"]),
+          "unknown_index": unknown_idx,
           "bat_hand": jnp.array(ptab.get("bat_hand", np.full(len(ptab["hand"]), .5, np.float32))),
           "pit_hand": jnp.array(ptab.get("pit_hand", np.full(len(ptab["hand"]), .5, np.float32)))}
     model_fn = partial(pa_model, outcome_only=True, fatigue=True)
@@ -212,7 +214,7 @@ def main():
     recs = {}  # (game_pk, half_bin, sp) -> [actual_K, model_EK, BF]
     def _map(b):
         for k in ("pitcher_ids", "batter_ids"):
-            b[k] = np.vectorize(lambda x: id2i.get(int(x), 0))(np.array(b[k]))
+            b[k] = np.vectorize(lambda x: id2i.get(int(x), unknown_idx))(np.array(b[k]))
         return b
     rng = jax.random.PRNGKey(0)
     for i in range(0, len(gids), 64):

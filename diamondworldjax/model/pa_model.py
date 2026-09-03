@@ -305,6 +305,7 @@ def pa_model(
     player_agg_shrink: float = 20.0,
     season_base: int = 2015,
     n_seasons: int = 9,
+    pitchformer: bool = False,
 ) -> None:
     B, T = batch["pa_valid"].shape
     P    = player_table["stats"].shape[0]
@@ -424,7 +425,14 @@ def pa_model(
         state_feats.append(batch["pit_hand"])
     game_state = jnp.stack(state_feats, axis=-1)  # (B, T, 8..11)
 
-    context  = jnp.concatenate([game_state, pitcher_z, batter_z, park_emb], axis=-1)  # (B, T, 144/145)
+    context_raw = jnp.concatenate([game_state, pitcher_z, batter_z, park_emb], axis=-1)  # (B, T, 144/145)
+
+    if pitchformer:
+        from .pa_transformer import pa_transformer_numpyro
+        context = pa_transformer_numpyro(context_raw, batch["pa_valid"])  # (B, T, 128)
+    else:
+        context = context_raw
+
     dummy_oh = jnp.zeros((B, T, N_PA_OUTCOMES))
 
     # Outcome-only model (v6): a single deeper head; runs + base_state come from

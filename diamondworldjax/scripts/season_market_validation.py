@@ -133,17 +133,19 @@ def sched_boxscores(season, want_keys):
     return games, ab
 
 
-def boxscore_lineup(game_pk, id2i):
+def boxscore_lineup(game_pk, id2i, unknown_idx=None):
     bs = _get(f"https://statsapi.mlb.com/api/v1/game/{game_pk}/boxscore", cache_name=f"box_{game_pk}.json")
     if not bs:
         return None
+    if unknown_idx is None:
+        unknown_idx = max(id2i.values(), default=-1) + 1
     out = {}
     for side in ("home", "away"):
         t = bs["teams"][side]
         order = [int(str(pid).replace("ID", "")) for pid in t.get("battingOrder", [])][:9]
-        bat = [id2i.get(pid, 0) for pid in order]
+        bat = [id2i.get(pid, unknown_idx) for pid in order]
         pitchers = [int(str(p).replace("ID", "")) for p in t.get("pitchers", [])]
-        sp = id2i.get(pitchers[0], 0) if pitchers else 0
+        sp = id2i.get(pitchers[0], unknown_idx) if pitchers else unknown_idx
         out[side] = (bat, sp)
     return out
 
@@ -259,7 +261,8 @@ def main():
     ptab = _build_player_table(tr, recency_halflife=2.0, contact_quality=True)
     pit = pitcher_rates(tr.filter(pl.col("pa_terminal")), ptab["id_to_idx"], len(ptab["hand"]))
     id2i, stats = ptab["id_to_idx"], ptab["stats"]
-    lg_allowed = float(np.mean([allowed_idx(pit[i]) for i in range(1, len(pit)) if pit[i].sum() > 0]))
+    unknown_idx = ptab["unknown_index"]
+    lg_allowed = float(np.mean([allowed_idx(pit[i]) for i in range(len(pit)) if pit[i].sum() > 0]))
     del tr
 
     if args.odds:                                   # sportsbook path (P(home) by game_pk)
@@ -290,7 +293,7 @@ def main():
 
     def channel_idx(bat_known, sp):
         Ho = np.mean([woba_bat(stats[i]) for i in bat_known]) if bat_known else 0.0
-        Hp = allowed_idx(pit[sp]) if sp != 0 else lg_allowed   # impute league-avg for unknown starter
+        Hp = allowed_idx(pit[sp]) if 0 <= sp < len(pit) else lg_allowed
         return Ho, Hp
 
     rows = []
@@ -302,10 +305,11 @@ def main():
             p_home = prices.get(ha)
         if p_home is None or not (0.02 < p_home < 0.98):
             continue
-        lu = boxscore_lineup(gpk, id2i)
+        lu = boxscore_lineup(gpk, id2i, unknown_idx)
         if not lu:
             continue
-        hbat = [i for i in lu["home"][0] if i != 0]; abat = [i for i in lu["away"][0] if i != 0]
+        hbat = [i for i in lu["home"][0] if i != unknown_idx]
+        abat = [i for i in lu["away"][0] if i != unknown_idx]
         if len(hbat) < args.min_known or len(abat) < args.min_known:
             continue
         Ho, Hp = channel_idx(hbat, lu["home"][1]); Ao, Ap = channel_idx(abat, lu["away"][1])

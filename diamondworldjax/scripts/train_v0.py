@@ -92,16 +92,17 @@ def _build_player_table(pitches) -> dict:
         "hand":    hand,
         "id_to_idx": id_to_idx,
         "all_ids": all_ids,
+        "unknown_index": P,
     }
-
-
-def _map_player_ids(batch_raw: dict, id_to_idx: dict) -> dict:
+def _map_player_ids(batch_raw: dict, id_to_idx: dict, unknown_index: int | None = None) -> dict:
     """Remap raw player IDs in batch to player-table indices."""
     import jax.numpy as jnp
 
+    if unknown_index is None:
+        unknown_index = max(id_to_idx.values(), default=-1) + 1
     def remap(arr):
         arr_np = np.array(arr)
-        out    = np.vectorize(lambda x: id_to_idx.get(int(x), 0))(arr_np)
+        out    = np.vectorize(lambda x: id_to_idx.get(int(x), unknown_index))(arr_np)
         return jnp.array(out.astype(np.int32))
 
     batch_raw["pitcher_ids"] = remap(batch_raw["pitcher_ids"])

@@ -42,6 +42,11 @@ PITCH_SCHEMA: dict[str, pl.DataType] = {
     "pa_outcome": pl.Utf8,
     "base_state_after": pl.Int64,
     "runs_scored": pl.Int64,
+    # The post-play out count is allowed to be 3 on an inning-ending play.
+    # Both fields are null only for the final recorded PA of a game, where the
+    # Statcast pitch feed has no following state from which to recover it.
+    "outs_added": pl.Int64,
+    "outs_after": pl.Int64,
     "park_id": pl.Utf8,
     "stand": pl.Utf8,
     "p_throws": pl.Utf8,
@@ -87,7 +92,7 @@ REQUIRED_RAW_COLUMNS = {
     "home_team",
 }
 
-PA_OUTCOMES = ["K", "BB", "HBP", "1B", "2B", "3B", "HR", "out"]
+PA_OUTCOMES = ["K", "BB", "HBP", "1B", "2B", "3B", "HR", "out", "E"]
 
 OUTCOME_BY_EVENT = {
     "strikeout": "K",
@@ -104,12 +109,12 @@ OUTCOME_BY_EVENT = {
     "grounded_into_double_play": "out",
     "double_play": "out",
     "fielders_choice_out": "out",
-    "field_error": "out",
+    "field_error": "E",
     "sac_fly": "out",
     "sac_bunt": "out",
     "sac_fly_double_play": "out",
     "fielders_choice": "out",
-    "catcher_interf": "out",
+    "catcher_interf": "E",
     "triple_play": "out",
 }
 

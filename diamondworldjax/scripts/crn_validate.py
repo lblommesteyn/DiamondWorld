@@ -42,12 +42,13 @@ def delta_stats(H, A, R):
 def main():
     R = 400
     s = Sim()
+    unknown = s.unknown_idx
     # a real 2024 game with known rosters
     games = s.real_games(2024, limit=200)
     def known(g):
-        return (g["park"] != 0 and g["home_staff"] and g["home_staff"][0] != 0
-                and g["away_staff"] and g["away_staff"][0] != 0
-                and sum(1 for x in g["home_lineup"] + g["away_lineup"] if x != 0) >= 17)
+        return (g["park"] != 0 and g["home_staff"] and g["home_staff"][0] != unknown
+                and g["away_staff"] and g["away_staff"][0] != unknown
+                and sum(1 for x in g["home_lineup"] + g["away_lineup"] if x != unknown) >= 17)
     game = next(g for g in games if known(g))
 
     # a strong arm to swap in: among players with a real workload (weighted PA in

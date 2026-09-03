@@ -62,13 +62,17 @@ def build_prior_cooccurrence(pa: pl.DataFrame) -> dict:
     return {"order": order}
 
 
-def pregame_staffs(pa: pl.DataFrame, id_to_idx: dict) -> dict:
+def pregame_staffs(
+    pa: pl.DataFrame, id_to_idx: dict, unknown_idx: int | None = None
+) -> dict:
     """(game_pk, half_bin) -> staff of player INDICES, leak-free.
 
     The staff is [starter] + relievers ranked by how often they have followed this
     starter in strictly earlier games. Counts are accumulated as we sweep forward, so
     a game's pool never sees its own outcome or any later game.
     """
+    if unknown_idx is None:
+        unknown_idx = max(id_to_idx.values(), default=-1) + 1
     co = build_prior_cooccurrence(pa)
     # starter_id -> {reliever_id: prior appearances behind him}
     hist: dict[int, dict[int, int]] = {}
@@ -91,7 +95,7 @@ def pregame_staffs(pa: pl.DataFrame, id_to_idx: dict) -> dict:
                 if len(pool) >= MAX_STAFF - 1:
                     break
         staff_ids = [starter] + pool[: MAX_STAFF - 1]
-        out[(gp, hb)] = [id_to_idx.get(int(p), 0) for p in staff_ids]
+        out[(gp, hb)] = [id_to_idx.get(int(p), unknown_idx) for p in staff_ids]
 
         # --- only now fold this game into the history ---
         d = hist.setdefault(starter, {})

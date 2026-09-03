@@ -129,6 +129,7 @@ def main() -> None:
     # --- Simulated per-batter outcome counts (conditioned sampling) ---
     pt = {"stats": jnp.array(ptab["stats"]), "league": jnp.array(ptab["league"]),
           "hand": jnp.array(ptab["hand"]),
+          "unknown_index": ptab["unknown_index"],
           "bat_hand": jnp.array(ptab.get("bat_hand", np.full(len(ptab["hand"]), 0.5, np.float32))),
           "pit_hand": jnp.array(ptab.get("pit_hand", np.full(len(ptab["hand"]), 0.5, np.float32)))}
     _mkw = {}
@@ -163,7 +164,8 @@ def main() -> None:
             oc = np.array(tr["pa_outcome"]["value"])  # (B, T)
             flat_idx = bidx[valid]
             flat_oc = oc[valid]
-            np.add.at(sim_counts, (flat_idx, flat_oc), 1.0)
+            known = (flat_idx >= 0) & (flat_idx < P)
+            np.add.at(sim_counts, (flat_idx[known], flat_oc[known]), 1.0)
         if bi % 20 == 0 or bi + 1 == len(chunks):
             print(f"  batch {bi+1}/{len(chunks)}  elapsed={time.time()-t0:.0f}s", flush=True)
 

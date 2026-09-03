@@ -5,6 +5,7 @@ import jax.numpy as jnp
 import flax.linen as nn
 import numpyro
 import numpyro.distributions as dist
+import numpyro.handlers as handlers
 from numpyro.contrib.module import flax_module
 from typing import Optional, NamedTuple
 import dataclasses
@@ -29,15 +30,10 @@ D_SHARED_CONTEXT  = 128
 class TransitionState:
     """All post-pitch / post-play state fields."""
     # Stochastically sampled
-    error_flag: jnp.ndarray         # (B, T) int {0,1}
+    pa_outcome: jnp.ndarray         # (B, T) int {0..8}
     runs_scored: jnp.ndarray        # (B, T) int {0..4}
     base_state_after: jnp.ndarray   # (B, T) int {0..7}
     outs_added: jnp.ndarray         # (B, T) int {0..3}
-
-    # Side events
-    wild_pitch: jnp.ndarray         # (B, T) int {0,1}
-    passed_ball: jnp.ndarray        # (B, T) int {0,1}
-    balk: jnp.ndarray               # (B, T) int {0,1}
 
     # Deterministic rule-engine outputs (for downstream convenience)
     outs_after: jnp.ndarray         # (B, T) int {0..2}  — clamped
@@ -71,8 +67,9 @@ def rule_engine_step(
     inning_over    : (B, T) bool — True when outs_after reaches 3+
     det_outs_added : (B, T) int  — deterministic outs added by rule engine
     """
-    # Strikeout: always adds exactly 1 out.
-    det_outs_added_so = jnp.where(outcome_type == 0, 1, 0)
+    # Strikeout double plays are possible, so retain an observed/sampled second
+    # out while enforcing the ordinary one-out minimum for every strikeout.
+    det_outs_added_so = jnp.where(outcome_type == 0, jnp.maximum(1, outs_added), 0)
 
     # Walk/HBP: adds 0 outs.
     det_outs_added_walk = jnp.where(outcome_type == 1, 0, 0)
@@ -115,13 +112,10 @@ class TransitionNet(nn.Module):
 
     Outputs
     -------
-    error_logit          : (B, T)       Bernoulli
+    pa_outcome_logits    : (B, T, 9)    Categorical — canonical PA outcome
     runs_logits          : (B, T, 5)    Categorical
     base_after_logits    : (B, T, 8)    Categorical
     outs_added_logits    : (B, T, 4)    Categorical  — {0,1,2,3}
-    wild_pitch_logit     : (B, T)       Bernoulli
-    passed_ball_logit    : (B, T)       Bernoulli
-    balk_logit           : (B, T)       Bernoulli
     """
     hidden_dim: int = 256
 
@@ -146,22 +140,16 @@ class TransitionNet(nn.Module):
         h = nn.LayerNorm()(h)
         h = nn.relu(h)
 
-        error_logit        = nn.Dense(1, name="head_error")(h)[..., 0]          # (B,T)
+        pa_outcome_logits  = nn.Dense(9, name="head_pa_outcome")(h)             # (B,T,9)
         runs_logits        = nn.Dense(MAX_RUNS, name="head_runs")(h)            # (B,T,5)
         base_after_logits  = nn.Dense(BASE_STATE_DIM, name="head_base")(h)     # (B,T,8)
         outs_added_logits  = nn.Dense(MAX_OUTS_ADDED + 1, name="head_outs")(h) # (B,T,4)
-        wild_pitch_logit   = nn.Dense(1, name="head_wp")(h)[..., 0]            # (B,T)
-        passed_ball_logit  = nn.Dense(1, name="head_pb")(h)[..., 0]            # (B,T)
-        balk_logit         = nn.Dense(1, name="head_balk")(h)[..., 0]          # (B,T)
 
         return dict(
-            error_logit        = error_logit,
+            pa_outcome_logits  = pa_outcome_logits,
             runs_logits        = runs_logits,
             base_after_logits  = base_after_logits,
             outs_added_logits  = outs_added_logits,
-            wild_pitch_logit   = wild_pitch_logit,
-            passed_ball_logit  = passed_ball_logit,
-            balk_logit         = balk_logit,
         )
 
 
@@ -174,16 +162,16 @@ def transition_numpyro(
     batted_ball_features: jnp.ndarray,  # (B, T, 4)  — (ls, la, sa, hd)
     base_state: jnp.ndarray,            # (B, T) int {0..7}
     outs: jnp.ndarray,                  # (B, T) int {0,1,2}
-    outcome_type: jnp.ndarray,          # (B, T) int  — see rule_engine_step codes
     in_play_mask: jnp.ndarray,          # (B, T) bool/int
     # observed values for teacher-forcing
-    obs_error_flag: Optional[jnp.ndarray]       = None,   # (B, T) int
+    obs_pa_outcome: Optional[jnp.ndarray]       = None,   # (B, T) int
     obs_runs_scored: Optional[jnp.ndarray]      = None,   # (B, T) int
     obs_base_state_after: Optional[jnp.ndarray] = None,   # (B, T) int
     obs_outs_added: Optional[jnp.ndarray]       = None,   # (B, T) int
-    obs_wild_pitch: Optional[jnp.ndarray]       = None,   # (B, T) int
-    obs_passed_ball: Optional[jnp.ndarray]      = None,   # (B, T) int
-    obs_balk: Optional[jnp.ndarray]             = None,   # (B, T) int
+    pa_outcome_mask: Optional[jnp.ndarray]      = None,   # (B, T) bool
+    runs_mask: Optional[jnp.ndarray]            = None,   # (B, T) bool
+    base_state_after_mask: Optional[jnp.ndarray] = None,  # (B, T) bool
+    outs_added_mask: Optional[jnp.ndarray]      = None,   # (B, T) bool
     name: str = "transition_net",
 ) -> TransitionState:
     """
@@ -192,14 +180,10 @@ def transition_numpyro(
 
     Stochastic sites
     ----------------
-    error_flag       — Bernoulli (in-play positions only; zeroed elsewhere)
+    pa_outcome       — Categorical(9), scored only at terminal PAs
     runs_scored      — Categorical(5) = {0,1,2,3,4}
     base_state_after — Categorical(8)
     outs_added       — Categorical(4) = {0,1,2,3}
-    wild_pitch       — Bernoulli (always; not gated on in_play)
-    passed_ball      — Bernoulli
-    balk             — Bernoulli
-
     The rule engine is applied *after* sampling to ensure inning-end logic
     is deterministic given the sampled counts.
     """
@@ -221,76 +205,48 @@ def transition_numpyro(
 
     raw = net(shared_context, batted_ball_features, base_state_oh, outs_oh)
 
-    ipm   = in_play_mask.astype(jnp.float32)    # (B, T)
-    no_ip = 1.0 - ipm                            # (B, T)
+    def _sample(site, distribution, obs, mask):
+        if mask is None:
+            return numpyro.sample(site, distribution, obs=obs)
+        with handlers.mask(mask=mask.astype(bool)):
+            return numpyro.sample(site, distribution, obs=obs)
 
     # ------------------------------------------------------------------ #
-    # 1. error_flag  — Bernoulli (gated to in-play)                       #
+    # 1. PA outcome — the central, observed transition target.           #
     # ------------------------------------------------------------------ #
-    # Mask logit to large negative for non-in-play positions.
-    err_logit_masked = raw["error_logit"] * ipm - 1e4 * no_ip
-    error_flag = numpyro.sample(
-        "error_flag",
-        dist.Bernoulli(logits=err_logit_masked),
-        obs=obs_error_flag,
-    )  # (B, T)
+    pa_outcome = _sample(
+        "pa_outcome", dist.Categorical(logits=raw["pa_outcome_logits"]),
+        obs_pa_outcome, pa_outcome_mask,
+    )
+    terminal_mask = pa_outcome_mask if pa_outcome_mask is not None else in_play_mask
+    sampled_outcome_type = jnp.where(
+        pa_outcome == 0, 0,
+        jnp.where((pa_outcome == 1) | (pa_outcome == 2), 1,
+                  jnp.where(terminal_mask, 2, 3)),
+    ).astype(jnp.int32)
+    outcome_type = jnp.where(terminal_mask, sampled_outcome_type, 3)
 
     # ------------------------------------------------------------------ #
     # 2. runs_scored  — Categorical(5)                                    #
     # ------------------------------------------------------------------ #
     runs_probs = jax.nn.softmax(raw["runs_logits"], axis=-1)   # (B, T, 5)
-    runs_scored = numpyro.sample(
-        "runs_scored",
-        dist.Categorical(probs=runs_probs),
-        obs=obs_runs_scored,
-    )  # (B, T) int {0..4}
+    runs_scored = _sample("runs_scored", dist.Categorical(probs=runs_probs),
+                          obs_runs_scored, runs_mask)  # (B, T) int {0..4}
 
     # ------------------------------------------------------------------ #
     # 3. base_state_after  — Categorical(8)                               #
     # ------------------------------------------------------------------ #
     base_after_probs = jax.nn.softmax(raw["base_after_logits"], axis=-1)  # (B, T, 8)
-    base_state_after = numpyro.sample(
-        "base_state_after",
-        dist.Categorical(probs=base_after_probs),
-        obs=obs_base_state_after,
-    )  # (B, T) int {0..7}
+    base_state_after = _sample("base_state_after", dist.Categorical(probs=base_after_probs),
+                               obs_base_state_after, base_state_after_mask)  # (B, T) int {0..7}
 
     # ------------------------------------------------------------------ #
     # 4. outs_added  — Categorical(4)  {0,1,2,3}                         #
     # ------------------------------------------------------------------ #
     outs_added_probs = jax.nn.softmax(raw["outs_added_logits"], axis=-1)  # (B, T, 4)
-    outs_added = numpyro.sample(
-        "outs_added",
-        dist.Categorical(probs=outs_added_probs),
-        obs=obs_outs_added,
-    )  # (B, T) int {0..3}
-
-    # ------------------------------------------------------------------ #
-    # 5. wild_pitch  — Bernoulli                                          #
-    # ------------------------------------------------------------------ #
-    wild_pitch = numpyro.sample(
-        "wild_pitch",
-        dist.Bernoulli(logits=raw["wild_pitch_logit"]),
-        obs=obs_wild_pitch,
-    )  # (B, T)
-
-    # ------------------------------------------------------------------ #
-    # 6. passed_ball  — Bernoulli                                         #
-    # ------------------------------------------------------------------ #
-    passed_ball = numpyro.sample(
-        "passed_ball",
-        dist.Bernoulli(logits=raw["passed_ball_logit"]),
-        obs=obs_passed_ball,
-    )  # (B, T)
-
-    # ------------------------------------------------------------------ #
-    # 7. balk  — Bernoulli                                                #
-    # ------------------------------------------------------------------ #
-    balk = numpyro.sample(
-        "balk",
-        dist.Bernoulli(logits=raw["balk_logit"]),
-        obs=obs_balk,
-    )  # (B, T)
+    outs_added = _sample("outs_added", dist.Categorical(probs=outs_added_probs),
+                         obs_outs_added,
+                         in_play_mask if outs_added_mask is None else outs_added_mask)  # (B, T) int {0..3}
 
     # ------------------------------------------------------------------ #
     # Rule engine: deterministic post-processing                          #
@@ -304,13 +260,10 @@ def transition_numpyro(
     )
 
     return TransitionState(
-        error_flag       = error_flag,
+        pa_outcome       = pa_outcome,
         runs_scored      = runs_scored,
         base_state_after = base_state_after,
         outs_added       = outs_added,
-        wild_pitch       = wild_pitch,
-        passed_ball      = passed_ball,
-        balk             = balk,
         outs_after       = outs_after,
         inning_over      = inning_over,
     )

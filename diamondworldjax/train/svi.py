@@ -211,7 +211,65 @@ def _eval_metrics(
     return out
 
 
-def _apply_scheduled_sampling(
+def _rollout_pa_game_states(outcomes: np.ndarray, batch: dict) -> dict[str, jnp.ndarray]:
+    """Build coherent PA-level states from sampled outcomes, one game at a time.
+
+    This is the scheduled-sampling state constructor.  It intentionally rolls
+    *complete games*, so base state, outs, inning/half, and batting-team score
+    differential remain synchronized.  Pitcher identities and pitch counts stay
+    exogenous: the PA model does not yet generate roster or manager decisions.
+    """
+    import numpy as np
+    from diamondworldjax.sim.rules_engine import BS_AFTER, OUT_INC, RUNS
+
+    valid = np.asarray(batch["pa_valid"], dtype=bool)
+    B, T = valid.shape
+    state = {
+        name: np.asarray(batch[name]).copy()
+        for name in ("inning", "half", "outs", "base_state", "score_diff")
+    }
+
+    for b in range(B):
+        rows = np.flatnonzero(valid[b])
+        if not len(rows):
+            continue
+        first = int(rows[0])
+        inning = max(1, int(round(state["inning"][b, first] * 8.0)) + 1)
+        half = int(round(state["half"][b, first]))
+        outs = int(round(state["outs"][b, first] * 2.0))
+        bases = int(round(state["base_state"][b, first] * 7.0))
+        diff = float(state["score_diff"][b, first] * 10.0)
+        if half == 0:
+            away, home = max(diff, 0.0), max(-diff, 0.0)
+        else:
+            home, away = max(diff, 0.0), max(-diff, 0.0)
+
+        for t in rows:
+            state["inning"][b, t] = (inning - 1) / 8.0
+            state["half"][b, t] = half
+            state["outs"][b, t] = outs / 2.0
+            state["base_state"][b, t] = bases / 7.0
+            state["score_diff"][b, t] = ((away - home) if half == 0 else (home - away)) / 10.0
+
+            outcome = int(np.clip(outcomes[b, t], 0, len(OUT_INC) - 1))
+            runs = int(RUNS[bases, outcome])
+            if half == 0:
+                away += runs
+            else:
+                home += runs
+            outs += int(OUT_INC[outcome])
+            if outs >= 3:
+                outs, bases = 0, 0
+                if half == 1:
+                    inning += 1
+                half = 1 - half
+            else:
+                bases = int(BS_AFTER[bases, outcome])
+
+    return {name: jnp.asarray(value) for name, value in state.items()}
+
+
+def _apply_game_scheduled_sampling(
     model: Callable,
     svi: SVI,
     svi_state,
@@ -220,87 +278,34 @@ def _apply_scheduled_sampling(
     ss_rate: float,
     rng_key,
 ) -> dict:
-    """Mix model-predicted base_state_after into batch inputs.
+    """Replace complete-game state histories, never independent PA fields.
 
-    With probability ss_rate, replaces batch["base_state"][:, t] with the
-    model's argmax prediction of base_state_after from the previous PA.
-    This is scheduled sampling at the batch level — no lax.scan needed.
+    A game is selected once for the entire batch sequence.  Its sampled PA
+    outcomes are then passed through the deterministic rules engine before the
+    supervised update.  The observed next-PA labels are an intentionally
+    down-stream robustness target, not counterfactual ground truth; teacher
+    forcing remains the dominant objective during the warm-up schedule.
     """
+    import numpy as np
+
     params = svi.get_params(svi_state)
-    with nhandlers.seed(rng_seed=rng_key):
+    rng_key, model_key, game_key = jax.random.split(rng_key, 3)
+    with nhandlers.seed(rng_seed=model_key):
         with nhandlers.substitute(data=params):
             with nhandlers.trace() as tr:
                 model(batch, player_table, teacher_force=False)
-
-    if "base_state_after" not in tr:
-        return batch
-
-    # Model's predicted base state after each PA, normalised to [0, 1]
-    pred_bs_after = jnp.array(tr["base_state_after"]["value"]).astype(jnp.float32) / 7.0
-
-    # Shift: prediction at t-1 feeds as base_state at t (t=0 keeps real value)
-    pred_bs_shifted = jnp.concatenate(
-        [batch["base_state"][:, :1], pred_bs_after[:, :-1]], axis=1
-    )
-
-    rng_key, mask_key = jax.random.split(rng_key)
-    B, T = pred_bs_shifted.shape
-    use_model = jax.random.uniform(mask_key, (B, T)) < ss_rate
-    mixed_bs  = jnp.where(use_model, pred_bs_shifted, batch["base_state"])
-
-    return {**batch, "base_state": mixed_bs}
-
-
-def _apply_engine_scheduled_sampling(
-    model: Callable,
-    svi: SVI,
-    svi_state,
-    batch: dict,
-    player_table: dict,
-    ss_rate: float,
-    rng_key,
-) -> dict:
-    """Phase-2 DAgger: expose the model to its OWN rolled-out base states, but
-    derived from the deterministic rules engine (legal by construction).
-
-    The earlier `_apply_scheduled_sampling` detonated (free-rollout KL=12) because
-    it fed back the neural `base_state_after` head, which could place runners in
-    impossible configurations. Here we instead sample only `pa_outcome` from the
-    model and compute the next base state via the engine lookup table, so every
-    injected state is a legal baseball state. This lets us anneal in self-generated
-    context at a low rate (e.g. 0.05 -> 0.25) without the distribution detonating.
-
-    Only meaningful for the outcome-only model (v6+), whose sole stochastic site
-    is `pa_outcome`.
-    """
-    import numpy as _np
-    from diamondworldjax.sim.rules_engine import BS_AFTER
-
-    params = svi.get_params(svi_state)
-    with nhandlers.seed(rng_seed=rng_key):
-        with nhandlers.substitute(data=params):
-            with nhandlers.trace() as tr:
-                model(batch, player_table, teacher_force=False)
-
     if "pa_outcome" not in tr:
         return batch
 
-    outcomes = _np.asarray(tr["pa_outcome"]["value"]).astype(_np.int64)        # (B, T)
-    real_bs_int = _np.clip(_np.rint(_np.asarray(batch["base_state"]) * 7.0), 0, 7).astype(_np.int64)
-    eng_bs_after = BS_AFTER[real_bs_int, outcomes].astype(_np.float32) / 7.0    # (B, T)
-
-    eng_bs_after = jnp.asarray(eng_bs_after)
-    # Shift: engine state after PA t-1 feeds as base_state at t (t=0 keeps real).
-    pred_bs_shifted = jnp.concatenate(
-        [batch["base_state"][:, :1], eng_bs_after[:, :-1]], axis=1
-    )
-
-    rng_key, mask_key = jax.random.split(rng_key)
-    B, T = pred_bs_shifted.shape
-    use_model = jax.random.uniform(mask_key, (B, T)) < ss_rate
-    mixed_bs  = jnp.where(use_model, pred_bs_shifted, batch["base_state"])
-
-    return {**batch, "base_state": mixed_bs}
+    rolled = _rollout_pa_game_states(np.asarray(tr["pa_outcome"]["value"]), batch)
+    use_generated_game = jax.random.uniform(game_key, (batch["pa_valid"].shape[0],)) < ss_rate
+    return {
+        **batch,
+        **{
+            name: jnp.where(use_generated_game[:, None], value, batch[name])
+            for name, value in rolled.items()
+        },
+    }
 
 
 def train(
@@ -319,7 +324,7 @@ def train(
     ss_max_rate: float    = 0.0,   # scheduled sampling: max mixing probability
     ss_warmup_steps: int  = 25_000, # steps to ramp ss_rate from 0 → ss_max_rate
     ss_start_step: int    = 5_000,  # don't apply SS until model has learned basics
-    engine_ss: bool       = False,  # use engine-based (legal) DAgger instead of neural bsa
+    engine_ss: bool       = False,  # retained for CLI compatibility; all SS is game-level
     kl_scale: float       = 1.0,    # scale for the global player_skills KL (= batch/total_games)
     skill_prior: str      = "iso",  # MUST match the model, else its extra latents go
                                     # uncovered by the guide and are silently resampled
@@ -394,13 +399,13 @@ def train(
         batch, player_table = next(batch_iter)
         rng_key, step_key = jax.random.split(rng_key)
 
-        # Scheduled sampling: replace some real base_states with self-generated ones.
+        # Scheduled sampling selects entire games and rolls every selected game
+        # through a legal state transition; no individual-event field mixing.
         if ss_max_rate > 0.0 and step >= ss_start_step:
             progress  = min(1.0, (step - ss_start_step) / max(ss_warmup_steps, 1))
             ss_rate   = ss_max_rate * progress
             rng_key, ss_key = jax.random.split(rng_key)
-            ss_fn = _apply_engine_scheduled_sampling if engine_ss else _apply_scheduled_sampling
-            batch = ss_fn(
+            batch = _apply_game_scheduled_sampling(
                 model, svi, svi_state, batch, player_table, ss_rate, ss_key
             )
 

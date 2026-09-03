@@ -30,7 +30,7 @@ RECAL = "data/eval2/v13_cal_params.npz"
 class Sim:
     def __init__(self, ckpt=V15, recal=RECAL, recency_hl=2.0, scale=0.18,
                  skill_mode="mean", recal_key="b_heur", train_end=2023, hook_model=False,
-                 contact_quality=False):
+                 contact_quality=False, pitchformer=False):
         # v15 (default) is trained through 2023, so its player embeddings are index-locked
         # to a 2015-2023 table; train_end must match the checkpoint (2022 for v13).
         # contact_quality must match the checkpoint too (True for v16, else the model
@@ -50,13 +50,19 @@ class Sim:
         self.hook_model = fit_hook_model(tp) if hook_model else None
         del train
         self.id2i = self.ptab["id_to_idx"]
+        self.unknown_idx = self.ptab["unknown_index"]
         P = len(self.ptab["hand"])
         self.pt = {"stats": jnp.array(self.ptab["stats"]), "league": jnp.array(self.ptab["league"]),
                    "hand": jnp.array(self.ptab["hand"]),
+                   "unknown_index": self.ptab["unknown_index"],
                    "bat_hand": np.asarray(self.ptab.get("bat_hand", np.full(P, .5, np.float32))),
                    "pit_hand": np.asarray(self.ptab.get("pit_hand", np.full(P, .5, np.float32))),
                    "_engine": engine, "_hook_dists": hooks}
-        self.model_fn = partial(pa_model, outcome_only=True, fatigue=True)
+        _mkw = dict(outcome_only=True, fatigue=True)
+        if pitchformer:
+            _mkw["pitchformer"] = True
+        self.model_fn = partial(pa_model, **_mkw)
+        self.pitchformer = pitchformer
         self.recal_vec = np.load(recal)[recal_key].astype(np.float64)
         self.scale, self.skill_mode = scale, skill_mode
         self.stats = self.ptab["stats"]   # per-player [hit,bb,k,hr] rates
@@ -78,7 +84,8 @@ class Sim:
         res = simulate(self.model_fn, self.params, self.pt, games,
                        self.jax.random.PRNGKey(seed), recal=True, recal_scale=self.scale,
                        recal_vec=self.recal_vec, seed=seed, skill_mode=sm, no_bullpen=no_bullpen,
-                       crn_keys=crn_keys, hook_model=self.hook_model)
+                       crn_keys=crn_keys, hook_model=self.hook_model,
+                       pitchformer=self.pitchformer)
         n = len(specs)
         return res["home"].reshape(n, R), res["away"].reshape(n, R)
 
@@ -96,10 +103,11 @@ class Sim:
         keep = te["game_pk"].unique().sort().to_numpy()[:limit]
         te = te.filter(pl.col("game_pk").is_in(keep.tolist()))
         te = apply_park_idx(te, self.park_map)
-        games = extract_games(te, self.id2i, park_map=self.park_map)
+        games = extract_games(te, self.id2i, park_map=self.park_map,
+                              unknown_idx=self.ptab["unknown_index"])
         if pregame_staff:
             from diamondworldjax.sim.pregame_staff import pregame_staffs
-            staffs = pregame_staffs(te, self.id2i)
+            staffs = pregame_staffs(te, self.id2i, self.ptab["unknown_index"])
             # half_bin 0 (top, away batting) is pitched by the HOME staff, and vice
             # versa. extract_games tags them this way and the v1 extractor got it
             # crossed, so the mapping is spelled out rather than inferred.

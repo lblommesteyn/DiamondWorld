@@ -81,10 +81,11 @@ def main():
                   bstat[:, 0] + 1.8 * bstat[:, 3] + 0.7 * bstat[:, 1] - 0.3 * bstat[:, 2], -np.inf)
 
     games = s.real_games(2024, limit=500)
-    def known(g):   # all key players seen in training (index != 0 = not the unknown slot)
+    unknown = s.unknown_idx
+    def known(g):   # all key players seen in training
         return (g["park"] != 0 and g["home_staff"] and g["away_staff"]
-                and g["home_staff"][0] != 0 and g["away_staff"][0] != 0
-                and sum(1 for x in g["home_lineup"] + g["away_lineup"] if x != 0) >= 17)
+                and g["home_staff"][0] != unknown and g["away_staff"][0] != unknown
+                and sum(1 for x in g["home_lineup"] + g["away_lineup"] if x != unknown) >= 17)
     clean = [g for g in games if known(g)]
     print(f"clean games (all key players known): {len(clean)}/{len(games)}", flush=True)
     # Illustrate on a COMPETITIVE game (baseline win prob near 0.5): that is where a

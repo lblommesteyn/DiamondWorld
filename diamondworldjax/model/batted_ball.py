@@ -5,6 +5,7 @@ import jax.numpy as jnp
 import flax.linen as nn
 import numpyro
 import numpyro.distributions as dist
+import numpyro.handlers as handlers
 from numpyro.contrib.module import flax_module
 from typing import Optional
 import dataclasses
@@ -140,6 +141,10 @@ def batted_ball_numpyro(
     obs_launch_angle: Optional[jnp.ndarray]  = None,   # (B, T)
     obs_spray_angle: Optional[jnp.ndarray]   = None,   # (B, T)
     obs_hit_distance: Optional[jnp.ndarray]  = None,   # (B, T)
+    launch_speed_mask: Optional[jnp.ndarray] = None,   # (B, T) bool
+    launch_angle_mask: Optional[jnp.ndarray] = None,   # (B, T) bool
+    spray_angle_mask: Optional[jnp.ndarray]  = None,   # (B, T) bool
+    hit_distance_mask: Optional[jnp.ndarray] = None,   # (B, T) bool
     name: str = "batted_ball_net",
     park_emb_name: str = "park_embedding",
 ) -> BattedBallOutcomes:
@@ -147,11 +152,11 @@ def batted_ball_numpyro(
     NumPyro model fragment for batted-ball physics outputs.
 
     All four continuous quantities are sampled via dist.Normal.
-    The in_play_mask is used to:
-    - mask obs values (set obs=None for positions where in_play==0 during
-      teacher-forcing — those positions do not contribute to the likelihood)
-    - replace sampled values with a sentinel 0.0 for out-of-play positions
-      during free rollout, ensuring downstream code can safely ignore them.
+    The continuous likelihood is evaluated only where the ball was in play and
+    that particular Statcast measurement exists.  The field-specific masks are
+    optional for backwards compatibility; when omitted, every in-play value is
+    considered observed.  Values at other positions are still sampled in free
+    rollout, then zeroed before they reach the transition model.
 
     Parameters
     ----------
@@ -182,54 +187,50 @@ def batted_ball_numpyro(
 
     ipm = in_play_mask.astype(jnp.float32)    # (B, T)
 
-    def _mask_obs(obs):
-        """Return obs where in_play, else None (don't score)."""
-        if obs is None:
-            return None
-        # Replace out-of-play positions with the model mean so they receive
-        # zero gradient; the mask on the log_prob is handled by the caller
-        # treating in_play==0 rows as unobserved.  For simplicity we pass
-        # obs directly and rely on the model being trained only on in_play
-        # rows (DataLoader responsibility).
-        return obs
+    def _sample_continuous(site, mu, sigma, obs, field_mask):
+        """Sample one Statcast field without scoring placeholder values."""
+        observed = in_play_mask.astype(bool)
+        if field_mask is not None:
+            observed = observed & field_mask.astype(bool)
+        # ``mask`` changes only the log density, not the sampled value.  That
+        # preserves a dense (B,T) return shape for downstream JAX code while
+        # excluding null/out-of-play placeholders from the training objective.
+        with handlers.mask(mask=observed):
+            return numpyro.sample(site, dist.Normal(mu, sigma), obs=obs)
 
     # ------------------------------------------------------------------ #
     # 1. launch_speed — Normal                                            #
     # ------------------------------------------------------------------ #
-    launch_speed_raw = numpyro.sample(
-        "launch_speed",
-        dist.Normal(raw["launch_speed_mu"], raw["launch_speed_sigma"]),
-        obs=_mask_obs(obs_launch_speed),
+    launch_speed_raw = _sample_continuous(
+        "launch_speed", raw["launch_speed_mu"], raw["launch_speed_sigma"],
+        obs_launch_speed, launch_speed_mask,
     )  # (B, T)
     launch_speed = launch_speed_raw * ipm   # zero out non-in-play positions
 
     # ------------------------------------------------------------------ #
     # 2. launch_angle — Normal                                            #
     # ------------------------------------------------------------------ #
-    launch_angle_raw = numpyro.sample(
-        "launch_angle",
-        dist.Normal(raw["launch_angle_mu"], raw["launch_angle_sigma"]),
-        obs=_mask_obs(obs_launch_angle),
+    launch_angle_raw = _sample_continuous(
+        "launch_angle", raw["launch_angle_mu"], raw["launch_angle_sigma"],
+        obs_launch_angle, launch_angle_mask,
     )  # (B, T)
     launch_angle = launch_angle_raw * ipm
 
     # ------------------------------------------------------------------ #
     # 3. spray_angle — Normal                                             #
     # ------------------------------------------------------------------ #
-    spray_angle_raw = numpyro.sample(
-        "spray_angle",
-        dist.Normal(raw["spray_angle_mu"], raw["spray_angle_sigma"]),
-        obs=_mask_obs(obs_spray_angle),
+    spray_angle_raw = _sample_continuous(
+        "spray_angle", raw["spray_angle_mu"], raw["spray_angle_sigma"],
+        obs_spray_angle, spray_angle_mask,
     )  # (B, T)
     spray_angle = spray_angle_raw * ipm
 
     # ------------------------------------------------------------------ #
     # 4. hit_distance — Normal                                            #
     # ------------------------------------------------------------------ #
-    hit_distance_raw = numpyro.sample(
-        "hit_distance",
-        dist.Normal(raw["hit_distance_mu"], raw["hit_distance_sigma"]),
-        obs=_mask_obs(obs_hit_distance),
+    hit_distance_raw = _sample_continuous(
+        "hit_distance", raw["hit_distance_mu"], raw["hit_distance_sigma"],
+        obs_hit_distance, hit_distance_mask,
     )  # (B, T)
     hit_distance = hit_distance_raw * ipm
 

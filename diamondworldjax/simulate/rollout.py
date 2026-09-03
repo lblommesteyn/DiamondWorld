@@ -1,12 +1,219 @@
-"""Teacher-forced and free rollout utilities for DiamondWorldJAX."""
+"""Teacher-forced, posterior-predictive, and stateful rollout utilities.
+
+``free_rollout_samples`` has two supported call forms:
+
+* the original posterior-predictive form used by ``eval_v0.py``;
+* a stateful predictor form used for generated, autoregressive pitch rollouts.
+
+Keeping both forms in one public function preserves the older evaluation API while
+making the generated-state contract explicit and testable.
+"""
 from __future__ import annotations
 
-from typing import Any, Callable
+from typing import Any, Callable, NamedTuple
 
 import jax
 import jax.numpy as jnp
 import numpyro
 from numpyro.infer import Predictive
+
+from diamondworldjax.domain import ArrayGameState, PitchResult, apply_pitch_result
+
+
+class StepDistribution(NamedTuple):
+    """Logits emitted by one stateful predictor step.
+
+    Every tensor has leading shape ``(B,)`` except categorical logits, which have
+    shape ``(B, n_classes)``.  The outcome and transition fields are consumed by
+    :func:`apply_pitch_result`, so counts, bases, inning changes, and score updates
+    are derived from the generated state rather than a supplied test-game sequence.
+    """
+
+    pitch_type_logits: jnp.ndarray
+    swing_logits: jnp.ndarray
+    called_strike_logits: jnp.ndarray
+    contact_logits: jnp.ndarray
+    foul_logits: jnp.ndarray
+    runs_logits: jnp.ndarray
+    base_state_logits: jnp.ndarray
+    outs_added_logits: jnp.ndarray
+    pa_outcome_logits: jnp.ndarray
+
+
+def initial_game_state(batch_size: int) -> ArrayGameState:
+    """Return an empty top-of-first game state for ``batch_size`` simulations."""
+    if batch_size < 1:
+        raise ValueError("batch_size must be positive")
+    zeros = jnp.zeros((batch_size,), dtype=jnp.int32)
+    return ArrayGameState(
+        inning=jnp.ones((batch_size,), dtype=jnp.int32),
+        half=zeros,
+        balls=zeros,
+        strikes=zeros,
+        outs=zeros,
+        base_state=zeros,
+        home_score=zeros,
+        away_score=zeros,
+        pitch_count_game=zeros,
+        pitch_count_inning=zeros,
+        pitch_count_pa=zeros,
+        tto=jnp.ones((batch_size,), dtype=jnp.int32),
+    )
+
+
+def _state_features(state: ArrayGameState) -> jnp.ndarray:
+    """Normalised model features for a generated game state."""
+    batting_diff = jnp.where(
+        state.half == 0,
+        state.away_score - state.home_score,
+        state.home_score - state.away_score,
+    )
+    return jnp.stack(
+        [
+            (state.inning - 1) / 8.0,
+            state.half,
+            state.balls / 3.0,
+            state.strikes / 2.0,
+            state.outs / 2.0,
+            state.base_state / 7.0,
+            batting_diff / 10.0,
+            state.pitch_count_game / 100.0,
+            state.pitch_count_inning / 30.0,
+            state.pitch_count_pa / 10.0,
+            state.tto / 3.0,
+        ],
+        axis=-1,
+    ).astype(jnp.float32)
+
+
+def _sample_step(
+    predictor: Callable,
+    params: Any,
+    state: ArrayGameState,
+    history: jnp.ndarray,
+    history_mask: jnp.ndarray,
+    exogenous: Any,
+    rng_key: jax.Array,
+) -> tuple[ArrayGameState, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    """Generate and apply one pitch, returning state and observable samples."""
+    distn = predictor(params, _state_features(state), history, history_mask, exogenous)
+    keys = jax.random.split(rng_key, 9)
+    pitch_type = jax.random.categorical(keys[0], distn.pitch_type_logits, axis=-1)
+    swing = jax.random.bernoulli(keys[1], jax.nn.sigmoid(distn.swing_logits))
+    called_strike = jax.random.bernoulli(keys[2], jax.nn.sigmoid(distn.called_strike_logits))
+    contact = jax.random.bernoulli(keys[3], jax.nn.sigmoid(distn.contact_logits))
+    foul = jax.random.bernoulli(keys[4], jax.nn.sigmoid(distn.foul_logits))
+    runs_scored = jax.random.categorical(keys[5], distn.runs_logits, axis=-1)
+    base_state_after = jax.random.categorical(keys[6], distn.base_state_logits, axis=-1)
+    outs_added = jax.random.categorical(keys[7], distn.outs_added_logits, axis=-1)
+    pa_outcome = jax.random.categorical(keys[8], distn.pa_outcome_logits, axis=-1)
+
+    stepped = apply_pitch_result(
+        state,
+        PitchResult(
+            swing=swing,
+            called_strike=called_strike,
+            contact=contact,
+            foul=foul,
+            runs_scored=runs_scored,
+            base_state_after=base_state_after,
+            outs_added=outs_added,
+            pa_outcome=pa_outcome,
+        ),
+    )
+    return (
+        stepped.state,
+        stepped.pa_terminal,
+        stepped.outcome,
+        stepped.state.base_state,
+        pitch_type,
+        stepped.game_over,
+    )
+
+
+def _keep_active_state(
+    previous: ArrayGameState,
+    updated: ArrayGameState,
+    active: jnp.ndarray,
+) -> ArrayGameState:
+    """Apply an update only to games that had not already finished."""
+    return ArrayGameState(*[jnp.where(active, new, old) for old, new in zip(previous, updated)])
+
+
+def _stateful_free_rollout_samples(
+    predictor: Callable,
+    params: Any,
+    state: ArrayGameState,
+    rng_key: jax.Array,
+    *,
+    num_samples: int = 1,
+    max_steps: int = 400,
+    exogenous: Any = None,
+) -> dict:
+    """Generate pitch sequences while feeding each generated state into the next step."""
+    if num_samples < 1 or max_steps < 1:
+        raise ValueError("num_samples and max_steps must be positive")
+
+    batch_size = state.inning.shape[0]
+    per_sample: list[dict[str, jnp.ndarray]] = []
+    sample_keys = jax.random.split(rng_key, num_samples)
+    for sample_key in sample_keys:
+        current = state
+        # History is intentionally generic: predictors may consume its generated
+        # pitch tokens, while simple predictors can ignore it.
+        history = jnp.zeros((batch_size, 0, 5), dtype=jnp.float32)
+        history_mask = jnp.zeros((batch_size, 0), dtype=bool)
+        records: dict[str, list[jnp.ndarray]] = {
+            "balls": [], "strikes": [], "outs": [], "base_state": [],
+            "runs_scored": [], "pa_terminal": [], "pa_outcome": [],
+            "home_score": [], "away_score": [], "inning": [], "half": [], "game_over": [],
+        }
+        game_over = jnp.zeros((batch_size,), dtype=bool)
+        keys = jax.random.split(sample_key, max_steps)
+        for step_key in keys:
+            previous_home, previous_away = current.home_score, current.away_score
+            updated, terminal, outcome, _, pitch_type, ended = _sample_step(
+                predictor, params, current, history, history_mask, exogenous, step_key
+            )
+            active = ~game_over
+            current = _keep_active_state(current, updated, active)
+            terminal = terminal & active
+            outcome = jnp.where(active, outcome, -1)
+            game_over = game_over | (ended & active)
+            runs = (current.home_score - previous_home) + (current.away_score - previous_away)
+            records["balls"].append(current.balls)
+            records["strikes"].append(current.strikes)
+            records["outs"].append(current.outs)
+            records["base_state"].append(current.base_state)
+            records["runs_scored"].append(runs)
+            records["pa_terminal"].append(terminal)
+            records["pa_outcome"].append(outcome)
+            records["home_score"].append(current.home_score)
+            records["away_score"].append(current.away_score)
+            records["inning"].append(current.inning)
+            records["half"].append(current.half)
+            records["game_over"].append(game_over)
+
+            token = jnp.stack(
+                [
+                    pitch_type.astype(jnp.float32),
+                    current.strikes.astype(jnp.float32),
+                    current.outs.astype(jnp.float32),
+                    current.base_state.astype(jnp.float32),
+                    terminal.astype(jnp.float32),
+                ],
+                axis=-1,
+            )
+            history = jnp.concatenate([history, token[:, None, :]], axis=1)
+            history_mask = jnp.concatenate(
+                [history_mask, active[:, None]], axis=1
+            )
+        per_sample.append({name: jnp.stack(values, axis=0) for name, values in records.items()})
+
+    return {
+        name: jnp.stack([sample[name] for sample in per_sample], axis=0)
+        for name in per_sample[0]
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -52,33 +259,66 @@ def teacher_forced_samples(
 # ---------------------------------------------------------------------------
 
 def free_rollout_samples(
-    model: Callable,
-    guide: Any,
-    params: dict,
-    batch: dict,
-    player_table: dict,
-    rng_key: jax.Array,
+    model_or_predictor: Callable,
+    guide_or_params: Any,
+    params_or_state: Any,
+    batch_or_rng_key: Any,
+    player_table: dict | None = None,
+    rng_key: jax.Array | None = None,
     num_samples: int = 1,
+    max_steps: int | None = None,
+    exogenous: Any = None,
 ) -> dict:
     """
-    Draw from the posterior predictive without conditioning on observations.
+    Draw free samples from either supported rollout interface.
 
-    Samples pitch sequences autoregressively from the learned distributions.
+    Stateful form::
+
+        free_rollout_samples(predictor, params, initial_state, rng_key,
+                             num_samples=..., max_steps=...)
+
+    calls ``predictor`` once per generated pitch and feeds the state produced by
+    that pitch into the next call.  It returns arrays shaped ``(S, steps, B)``.
+
+    Posterior-predictive form (kept for existing callers)::
+
+        free_rollout_samples(model, guide, params, batch, player_table, rng_key,
+                             num_samples=...)
+
+    This retains its original behaviour and output layout ``(S, B, T, ...)``.
 
     Returns
     -------
     dict mapping site name → array of shape (num_samples, B, T, ...)
     """
+    if isinstance(params_or_state, ArrayGameState):
+        if max_steps is None:
+            raise ValueError("stateful free_rollout_samples requires max_steps")
+        return _stateful_free_rollout_samples(
+            model_or_predictor,
+            guide_or_params,
+            params_or_state,
+            batch_or_rng_key,
+            num_samples=num_samples,
+            max_steps=max_steps,
+            exogenous=exogenous,
+        )
+
+    if player_table is None or rng_key is None:
+        raise TypeError(
+            "posterior-predictive free_rollout_samples requires model, guide, params, "
+            "batch, player_table, and rng_key"
+        )
     predictive = Predictive(
-        model,
-        guide      = guide,
-        params     = params,
+        model_or_predictor,
+        guide      = guide_or_params,
+        params     = params_or_state,
         num_samples= num_samples,
         return_sites = _ALL_OBSERVABLE_SITES,
     )
     return predictive(
         rng_key,
-        batch,
+        batch_or_rng_key,
         player_table,
         teacher_force = False,
     )
@@ -90,7 +330,7 @@ def free_rollout_samples(
 
 def extract_game_runs(
     samples: dict,
-    terminal_mask: jnp.ndarray,   # (B, T) bool
+    terminal_mask: jnp.ndarray | None = None,
 ) -> jnp.ndarray:
     """
     Sum runs_scored at terminal PAs per game per sample.
@@ -98,7 +338,9 @@ def extract_game_runs(
     Parameters
     ----------
     samples       : output of free_rollout_samples
-    terminal_mask : (B, T) — which positions are PA terminals
+    terminal_mask : (B, T) — which positions are PA terminals for the
+        posterior-predictive layout. Omit it for stateful rollout samples, which
+        carry their generated ``pa_terminal`` values.
 
     Returns
     -------
@@ -109,10 +351,15 @@ def extract_game_runs(
     if runs is None:
         raise KeyError("'runs_scored' not found in samples dict.")
 
-    # Mask out non-terminal positions
+    if terminal_mask is None:
+        generated_terminal = samples.get("pa_terminal")
+        if generated_terminal is None:
+            raise ValueError("terminal_mask is required for samples without 'pa_terminal'.")
+        # Stateful layout is (S, steps, B), unlike NumPyro Predictive's (S, B, T).
+        return (runs * generated_terminal).sum(axis=1)
+
     mask = terminal_mask[None, :, :]          # (1, B, T)
-    game_runs = (runs * mask).sum(axis=-1)    # (num_samples, B)
-    return game_runs
+    return (runs * mask).sum(axis=-1)         # (num_samples, B)
 
 
 def simulate_season_runs(
@@ -148,7 +395,7 @@ def simulate_season_runs(
 
 
 # ---------------------------------------------------------------------------
-# Site names returned by Predictive
+# Site names returned by the legacy posterior-predictive diagnostic
 # ---------------------------------------------------------------------------
 
 _ALL_OBSERVABLE_SITES = [
@@ -158,8 +405,7 @@ _ALL_OBSERVABLE_SITES = [
     # Batted ball
     "launch_speed", "launch_angle", "spray_angle", "hit_distance",
     # Transition
-    "runs_scored", "base_state_after", "outs_added",
-    "error_flag", "wild_pitch", "passed_ball", "balk",
+    "pa_outcome", "runs_scored", "base_state_after", "outs_added",
     # Manager
     "pitching_change", "steal_attempt", "runner_send", "defensive_alignment",
 ]

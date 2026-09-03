@@ -165,7 +165,7 @@ N_KEYS = N_BASE_STATES * 3 * N_OUTCOMES  # 8 * 3 * 9 = 216
 
 
 class EmpiricalEngine:
-    """Samples (base_state_after, runs) from the real transition distribution.
+    """Samples (base_state_after, runs, outs_added) from real transitions.
 
     Fits P(bs_after, runs | base_state, outs, outcome) from training data, keyed
     by (base_state, outs, outcome). This captures the true stochastic baserunning
@@ -177,9 +177,11 @@ class EmpiricalEngine:
     """
 
     def __init__(self) -> None:
-        # Per key: arrays of observed (bs_after, runs); sampling draws a row.
+        # Per key: arrays of observed transition rows; sampling draws one row
+        # so base advancement, scoring, and out count remain correlated.
         self._bsa: dict[int, np.ndarray] = {}
         self._runs: dict[int, np.ndarray] = {}
+        self._outs_added: dict[int, np.ndarray] = {}
         # Expected runs per key (for unbiased deterministic-expectation use / bias checks).
         self._exp_runs = np.full(N_KEYS, np.nan, dtype=np.float64)
 
@@ -192,24 +194,62 @@ class EmpiricalEngine:
             & pl.col("base_state").is_not_null()
             & pl.col("base_state_after").is_not_null()
         )
+        legacy_state_cols = {"game_pk", "inning", "half", "at_bat_number", "pitch_number"}
+        if "outs_added" not in df.columns and legacy_state_cols.issubset(df.columns):
+            df = df.sort(["game_pk", "at_bat_number", "pitch_number"])
         bs = df["base_state"].to_numpy().astype(_np.int64)
         outs = _np.clip(df["outs"].to_numpy().astype(_np.int64), 0, 2)
         oc_str = df["pa_outcome"].to_list()
         runs = df["runs_scored"].to_numpy().astype(_np.int64)
         bsa = df["base_state_after"].to_numpy().astype(_np.int64)
 
+        # Rebuilt data carries the exact label.  For an older processed data
+        # set, recover it from the next terminal PA's pre-pitch state instead.
+        # This works because a terminal pitch is the last pitch of its PA.  The
+        # final PA in a game stays unlabelled: without a successor its out
+        # count cannot be observed safely.
+        if "outs_added" in df.columns:
+            added_raw = df["outs_added"].to_numpy().astype(_np.float64)
+            added_valid = _np.isfinite(added_raw) & (added_raw >= 0) & (added_raw <= 3)
+            added = _np.where(added_valid, added_raw, 0).astype(_np.int64)
+        elif legacy_state_cols.issubset(df.columns):
+            game = df["game_pk"].to_numpy()
+            inning = df["inning"].to_numpy()
+            half = df["half"].to_numpy()
+            before = df["outs"].to_numpy().astype(_np.int64)
+            added_raw = _np.full(df.height, _np.nan)
+            same_game = game[:-1] == game[1:]
+            same_half_inning = (inning[:-1] == inning[1:]) & (half[:-1] == half[1:])
+            successor_outs = before[1:]
+            added_raw[:-1] = _np.where(
+                same_game,
+                _np.where(same_half_inning, _np.maximum(0, successor_outs - before[:-1]), 3 - before[:-1]),
+                _np.nan,
+            )
+            added_valid = _np.isfinite(added_raw) & (added_raw >= 0) & (added_raw <= 3)
+            added = _np.where(added_valid, added_raw, 0).astype(_np.int64)
+        else:
+            # Small ad-hoc data frames without sequential game state retain a
+            # deterministic fallback for API compatibility.
+            added_valid = _np.ones(df.height, dtype=bool)
+            added = _np.array([PA_OUTCOME_IDX.get(o, -1) for o in oc_str], dtype=_np.int64)
+            added = OUT_INC[_np.clip(added, 0, N_OUTCOMES - 1)]
+
         oc = _np.array([PA_OUTCOME_IDX.get(o, -1) for o in oc_str], dtype=_np.int64)
-        valid = oc >= 0
-        bs, outs, oc, runs, bsa = bs[valid], outs[valid], oc[valid], runs[valid], bsa[valid]
+        valid = (oc >= 0) & added_valid
+        bs, outs, oc, runs, bsa, added = (
+            bs[valid], outs[valid], oc[valid], runs[valid], bsa[valid], added[valid]
+        )
 
         keys = (bs * 3 + outs) * N_OUTCOMES + oc
         order = _np.argsort(keys, kind="stable")
-        keys_s, bsa_s, runs_s = keys[order], bsa[order], runs[order]
+        keys_s, bsa_s, runs_s, added_s = keys[order], bsa[order], runs[order], added[order]
         uniq, starts = _np.unique(keys_s, return_index=True)
         ends = _np.append(starts[1:], len(keys_s))
         for k, s, e in zip(uniq, starts, ends):
             self._bsa[int(k)] = bsa_s[s:e]
             self._runs[int(k)] = runs_s[s:e]
+            self._outs_added[int(k)] = added_s[s:e]
             self._exp_runs[int(k)] = runs_s[s:e].mean()
         return self
 
@@ -228,7 +268,7 @@ class EmpiricalEngine:
 
     def sample(self, base_state, outs, outcome, rng: np.random.Generator,
                u: np.ndarray | None = None) -> dict[str, np.ndarray]:
-        """Sample (bs_after, runs) per element from the empirical distribution.
+        """Sample (bs_after, runs, out_inc) per element from the empirical distribution.
 
         Vectorized by unique key: at most 216 keys, so this is a short Python loop
         over the keys present in the batch, each doing one vectorized draw.
@@ -247,6 +287,7 @@ class EmpiricalEngine:
 
         out_runs = np.empty(len(bs), np.int64)
         out_bsa = np.empty(len(bs), np.int64)
+        out_inc = np.empty(len(bs), np.int64)
 
         for k in np.unique(keys):
             m = keys == k
@@ -260,11 +301,13 @@ class EmpiricalEngine:
                     idx = rng.integers(0, L, size=int(m.sum()))
                 out_runs[m] = self._runs[k][idx]
                 out_bsa[m] = self._bsa[k][idx]
+                out_inc[m] = self._outs_added[k][idx]
             else:
                 # Deterministic fallback for unseen keys.
                 b = bs[m]
                 o = oc[m]
                 out_runs[m] = RUNS[b, o]
                 out_bsa[m] = BS_AFTER[b, o]
+                out_inc[m] = OUT_INC[o]
 
-        return {"runs": out_runs, "bs_after": out_bsa, "out_inc": OUT_INC[oc]}
+        return {"runs": out_runs, "bs_after": out_bsa, "out_inc": out_inc}

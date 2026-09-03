@@ -5,6 +5,7 @@ import jax.numpy as jnp
 import flax.linen as nn
 import numpyro
 import numpyro.distributions as dist
+import numpyro.handlers as handlers
 from numpyro.contrib.module import flax_module
 from typing import Optional, NamedTuple
 import dataclasses
@@ -125,6 +126,8 @@ def manager_decisions_numpyro(
     obs_steal: Optional[jnp.ndarray] = None,            # (B, T) int
     obs_runner_send: Optional[jnp.ndarray] = None,      # (B, T) int
     obs_alignment: Optional[jnp.ndarray] = None,        # (B, T) int
+    pitching_change_mask: Optional[jnp.ndarray] = None, # (B, T) bool
+    steal_mask: Optional[jnp.ndarray] = None,           # (B, T) bool
     name: str = "manager_net",
     hidden_dim: int = 256,
 ) -> ManagerDecisions:
@@ -184,19 +187,19 @@ def manager_decisions_numpyro(
     # Stochastic sample sites                                             #
     # ------------------------------------------------------------------ #
 
+    def _sample(site, distribution, obs, mask):
+        if mask is None:
+            return numpyro.sample(site, distribution, obs=obs)
+        with handlers.mask(mask=mask.astype(bool)):
+            return numpyro.sample(site, distribution, obs=obs)
+
     # 1. pitching_change: Bernoulli
-    pitching_change = numpyro.sample(
-        "pitching_change",
-        dist.Bernoulli(logits=pc_logit_sq),
-        obs=obs_pitching_change,
-    )  # (B, T)  int
+    pitching_change = _sample("pitching_change", dist.Bernoulli(logits=pc_logit_sq),
+                              obs_pitching_change, pitching_change_mask)  # (B, T) int
 
     # 2. steal_attempt: Bernoulli (masked logit)
-    steal_attempt = numpyro.sample(
-        "steal_attempt",
-        dist.Bernoulli(logits=st_logit_sq),
-        obs=obs_steal,
-    )  # (B, T)  int
+    steal_attempt = _sample("steal_attempt", dist.Bernoulli(logits=st_logit_sq),
+                            obs_steal, steal_mask)  # (B, T) int
 
     # 3. runner_send: Bernoulli
     runner_send = numpyro.sample(
