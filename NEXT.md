@@ -51,8 +51,18 @@ Cheap, and it answers a question that has been asked. Roughly 5 minutes each.
       /home/luke/dwjax-venv/bin/python -m diamondworldjax.scripts.train_pitchformer \
       --d-model 192 --layers 4 --heads 6 --steps 20000 --tag cap_long
 
-Baseline to beat is `data/eval2/pitchformer_ab_v1.json`: type +0.269, swing +0.230,
-contact +0.127, foul +0.147.
+Baseline to beat is `data/eval2/pitchformer_v2_maskfix.json`: type **+0.2463**,
+swing **+0.2227**, contact **+0.1124**, foul **+0.0313**.
+
+**Do not compare against `pitchformer_ab_v1.json`.** Those numbers (type +0.269, swing
++0.230, contact +0.127, foul +0.147) were produced before the causal-mask fix, when a
+fully-masked attention row at position 0 softmaxed uniformly over every key including
+future pitches, leaking lookahead through the whole stack. Any run made after commit
+1ea0258 uses the fixed mask, so scoring it against v1 measures that bug rather than
+capacity, and every config would look like a regression.
+
+The foul head is at +0.031 post-fix, which is close to no skill at all. If a capacity
+arm appears to make foul dramatically better, suspect the harness before believing it.
 
 `cap_long` is the interesting one. Training loss was still drifting down at 6k steps,
 so some of what would look like a capacity win may just be undertraining, and those
