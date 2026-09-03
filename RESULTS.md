@@ -1704,3 +1704,48 @@ carries over the fence, and that head is not in this stack.
 So the table is correct, version controlled and connected to the wrong consumers. It
 should be retested when a batted-ball head exists, and until then geometry should not
 be described as part of what makes the super-state work.
+
+
+## CORRECTION: the A/B/C numbers above were inflated by lookahead (2026-09-02)
+
+The causal mask is strictly lower triangular, so the FIRST pitch of a sequence has no
+history and its attention row is fully masked. Softmax over an all-masked row does not
+raise. It returns a uniform mix over EVERY key, which at position 0 means every other
+pitch in that half-inning, including future ones. Position 1 then attends to that
+vector, so partial future information propagated forward through the whole stack.
+
+Measured before the fix: perturbing only padded positions moved the t=0 output by 1.77
+and t=1 by 0.81. After zeroing the attention contribution on a fully-masked row, both
+are exactly 0.
+
+Retrained. Every head lost ground, which is the direction that confirms the diagnosis:
+
+| head | as first reported | corrected | change |
+|---|---|---|---|
+| pitch type | +0.2693 | **+0.2463** | -0.023 |
+| swing | +0.2298 | **+0.2227** | -0.007 |
+| contact | +0.1270 | **+0.1124** | -0.015 |
+| foul | +0.1465 | **+0.0313** | **-0.115** |
+| steal | +0.0135 | **+0.0089** | -0.005 |
+| pickoff | +0.0175 | **+0.0177** | +0.000 |
+| wild pitch | +0.0082 | **+0.0070** | -0.001 |
+| error | +0.0033 | **+0.0032** | -0.000 |
+
+The headline claim survives in weakened form. Type, swing and contact still beat their
+baselines by 0.11 to 0.25 nats, which remains several times the 0.06-nat spread that
+every PA-level variant sits inside, so "the pitch-level signal is not saturated" still
+holds.
+
+The foul head does not survive. At +0.031 over the marginal it has essentially no
+skill, and its earlier +0.147 was almost entirely lookahead. Any claim about modelling
+fouls should be withdrawn.
+
+C is barely affected, which makes sense: those events are rare and driven by the
+immediate situation rather than by sequence context, so there was little for the leak
+to add.
+
+This is the same silent-failure family as the three review defects and the untrained
+transition heads. An all-masked softmax row is not an error, it is a plausible number,
+and it trained without complaint. `tests/test_pitchformer_masking.py` now asserts both
+that the mask is strictly causal and pad-aware, and that perturbing padded positions
+moves no valid position at all.
