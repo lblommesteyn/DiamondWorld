@@ -1749,3 +1749,21 @@ transition heads. An all-masked softmax row is not an error, it is a plausible n
 and it trained without complaint. `tests/test_pitchformer_masking.py` now asserts both
 that the mask is strictly causal and pad-aware, and that perturbing padded positions
 moves no valid position at all.
+
+
+### CORRECTION: the leak comparison was already clean, and "v16" is a mislabel
+
+`run_pregame_sim.py` calls `Sim(hook_model=True)` without a checkpoint argument, so it
+uses the `V15` default. The sweep recorded above as `v16-pregame-leakfree` ran the
+**v15** model. `v15-pregame-hook` ran v15 too.
+
+Both sides of that comparison are therefore the same model, which retracts the caveat
+attached to it. It is not an upper bound that conflates the leak with a version change.
+It is the clean isolation: with the model held fixed, removing the bullpen leak moves
+win-probability log-loss from 0.6881 to 0.6985, across the home-field base rate of
+0.6923. The leak was worth the entire apparent skill.
+
+The artifact name stays as it is rather than being rewritten, because the file is
+already published and referenced; it is wrong and now documented as wrong. Running the
+sweep with the actual v16 checkpoint additionally requires `contact_quality=True`,
+which `Sim` defaults to off, so it is a code change rather than a rerun.
