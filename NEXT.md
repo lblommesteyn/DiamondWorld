@@ -72,12 +72,26 @@ Do not expect this to fix the simulator. The simulator failure is structural (se
 and the RESULTS.md writeup), and a larger model conditioned on the wrong count only
 becomes confidently wrong faster.
 
-## 3. Isolate the bullpen leak cleanly
+## 3. Isolate the bullpen leak cleanly -- ALREADY DONE, DO NOT RUN
 
-Still outstanding from the external review. The current figure compares v15-leaky
-against v16-leak-free, which conflates the leak with the version change, so it is an
-upper bound on the leak's cost and not a measurement of it. Running the same model
-both ways fixes that.
+**Superseded. Running this wastes about two hours reproducing an existing result.**
+
+`run_pregame_sim.py` calls `Sim(hook_model=True)` with no checkpoint argument, so it
+takes the `V15` default. The sweep tagged `v16-pregame-leakfree` therefore ran the
+**v15** model, not v16, and `v15-pregame-hook` ran v15 as well. Both sides of that
+comparison are the same model, which makes it the clean isolation this task was asking
+for. The leak's cost is 0.6881 -> 0.6985 log-loss, already measured.
+
+The tag is simply wrong, and the earlier claim that the comparison "conflates the leak
+with the version change" was wrong with it.
+
+What would still be worth running is the same sweep with the model the tag claims:
+
+    python -m diamondworldjax.scripts.run_pregame_sim --tag v16-real --r 100 --pregame-staff
+
+and that needs `Sim` to be passed `ckpt=V16, contact_quality=True` first, because v16
+was trained with contact quality on and the default is off. Until that is wired
+through as a flag, this is a code change, not a run.
 
     pcslurm submit --name dw-realized --shared -- bash /home/luke/DiamondWorld/scripts/run_detached.sh realized \
       /home/luke/dwjax-venv/bin/python -m diamondworldjax.scripts.run_pregame_sim \
