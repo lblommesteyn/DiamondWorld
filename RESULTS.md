@@ -1815,3 +1815,61 @@ Caveat on conditions: the env-off arm ran about 5x slower in wall time than the 
 arm at identical settings, which points at thermal or contention differences on the box.
 Both completed the same 6,000 steps, so the comparison is over steps rather than time,
 but the two arms did not run under identical machine conditions.
+
+
+## Transformer D, and a withdrawn explanation (2026-09-04)
+
+### D works
+
+Given the super-state, the pitch, and that contact was made, D predicts the batted
+ball in two physically ordered heads: what the bat does to the ball (exit velocity,
+launch angle), then what the park and the air do to it in flight (out / 1B / 2B / 3B /
+HR). 124,207 balls in play in 2024, launch measured on 99.7%.
+
+| head | baseline NLL | D NLL | improvement |
+|---|---|---|---|
+| launch (2-d Gaussian) | 3.047 | 2.788 | **+0.260** |
+| outcome (5-way) | 0.929 | 0.557 | **+0.373** |
+| home run (binary) | 0.180 | 0.056 | **+0.124** |
+
+The stack can now end a plate appearance in something other than a strikeout or a
+walk, which it could not before.
+
+### Geometry and environment do not help D either
+
+D is the consumer that the two earlier nulls were explained by. Identical architecture,
+geometry and environment on versus both zeroed:
+
+| head | physics off | physics on | delta |
+|---|---|---|---|
+| launch | +0.2596 | +0.2561 | -0.0034 |
+| outcome | +0.3727 | +0.3714 | -0.0012 |
+| home run | +0.1239 | +0.1245 | +0.0006 |
+
+**The explanation is withdrawn.** Park geometry was a null for A and B, and the reason
+given was that nothing in the stack modelled batted-ball flight. Weather, wind and
+altitude were a null for A and B, and the same reason was given. D models batted-ball
+flight, consumes wall distances, wall heights, wind and air density directly, and they
+move the home-run head by 0.0006 nats. "Nothing consumed them" was not why they failed.
+
+The one prediction that held is that launch is flat: wall distance cannot change how
+hard the bat hits the ball, so there is no leak. That is the only part that was right.
+
+### One hypothesis, stated as a hypothesis
+
+The processed parquet carries no batted-ball DIRECTION. There is no spray angle and no
+hit coordinate; raw Statcast has `hc_x`, `hc_y` and `hit_distance_sc`, and they were
+never carried through the pipeline. Without direction, "distance to the wall" is not a
+defined quantity for a given ball: the model cannot know whether it is headed at the
+310-foot line or the 390-foot centre, so a 9-number geometry vector has nothing to
+attach to.
+
+That is a mechanism, and it is cheap to test: extract `hc_x`/`hc_y` into a spray angle,
+add it to D1's launch head, and rerun physics on versus off. If HR then moves, geometry
+was real and direction was the missing key. If HR still does not move, the park
+embedding the trunk already carries is absorbing everything a wall can contribute and
+explicit geometry has no residual value.
+
+Having been wrong about the cause twice, this is recorded as a hypothesis with a test,
+not as the answer. Until the test is run the null stands, and geometry, weather and
+wind should not be described as contributing anything to this simulator.
