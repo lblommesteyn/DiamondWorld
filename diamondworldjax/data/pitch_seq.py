@@ -105,6 +105,55 @@ def _ctx(df: pl.DataFrame) -> np.ndarray:
 
 
 D_CTX = 16
+D_ENV = 8          # temp, elevation, roof, wind (3), air density, env_known
+D_CTX_TOTAL = D_CTX + D_ENV
+
+ENV_COLS = ("temp_f", "elevation_ft", "roof_closed", "wind_mph", "wind_out",
+            "wind_cross")
+
+
+def _env(df: pl.DataFrame) -> np.ndarray:
+    """Per-pitch environment block. Zeros + env_known=0 when unavailable.
+
+    Only two of these have a plausible path to helping the CURRENT heads. Air
+    density affects how much a pitch breaks, which is why breaking balls misbehave
+    at altitude, and that acts on A's stuff model. Wind and roof act on batted-ball
+    flight, which no head in this stack models, so they are carried for the
+    batted-ball head that does not exist yet rather than expected to help now.
+    """
+    n = df.height
+    if "temp_f" not in df.columns:
+        return np.zeros((n, D_ENV), np.float32)
+
+    temp = df["temp_f"].fill_null(72.0).to_numpy().astype(np.float32)
+    elev = df["elevation_ft"].fill_null(500.0).to_numpy().astype(np.float32)
+    roof = df["roof_closed"].fill_null(0).to_numpy().astype(np.float32)
+    wmph = df["wind_mph"].fill_null(0.0).to_numpy().astype(np.float32)
+    wout = df["wind_out"].fill_null(0.0).to_numpy().astype(np.float32)
+    wcrs = df["wind_cross"].fill_null(0.0).to_numpy().astype(np.float32)
+    known = df["temp_f"].is_not_null().to_numpy().astype(np.float32)
+
+    # Air density relative to sea level at 15C, as a physical quantity rather than
+    # leaving a linear head to discover the interaction between two raw numbers:
+    # pressure falls with altitude, density falls with temperature.
+    t_kelvin = (temp - 32.0) * 5.0 / 9.0 + 273.15
+    density = np.exp(-elev / 29000.0) * (288.15 / np.maximum(t_kelvin, 200.0))
+
+    # A closed roof means the weather columns describe indoor air, so wind is
+    # zeroed rather than left to imply a breeze that cannot reach the field.
+    wmph = wmph * (1.0 - roof)
+    wout = wout * (1.0 - roof)
+    wcrs = wcrs * (1.0 - roof)
+
+    return np.stack([
+        (temp - 72.0) / 15.0,
+        (elev - 500.0) / 900.0,
+        roof,
+        wmph / 12.0,
+        wout, wcrs,
+        (density - 1.0) / 0.12,
+        known,
+    ], axis=-1).astype(np.float32)
 
 
 EVENT_FLAGS = ("wild_pitch", "passed_ball", "balk", "steal", "caught_stealing",
@@ -112,7 +161,8 @@ EVENT_FLAGS = ("wild_pitch", "passed_ball", "balk", "steal", "caught_stealing",
 
 
 def make_sequences(df: pl.DataFrame, maps: dict, max_len: int = 160,
-                   geometry_table=None, events: pl.DataFrame | None = None):
+                   geometry_table=None, events: pl.DataFrame | None = None,
+                   game_ctx: pl.DataFrame | None = None):
     """(game, half) sequences -> padded arrays for the A/B/C transformers.
 
     `events` is the table from data/extract_events.py. It is LEFT-joined, so a
@@ -129,8 +179,12 @@ def make_sequences(df: pl.DataFrame, maps: dict, max_len: int = 160,
                      how="left").with_columns(
             [pl.col(f).fill_null(0).cast(pl.Int8) for f in EVENT_FLAGS])
 
+    if game_ctx is not None and game_ctx.height:
+        keep = ["game_pk"] + [c for c in ENV_COLS if c in game_ctx.columns]
+        df = df.join(game_ctx.select(keep), on="game_pk", how="left")
+
     df = df.sort(["game_pk", "half", "at_bat_number", "pitch_number"])
-    ctx_all = _ctx(df)
+    ctx_all = np.concatenate([_ctx(df), _env(df)], axis=-1)
 
     pit = np.array([maps["pitcher"].get(v, UNKNOWN)
                     for v in df["pitcher_id"].to_list()], dtype=np.int32)
@@ -188,7 +242,7 @@ def make_sequences(df: pl.DataFrame, maps: dict, max_len: int = 160,
         "pitcher_idx": np.zeros((n, max_len), np.int32),
         "batter_idx": np.zeros((n, max_len), np.int32),
         "park_idx": np.zeros((n, max_len), np.int32),
-        "ctx": np.zeros((n, max_len, D_CTX), np.float32),
+        "ctx": np.zeros((n, max_len, D_CTX_TOTAL), np.float32),
         "geom": np.zeros((n, max_len, N_GEOMETRY), np.float32),
         "pitch_type": np.zeros((n, max_len), np.int32),
         "type_valid": np.zeros((n, max_len), np.float32),

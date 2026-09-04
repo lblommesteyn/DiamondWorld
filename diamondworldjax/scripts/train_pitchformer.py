@@ -188,6 +188,9 @@ def main():
     ap.add_argument("--stack", default="ab",
                     help="which heads to train: any of a, b, c")
     ap.add_argument("--events", default="data/processed/events.parquet")
+    ap.add_argument("--game-context", default="data/processed/game_context.parquet")
+    ap.add_argument("--no-env", action="store_true",
+                    help="zero the weather/altitude block, for the A/B comparison")
     args = ap.parse_args()
 
     seasons = [int(s) for s in args.train_seasons.split(",")]
@@ -208,8 +211,21 @@ def main():
     if "c" in args.stack:
         ev = pl.read_parquet(args.events)
         print(f"events table: {ev.height:,} rows", flush=True)
-    train = make_sequences(pl.concat(tr_dfs), maps, args.max_len, events=ev)
-    test = make_sequences(pl.concat(te_dfs), maps, args.max_len, events=ev)
+    gctx = None
+    if not args.no_env:
+        import os
+        if os.path.exists(args.game_context):
+            gctx = pl.read_parquet(args.game_context)
+            print(f"game context: {gctx.height:,} games", flush=True)
+        else:
+            print("game context file absent, running without environment", flush=True)
+    else:
+        print("environment block DISABLED (--no-env)", flush=True)
+
+    train = make_sequences(pl.concat(tr_dfs), maps, args.max_len, events=ev,
+                           game_ctx=gctx)
+    test = make_sequences(pl.concat(te_dfs), maps, args.max_len, events=ev,
+                          game_ctx=gctx)
     print(f"train seqs {train['valid'].shape}, pitches {int(train['valid'].sum()):,}",
           flush=True)
     print(f"test  seqs {test['valid'].shape}, pitches {int(test['valid'].sum()):,}",
