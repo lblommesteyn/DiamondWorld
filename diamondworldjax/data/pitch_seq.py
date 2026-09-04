@@ -159,6 +159,14 @@ def _env(df: pl.DataFrame) -> np.ndarray:
 EVENT_FLAGS = ("wild_pitch", "passed_ball", "balk", "steal", "caught_stealing",
                "pickoff", "error", "defensive_indiff")
 
+# Batted-ball outcome vocabulary for Transformer D. Only rows with in_play carry a
+# label; everything else is masked out of D's loss by batted_valid.
+BATTED_OUTCOMES = {"out": 0, "1B": 1, "2B": 2, "3B": 3, "HR": 4}
+N_BATTED = 5
+# Launch standardisation, fixed for the same reason STUFF_CENTRE is.
+LAUNCH_CENTRE = np.array([88.0, 12.0], dtype=np.float32)   # mph, degrees
+LAUNCH_SCALE = np.array([14.0, 25.0], dtype=np.float32)
+
 
 def make_sequences(df: pl.DataFrame, maps: dict, max_len: int = 160,
                    geometry_table=None, events: pl.DataFrame | None = None,
@@ -216,6 +224,21 @@ def make_sequences(df: pl.DataFrame, maps: dict, max_len: int = 160,
     else:
         ev_all = None
 
+    # Batted-ball labels. A row is a batted ball iff in_play; launch measurements
+    # are additionally gated on being present, so an untracked ball in play still
+    # contributes to the outcome head but not to the launch head.
+    in_play = df["in_play"].fill_null(False).to_numpy().astype(np.float32)
+    ls = df["launch_speed"].to_numpy().astype(np.float32)
+    la = df["launch_angle"].to_numpy().astype(np.float32)
+    launch_valid = (in_play > 0) & np.isfinite(ls) & np.isfinite(la)
+    launch = np.stack([np.nan_to_num(ls), np.nan_to_num(la)], -1)
+    launch = (launch - LAUNCH_CENTRE) / LAUNCH_SCALE
+    oc = df["pa_outcome"].to_list()
+    batted_out = np.array([BATTED_OUTCOMES.get(o, -1) if o is not None else -1
+                           for o in oc], dtype=np.int32)
+    batted_valid = ((in_play > 0) & (batted_out >= 0)).astype(np.float32)
+    batted_out = np.maximum(batted_out, 0)
+
     # swing/contact/foul are Booleans with no nulls.
     swing = df["swing"].to_numpy().astype(np.float32)
     contact = df["contact"].to_numpy().astype(np.float32)
@@ -252,6 +275,10 @@ def make_sequences(df: pl.DataFrame, maps: dict, max_len: int = 160,
         "contact": np.zeros((n, max_len), np.float32),
         "foul": np.zeros((n, max_len), np.float32),
         "valid": np.zeros((n, max_len), np.float32),
+        "launch": np.zeros((n, max_len, 2), np.float32),
+        "launch_valid": np.zeros((n, max_len), np.float32),
+        "batted_out": np.zeros((n, max_len), np.int32),
+        "batted_valid": np.zeros((n, max_len), np.float32),
     }
     if ev_all is not None:
         out["events"] = np.zeros((n, max_len, len(EVENT_FLAGS)), np.float32)
@@ -270,6 +297,10 @@ def make_sequences(df: pl.DataFrame, maps: dict, max_len: int = 160,
         out["contact"][i, :L] = contact[a:b]
         out["foul"][i, :L] = foul[a:b]
         out["valid"][i, :L] = 1.0
+        out["launch"][i, :L] = launch[a:b]
+        out["launch_valid"][i, :L] = launch_valid[a:b].astype(np.float32)
+        out["batted_out"][i, :L] = batted_out[a:b]
+        out["batted_valid"][i, :L] = batted_valid[a:b]
         if ev_all is not None:
             out["events"][i, :L] = ev_all[a:b]
     return out
