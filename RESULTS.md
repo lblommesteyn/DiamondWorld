@@ -1767,3 +1767,51 @@ The artifact name stays as it is rather than being rewritten, because the file i
 already published and referenced; it is wrong and now documented as wrong. Running the
 sweep with the actual v16 checkpoint additionally requires `contact_quality=True`,
 which `Sim` defaults to off, so it is a code change rather than a rerun.
+
+
+### Weather, wind, altitude and roof: extracted, wired, also a null (2026-09-03)
+
+`data/processed/game_context.parquet` now covers all 22,763 games: temperature on every
+one, wind on all but one (208 distinct strings, zero unparsed), elevation on 22,728,
+roof-closed on 3,681, plus turf, day/night and MLB's own park distances. Humidity and UV
+are not in the feed and were not invented.
+
+Wind is stored as two components rather than nine one-hot categories (`wind_out` toward
+centre, `wind_cross` left to right), and is zeroed under a closed roof. Air density is
+computed as physics, `exp(-elev/29000)` scaled by temperature, rather than leaving a
+linear head to find the interaction between two raw numbers.
+
+Identical architecture, environment block on versus zeroed:
+
+| head | env off | env on | delta |
+|---|---|---|---|
+| pitch type | 0.2170 | 0.1955 | -0.0215 |
+| swing | 0.2227 | 0.2224 | -0.0003 |
+| contact | 0.1125 | 0.1119 | -0.0007 |
+| foul | 0.0315 | 0.0315 | -0.0000 |
+| **A nll_stuff** (lower better) | **3.8829** | **3.8819** | **-0.0010** |
+
+The prediction recorded before the run was "nll_stuff improves slightly, everything else
+is a null, because break is the only thing in this stack air density touches". The sign
+is right and the size is not: 0.001 nats is noise with a direction, not an effect. The
+verdict is a null, the same as park geometry, and for the same reason. Pitch type fell
+0.022, probably single-seed noise, though eight largely uninformative input dimensions
+making optimisation slightly harder is a plausible mechanism too.
+
+**This is now the second feature family motivated by batted-ball physics that produced
+nothing, because nothing in this stack models batted-ball flight.** A picks the pitch
+and its location; B decides whether the batter offers. Wind, roof, park dimensions and
+most of the air-density story act after the bat meets the ball. The data is extracted,
+verified and cheap to switch on, and it should stay off until a batted-ball head exists
+to consume it.
+
+The extraction itself was still worth doing, and it surfaced something better than the
+result: MLB publishes authoritative per-game park dimensions in `venue.fieldInfo`, which
+supersedes the scraped `data/parks/geometry.csv` for distances (it already disagrees:
+Chase Field's left line is 328, not the 330 in the CSV) and tracks mid-season fence
+changes that a static table cannot. The CSV retains value only for wall heights.
+
+Caveat on conditions: the env-off arm ran about 5x slower in wall time than the env-on
+arm at identical settings, which points at thermal or contention differences on the box.
+Both completed the same 6,000 steps, so the comparison is over steps rather than time,
+but the two arms did not run under identical machine conditions.
