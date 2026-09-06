@@ -43,6 +43,7 @@ from ..data.pitch_seq import (build_id_maps, load_seasons, make_sequences,
 from ..model.pitchformer import (TransformerA, TransformerB, loss_a, loss_b,
                                  N_PITCH_TYPES)
 from ..model.transformer_c import TransformerC, loss_c
+from ..model.transformer_d import TransformerD, loss_d
 
 
 def batches(arrs, bs, rng=None, shuffle=True):
@@ -188,6 +189,11 @@ def main():
     ap.add_argument("--stack", default="ab",
                     help="which heads to train: any of a, b, c")
     ap.add_argument("--events", default="data/processed/events.parquet")
+    ap.add_argument("--game-context", default="data/processed/game_context.parquet")
+    ap.add_argument("--no-env", action="store_true",
+                    help="zero the weather/altitude block, for the A/B comparison")
+    ap.add_argument("--no-geom", action="store_true",
+                    help="zero the park geometry block, for the A/B comparison")
     args = ap.parse_args()
 
     seasons = [int(s) for s in args.train_seasons.split(",")]
@@ -208,12 +214,30 @@ def main():
     if "c" in args.stack:
         ev = pl.read_parquet(args.events)
         print(f"events table: {ev.height:,} rows", flush=True)
-    train = make_sequences(pl.concat(tr_dfs), maps, args.max_len, events=ev)
-    test = make_sequences(pl.concat(te_dfs), maps, args.max_len, events=ev)
+    gctx = None
+    if not args.no_env:
+        import os
+        if os.path.exists(args.game_context):
+            gctx = pl.read_parquet(args.game_context)
+            print(f"game context: {gctx.height:,} games", flush=True)
+        else:
+            print("game context file absent, running without environment", flush=True)
+    else:
+        print("environment block DISABLED (--no-env)", flush=True)
+
+    train = make_sequences(pl.concat(tr_dfs), maps, args.max_len, events=ev,
+                           game_ctx=gctx)
+    test = make_sequences(pl.concat(te_dfs), maps, args.max_len, events=ev,
+                          game_ctx=gctx)
     print(f"train seqs {train['valid'].shape}, pitches {int(train['valid'].sum()):,}",
           flush=True)
     print(f"test  seqs {test['valid'].shape}, pitches {int(test['valid'].sum()):,}",
           flush=True)
+
+    if args.no_geom:
+        train["geom"][:] = 0.0
+        test["geom"][:] = 0.0
+        print("geometry block DISABLED (--no-geom)", flush=True)
 
     base = baselines(train, test)
     print(f"baselines (test NLL): {base}", flush=True)
@@ -260,6 +284,36 @@ def main():
         report["C"] = res_c
         for f in EVENT_FLAGS:
             report["improvement_nats"][f] = cb[f] - res_c[f"nll_{f}"]
+
+    if "d" in args.stack:
+        # Baselines for D: outcome against the empirical 5-way marginal over balls in
+        # play, HR against its base rate, launch against a single Gaussian fitted to
+        # the training launches. A head that learns only base rates scores zero lift.
+        vtr = (train["valid"] * train["batted_valid"]) > 0
+        vte = (test["valid"] * test["batted_valid"]) > 0
+        p_out = np.bincount(train["batted_out"][vtr], minlength=5).astype(np.float64)
+        p_out /= p_out.sum()
+        nll_out_b = float(-np.log(p_out[test["batted_out"][vte]]).mean())
+        p_hr = float(np.clip(p_out[4], 1e-6, 1 - 1e-6))
+        y = (test["batted_out"][vte] == 4).astype(np.float64)
+        nll_hr_b = float(-(y * np.log(p_hr) + (1 - y) * np.log(1 - p_hr)).mean())
+        ltr = (train["valid"] * train["launch_valid"]) > 0
+        lte = (test["valid"] * test["launch_valid"]) > 0
+        mu = train["launch"][ltr].mean(0); sd = train["launch"][ltr].std(0) + 1e-6
+        zz = (test["launch"][lte] - mu) / sd
+        nll_launch_b = float((0.5 * zz ** 2 + np.log(sd) + 0.5 * np.log(2 * np.pi)).sum(-1).mean())
+        report["baselines_d"] = {"outcome": nll_out_b, "hr": nll_hr_b,
+                                 "launch": nll_launch_b, "p_outcome": p_out.tolist()}
+        print(f"D baselines: outcome {nll_out_b:.4f}  hr {nll_hr_b:.4f}  launch {nll_launch_b:.4f}",
+              flush=True)
+
+        res_d = run(TransformerD(**kw), loss_d, train, test, steps=args.steps,
+                    bs=args.bs, lr=args.lr, seed=args.seed, name=f"D_{args.tag}",
+                    out_dir=args.out)
+        report["D"] = res_d
+        report["improvement_nats"]["outcome"] = nll_out_b - res_d["nll_outcome"]
+        report["improvement_nats"]["hr"] = nll_hr_b - res_d["nll_hr"]
+        report["improvement_nats"]["launch"] = nll_launch_b - res_d["nll_launch"]
     Path("data/eval2").mkdir(parents=True, exist_ok=True)
     out = f"data/eval2/pitchformer_{args.tag}.json"
     with open(out, "w") as f:
