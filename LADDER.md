@@ -100,34 +100,65 @@ Compare against `data/eval2/simulator_benchmarks_v16-pregame-leakfree.txt` (whic
 was actually run on v15; RESULTS.md explains). The two numbers that matter: win
 probability log-loss against the 0.6923 home-field base rate, and run-total KS.
 
+How to read it. Win probability: the sim must beat the base rate (0.6923); v15/v16
+leak-free did not (0.6985). Run totals: the sim mean must sit near the real 8.63 and
+KS near the v16 value (0.058). Overdispersion near 2.1x means the *shape* is right; a
+right shape with a mean 1.5 runs high is a scale problem, not a variance problem, and
+the first suspect is a rung trained without `--outcome-only` (see the recipe section).
+
+First reading, v22 seeds 42 and 97 (leak-free, r=100): win log-loss 0.6920 / 0.6873
+(beats base rate, first time leak-free); run mean 10.23 / 10.06 (real 8.63), KS
+0.146 / 0.133 (v16 0.058); overdispersion 2.12x / 2.08x (real 2.11x). Win-prob up,
+run scale regressed. Not a pass until the recipe question is settled.
+
 `--contact-quality` and `--pitchformer` must match how the checkpoint was trained or the
 parameter tree will not load. That is what the flags are for.
+
+## The recipe (read this before training anything)
+
+R0 (v16) was trained by `scripts/run_train_v16.sh` with
+
+    --outcome-only --fatigue --recency-halflife 2.0 --train-end 2023 --contact-quality
+
+Every rung must use all five, or it is not one change from the rung below. An earlier
+version of this file listed only the last two; that was a mistake. Consequences of
+dropping each:
+
+- `--outcome-only` off: the neural runs/bases heads come back (the v1-v5 design v6
+  removed). Symptom: PA gate fine, sim run totals inflated by 1-2 runs/game.
+- `--fatigue` off: `prod_playercorr` builds the model with `fatigue=True` regardless,
+  so the parameter tree does not match the checkpoint.
+- `--recency-halflife 2.0` off: the player table at train time is unweighted while
+  `prod_playercorr` weights it (its default is 2.0). Input distribution shift.
+
+`scripts/ladder_train.sh <rung> <seed>` bakes the recipe in; prefer it over typing flags.
 
 ## Step 3: seeds
 
 One seed cannot separate a null from +0.015. Two more of each:
 
-    python -m diamondworldjax.scripts.train_pa --contact-quality --train-end 2023 \
-      --seed 1 --tag v22_s1
-    python -m diamondworldjax.scripts.train_pa --contact-quality --train-end 2023 \
-      --seed 2 --tag v22_s2
-    python -m diamondworldjax.scripts.train_pa --contact-quality --train-end 2023 \
-      --pitchformer --seed 1 --tag v22pf_s1
-    python -m diamondworldjax.scripts.train_pa --contact-quality --train-end 2023 \
-      --pitchformer --seed 2 --tag v22pf_s2
+    bash scripts/ladder_train.sh v22 1
+    bash scripts/ladder_train.sh v22 2
+    bash scripts/ladder_train.sh v22pf 1
+    bash scripts/ladder_train.sh v22pf 2
 
 About 4 hours each on a 3080, ~3 on a 3090. With two GPUs run two at once, pinning
 each with `CUDA_VISIBLE_DEVICES=0` / `=1`, because JAX preallocates every visible card.
 Then Step 1 on each, and report the mean across seeds with the spread.
 
+If v22_s42 / v22_s97 were trained without the full recipe they are not R1 and need
+retraining. Check the first lines of their training log: it should print
+`[outcome-only v6]` on the "Starting SVI" line.
+
 ## Step 4: R3
 
-    python -m diamondworldjax.scripts.train_shared_skills --pa-pitchformer --seed 0 \
-      --tag v23_shared
+    bash scripts/ladder_train.sh v23 0
 
-Then Steps 1 and 2 against it. Only start this after Step 1 has said whether R2 is
-a regression, because if attention is genuinely hurting the PA model there is no point
-sharing its embedding.
+`train_shared_skills` now takes `--train-end`, `--contact-quality`, `--recency-halflife`,
+`--outcome-only`, `--fatigue` and passes them the way `train_pa` does, so R3 differs
+from R2 by the shared latent only. Then Steps 1 and 2 against it. Only start this after
+Step 1 has said whether R2 is a regression, because if attention is genuinely hurting
+the PA model there is no point sharing its embedding.
 
 ## Reporting
 

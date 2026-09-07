@@ -21,8 +21,6 @@ from diamondworldjax.scripts.train_pa import (
 )
 
 
-TRAIN_SEASONS = list(range(2015, 2023))
-
 
 def _batch_iterator(pitches, pa_rows, chunks, id_to_idx, player_table_np):
     import jax.numpy as jnp
@@ -60,6 +58,20 @@ def main() -> None:
     parser.add_argument("--pa-pitchformer-dim", type=int, default=128)
     parser.add_argument("--pa-pitchformer-layers", type=int, default=2)
     parser.add_argument("--pa-pitchformer-heads", type=int, default=4)
+    # Player-table and head flags, mirrored from train_pa so a shared-skills run
+    # can reproduce the v22 recipe exactly (ladder R3 must differ from R2 by the
+    # shared latent only).
+    parser.add_argument("--train-end", type=int, default=2022,
+                        help="Last season included in training (inclusive); v22 uses 2023.")
+    parser.add_argument("--contact-quality", action="store_true",
+                        help="xBA-style stat columns 5-6 (see train_pa). Eval must match.")
+    parser.add_argument("--recency-halflife", type=float, default=None,
+                        help="Recency half-life in seasons for the player-table rates.")
+    parser.add_argument("--fatigue", action="store_true",
+                        help="Pitcher fatigue proxy in the PA head (v9+). Eval assumes it.")
+    parser.add_argument("--outcome-only", action="store_true",
+                        help="Single pa_outcome head (v6+); runs/bases from the rules "
+                             "engine at eval. Production checkpoints v16/v22 use this.")
     args = parser.parse_args()
     if args.residual_scale <= 0:
         parser.error("--residual-scale must be positive")
@@ -69,8 +81,11 @@ def main() -> None:
     from diamondworldjax.model.multitask import multitask_model
     from diamondworldjax.train.svi import train
 
-    pitches = load_seasons(TRAIN_SEASONS, data_root=processed_root())
-    player_table_np = _build_player_table(pitches)
+    train_seasons = list(range(2015, args.train_end + 1))
+    print(f"Loading training seasons {train_seasons}...", flush=True)
+    pitches = load_seasons(train_seasons, data_root=processed_root())
+    player_table_np = _build_player_table(pitches, recency_halflife=args.recency_halflife,
+                                          contact_quality=args.contact_quality)
     park_map = _build_park_index(pitches)
     pa_rows = apply_park_idx(pitches.filter(pl.col("pa_terminal")), park_map)
     game_ids = pa_rows["game_pk"].unique().to_numpy()
@@ -81,6 +96,10 @@ def main() -> None:
     )
     kl_scale = args.batch / max(len(game_ids), 1)
     pa_kwargs = {}
+    if args.outcome_only:
+        pa_kwargs["outcome_only"] = True
+    if args.fatigue:
+        pa_kwargs["fatigue"] = True
     if args.pa_pitchformer:
         pa_kwargs.update(
             pitchformer=True,
@@ -96,7 +115,11 @@ def main() -> None:
     )
     destination = checkpoints_root() / f"dwjax_{args.tag}"
     log_path = results_root() / f"dwjax_{args.tag}_elbo.json"
-    print(f"Training shared hierarchy on {len(game_ids):,} games; KL scale={kl_scale:.6g}")
+    print(f"Training shared hierarchy on {len(game_ids):,} games; KL scale={kl_scale:.6g}"
+          f"{'  [outcome-only v6]' if args.outcome_only else ''}"
+          f"{'  [fatigue]' if args.fatigue else ''}"
+          f"  train_end={args.train_end} contact_quality={args.contact_quality}"
+          f" recency_halflife={args.recency_halflife}", flush=True)
     train(
         model=model,
         batch_iter=batch_iter,
