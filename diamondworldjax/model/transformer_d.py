@@ -20,7 +20,7 @@ TWO HEADS, IN PHYSICAL ORDER
       the pitch. This is what the bat does to the ball. It should NOT depend on the
       park or the wind, and if it does that is a leak to investigate, not a win.
 
-  D2  outcome: out / single / double / triple / home run, from the super-state, the
+  D2  outcome: out / single / double / triple / home run / reached on error, from the super-state, the
       pitch, AND the launch, plus geometry and environment. This is what the park and
       the air do to the ball once it is in flight. The launch is teacher-forced during
       training and sampled from D1 at simulation time.
@@ -46,7 +46,7 @@ import jax.numpy as jnp
 
 from .pitchformer import Trunk, N_PITCH_TYPES
 
-N_BATTED = 5
+N_BATTED = 6
 LAUNCH_DIM = 2
 
 
@@ -60,10 +60,18 @@ class TransformerD(nn.Module):
     dropout: float = 0.1
 
     @nn.compact
-    def __call__(self, batch, *, train: bool):
+    def __call__(self, batch, *, train: bool, decode: bool = False,
+                 output_heads: bool = True):
         h, _ = Trunk(self.n_pitchers, self.n_batters, self.n_parks, self.d_model,
                      self.n_layers, self.n_heads, self.dropout, name="trunk")(
-            batch, train=train)
+            batch, train=train, decode=decode)
+
+        # Decode must advance D's independently-trained causal trunk on every
+        # pitch.  Its launch/outcome heads are needed only for balls in play,
+        # though, so rollout uses this path for the cheap cache update and calls
+        # those heads conditionally from its compiled loop.
+        if not output_heads:
+            return {"hidden": h}
 
         pitch = jnp.concatenate([
             jax.nn.one_hot(batch["pitch_type"], N_PITCH_TYPES),

@@ -46,6 +46,8 @@ def task_checkpoint_params(params: Mapping[str, Any], task: str) -> dict[str, An
         raise ValueError("checkpoint does not contain a shared-task-skills guide") from exc
     extracted["player_mu"] = shared_mu + residual_mu
     extracted["player_sigma"] = jnp.sqrt(shared_sigma ** 2 + residual_sigma ** 2)
+    if "skill_walk_sigma_loc" in params:
+        extracted["skill_walk_sigma_loc"] = params["skill_walk_sigma_loc"]
     return extracted
 
 
@@ -53,6 +55,8 @@ def sample_shared_task_skills(
     n_players: int,
     residual_scale: float = DEFAULT_RESIDUAL_SCALE,
     kl_scale: float = 1.0,
+    skill_prior: str = "iso",
+    n_seasons: int = 1,
 ) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
     """Sample a global skill and PA/pitch deviations for every player.
 
@@ -60,21 +64,42 @@ def sample_shared_task_skills(
     where cross-task evidence accumulates, while deviations only capture effects
     the other task cannot explain.
     """
-    if residual_scale <= 0:
-        raise ValueError("residual_scale must be positive")
-    shape = (n_players, SKILL_DIM)
+    if not 0 < residual_scale < 1:
+        raise ValueError("residual_scale must be between zero and one")
+    if skill_prior not in {"iso", "walk"}:
+        raise ValueError("shared task skills support only 'iso' and 'walk'")
+    shape = ((n_players, SKILL_DIM) if skill_prior == "iso"
+             else (n_players, n_seasons, SKILL_DIM))
+    # Keep each task's *combined* innovation at unit variance, matching the
+    # R2 walk prior. residual_scale controls only how much of that innovation
+    # is task-specific; it must not also change the total regularisation.
+    shared_scale = (1.0 - residual_scale ** 2) ** 0.5
     with handlers.scale(scale=kl_scale):
         shared = numpyro.sample(
-            "shared_player_skills", dist.Normal(jnp.zeros(shape), jnp.ones(shape)).to_event(2)
+            "shared_player_skills",
+            dist.Normal(jnp.zeros(shape), shared_scale * jnp.ones(shape)).to_event(len(shape)),
         )
         pa_residual = numpyro.sample(
             "pa_skill_residual",
-            dist.Normal(jnp.zeros(shape), residual_scale * jnp.ones(shape)).to_event(2),
+            dist.Normal(jnp.zeros(shape), residual_scale * jnp.ones(shape)).to_event(len(shape)),
         )
         pitch_residual = numpyro.sample(
             "pitch_skill_residual",
-            dist.Normal(jnp.zeros(shape), residual_scale * jnp.ones(shape)).to_event(2),
+            dist.Normal(jnp.zeros(shape), residual_scale * jnp.ones(shape)).to_event(len(shape)),
         )
+        if skill_prior == "walk":
+            walk_sigma = numpyro.sample("skill_walk_sigma", dist.HalfNormal(0.3))
+
+    if skill_prior == "walk":
+        def _walk(innovations: jnp.ndarray) -> jnp.ndarray:
+            steps = jnp.concatenate(
+                [innovations[:, :1, :], innovations[:, 1:, :] * walk_sigma], axis=1
+            )
+            return jnp.cumsum(steps, axis=1)
+
+        shared = _walk(shared)
+        pa_residual = _walk(pa_residual)
+        pitch_residual = _walk(pitch_residual)
     return shared, pa_residual, pitch_residual
 
 
@@ -87,6 +112,8 @@ def multitask_model(
     kl_scale: float = 1.0,
     pa_model_kwargs: Mapping[str, Any] | None = None,
     pitch_model_kwargs: Mapping[str, Any] | None = None,
+    skill_prior: str = "iso",
+    n_seasons: int = 1,
 ) -> None:
     """Score PA and pitch batches against one hierarchical player hierarchy.
 
@@ -99,7 +126,11 @@ def multitask_model(
         raise ValueError("multitask batch must contain 'pa' and 'pitch'")
     n_players = player_table["stats"].shape[0]
     shared, pa_residual, pitch_residual = sample_shared_task_skills(
-        n_players, residual_scale=residual_scale, kl_scale=kl_scale
+        n_players,
+        residual_scale=residual_scale,
+        kl_scale=kl_scale,
+        skill_prior=skill_prior,
+        n_seasons=n_seasons,
     )
 
     with handlers.scope(prefix="pa"):

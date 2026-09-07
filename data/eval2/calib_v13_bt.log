@@ -1,0 +1,40 @@
+half_bin columns: ['1', '0']
+  chunk 0-1000/4859  elapsed=807s
+  chunk 1000-2000/4859  elapsed=1516s
+  chunk 2000-3000/4859  elapsed=2197s
+  chunk 3000-4000/4859  elapsed=2902s
+  chunk 4000-4859/4859  elapsed=3629s
+CONDITIONAL-CALIBRATION AUDIT  ckpt=dwjax_step_0050000.pkl
+recal=v10@0.18  games=4859  replicas=40  elapsed=3629s
+real: total mean=8.86  sim total mean=8.94
+
+PIT (total runs), 10 bins  [uniform => calibrated]
+  counts:  624  490  498  440  392  433  444  459  479  600
+  expected/bin=485.9   chi2=99.8 (df=9; >16.9 = miscalibrated at .05)
+
+CRPS (total runs, lower better): 2.5470
+
+MONEYLINE  P(home win)  (n=4763 decided games)
+  Brier=0.2491  LogLoss=0.6973  ECE=0.0545
+  base rate real home-win=0.520  mean pred=0.522
+  bin        n   pred   real
+  0.0-0.1      4  0.069  0.500
+  0.1-0.2     51  0.150  0.294
+  0.2-0.3    353  0.264  0.371
+  0.3-0.4    503  0.354  0.429
+  0.4-0.5   1022  0.442  0.482
+  0.5-0.6   1503  0.548  0.535
+  0.6-0.7    839  0.659  0.603
+  0.7-0.8    320  0.745  0.641
+  0.8-0.9    151  0.826  0.656
+  0.9-1.0     17  0.921  0.471
+
+TOTALS over/under
+  line   p_over  real_over  Brier  LogLoss   ECE
+    6.5  0.687   0.675   0.2306 0.6640  0.0889
+    7.5  0.575   0.573   0.2570 0.7116  0.0888
+    8.5  0.498   0.489   0.2609 0.7197  0.0936
+    9.5  0.395   0.392   0.2471 0.6957  0.0943
+   10.5  0.328   0.325   0.2292 0.6661  0.0892
+
+saved -> data/eval2/calib_v13_bt.txt (+ arrays)

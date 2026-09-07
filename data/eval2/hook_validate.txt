@@ -1,0 +1,22 @@
+BULLPEN HOOK MODEL: state-dependent starter-pull hazard
+
+  features: pas, tto, ra  (inning dropped: collinear with PAs faced)
+  base pull rate per starter-PA: 0.0433
+  standardized logistic coefficients:
+    intercept -4.790
+    pas       +1.938
+    tto       +0.022
+    ra        +0.292
+  (pas + and ra + are the right signs: more batters faced and more runs
+   allowed each raise the pull probability.)
+
+  held-out 2023: log-loss 0.1326 vs constant base-rate 0.1845 (28% better); AUC 0.889; n=106,478
+
+  managerial behaviour (held-out 2023): pull rate by runs allowed at a
+  fixed workload of 18-21 PAs faced (the 6th-7th-inning decision zone):
+    runs allowed    real pull    model       n
+    0-1                 0.061    0.047    7189
+    2-3                 0.067    0.069    5680
+    4+                  0.108    0.109    2915
+  The old fixed-threshold hook cannot produce this dependence at all;
+  its pull probability is a function of PAs faced only.

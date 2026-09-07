@@ -1,0 +1,9 @@
+START 2026-09-03T05:15:30Z
+  n=   150 PA raw=0.6: k=0.371 bb=0.309 hit=0.226 hr=0.226
+  n=  3000 PA raw=0.6: k=0.575 bb=0.553 hit=0.431 hr=0.431
+  (K should retain most raw signal at low PA; hit/HR should sit near league)
+[v22] train rc=1 Thu 03 Sep 2026 04:44:27 AM EDT
+[v22] eval rc=0 Thu 03 Sep 2026 04:44:47 AM EDT
+v22 (SVI, conditioned+recal, skill=mean, train<= 2023, test 2024, mle=False) | corr K 0.799 BB 0.660 Hit 0.483 HR 0.633 AVG 0.644 (np=382, rookies_injected=0, rookies_kept=0)
+PA counts differ between 'v16' and 'v22' on 1 players; these were not scored on the same test set, so a paired comparison is invalid.
+DONE 2026-09-03T08:44:47Z

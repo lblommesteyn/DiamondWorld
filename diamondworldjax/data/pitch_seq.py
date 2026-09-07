@@ -161,8 +161,9 @@ EVENT_FLAGS = ("wild_pitch", "passed_ball", "balk", "steal", "caught_stealing",
 
 # Batted-ball outcome vocabulary for Transformer D. Only rows with in_play carry a
 # label; everything else is masked out of D's loss by batted_valid.
-BATTED_OUTCOMES = {"out": 0, "1B": 1, "2B": 2, "3B": 3, "HR": 4}
-N_BATTED = 5
+BATTED_OUTCOMES = {"out": 0, "1B": 1, "2B": 2, "3B": 3, "HR": 4,
+                   "E": 5}
+N_BATTED = 6
 # Launch standardisation, fixed for the same reason STUFF_CENTRE is.
 LAUNCH_CENTRE = np.array([88.0, 12.0], dtype=np.float32)   # mph, degrees
 LAUNCH_SCALE = np.array([14.0, 25.0], dtype=np.float32)
@@ -221,6 +222,10 @@ def make_sequences(df: pl.DataFrame, maps: dict, max_len: int = 160,
     if all(f in df.columns for f in EVENT_FLAGS):
         ev_all = np.stack([df[f].to_numpy().astype(np.float32)
                            for f in EVENT_FLAGS], -1)
+        # C transitions are applied only after non-terminal pitches: terminal
+        # plate appearances are resolved by EmpiricalEngine.  Keeping terminal
+        # labels here would train C to emit events that rollout never applies.
+        ev_all[df["pa_terminal"].to_numpy().astype(bool)] = 0.0
     else:
         ev_all = None
 
@@ -243,10 +248,13 @@ def make_sequences(df: pl.DataFrame, maps: dict, max_len: int = 160,
     swing = df["swing"].to_numpy().astype(np.float32)
     contact = df["contact"].to_numpy().astype(np.float32)
     foul = df["foul"].to_numpy().astype(np.float32)
+    hbp = ((df["pa_terminal"].to_numpy().astype(bool))
+           & (np.asarray(oc, dtype=object) == "HBP")).astype(np.float32)
 
     # Segment boundaries without a Python-level group_by over millions of rows.
     gp = df["game_pk"].to_numpy()
     hf = df["half"].to_numpy()
+    ab = df["at_bat_number"].to_numpy()
     newseg = np.empty(len(gp), dtype=bool)
     newseg[0] = True
     newseg[1:] = (gp[1:] != gp[:-1]) | (hf[1:] != hf[:-1])
@@ -274,7 +282,9 @@ def make_sequences(df: pl.DataFrame, maps: dict, max_len: int = 160,
         "swing": np.zeros((n, max_len), np.float32),
         "contact": np.zeros((n, max_len), np.float32),
         "foul": np.zeros((n, max_len), np.float32),
+        "hbp": np.zeros((n, max_len), np.float32),
         "valid": np.zeros((n, max_len), np.float32),
+        "pa_start": np.zeros((n, max_len), bool),
         "launch": np.zeros((n, max_len, 2), np.float32),
         "launch_valid": np.zeros((n, max_len), np.float32),
         "batted_out": np.zeros((n, max_len), np.int32),
@@ -296,7 +306,9 @@ def make_sequences(df: pl.DataFrame, maps: dict, max_len: int = 160,
         out["swing"][i, :L] = swing[a:b]
         out["contact"][i, :L] = contact[a:b]
         out["foul"][i, :L] = foul[a:b]
+        out["hbp"][i, :L] = hbp[a:b]
         out["valid"][i, :L] = 1.0
+        out["pa_start"][i, :L] = np.r_[True, ab[a + 1:b] != ab[a:b - 1]] if L else False
         out["launch"][i, :L] = launch[a:b]
         out["launch_valid"][i, :L] = launch_valid[a:b].astype(np.float32)
         out["batted_out"][i, :L] = batted_out[a:b]

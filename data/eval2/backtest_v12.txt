@@ -1,0 +1,19 @@
+REAL BACKTEST  arrays=calib_v12_bt_arrays.npz  odds=odds_2023_2024.csv
+  games matched with odds: 4698 / 4859
+  edge threshold=0.03  staking=flat 1u
+
+--- MONEYLINE home ---
+  bets=1714  staked=1714.0u  profit=-114.4u  ROI=-6.7%  hit=48.1%  avg_edge=+11.5%
+--- MONEYLINE away ---
+  bets=1954  staked=1954.0u  profit=-101.9u  ROI=-5.2%  hit=42.9%  avg_edge=+12.1%
+--- moneyline edge sweep (flat 1u, both sides) ---
+  edge   bets   ROI     hit    avg_edge
+  0.00   4458    -5.1%  46.2%  +10.0%
+  0.02   3935    -5.0%  46.0%  +11.2%
+  0.04   3375    -5.9%  45.1%  +12.5%
+  0.06   2835    -6.8%  44.1%  +14.0%
+  0.10   1892    -7.0%  43.3%  +17.0%
+  CLV proxy: on model home-bets, market P(home) moved -0.09% open->close (positive = line moved toward our pick)
+
+
+TOTAL profit across selected markets: -216.3u

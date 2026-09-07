@@ -1,0 +1,58 @@
+===== v15 moneyline (pre-game/no-bullpen, 2024) =====
+  edge 0.0:   games matched with odds: 2355 / 2429
+  edge 0.0:   bets=992  staked=992.0u  profit=-95.1u  ROI=-9.6%  hit=48.8%  avg_edge=+8.7%
+  edge 0.0:   bets=1233  staked=1233.0u  profit=-55.5u  ROI=-4.5%  hit=45.0%  avg_edge=+9.7%
+  edge 0.0:   edge   bets   ROI     hit    avg_edge
+  edge 0.0:   CLV proxy: on model home-bets, market P(home) moved +0.19% open->close (positive = line moved toward our pick)
+  edge 0.02:   games matched with odds: 2355 / 2429
+  edge 0.02:   bets=849  staked=849.0u  profit=-90.0u  ROI=-10.6%  hit=48.1%  avg_edge=+10.1%
+  edge 0.02:   bets=1051  staked=1051.0u  profit=-42.6u  ROI=-4.1%  hit=44.9%  avg_edge=+11.2%
+  edge 0.02:   edge   bets   ROI     hit    avg_edge
+  edge 0.02:   CLV proxy: on model home-bets, market P(home) moved +0.13% open->close (positive = line moved toward our pick)
+  edge 0.04:   games matched with odds: 2355 / 2429
+  edge 0.04:   bets=708  staked=708.0u  profit=-68.2u  ROI=-9.6%  hit=48.2%  avg_edge=+11.5%
+  edge 0.04:   bets=903  staked=903.0u  profit=-63.0u  ROI=-7.0%  hit=43.1%  avg_edge=+12.5%
+  edge 0.04:   edge   bets   ROI     hit    avg_edge
+  edge 0.04:   CLV proxy: on model home-bets, market P(home) moved +0.07% open->close (positive = line moved toward our pick)
+  edge 0.06:   games matched with odds: 2355 / 2429
+  edge 0.06:   bets=584  staked=584.0u  profit=-42.0u  ROI=-7.2%  hit=49.1%  avg_edge=+12.9%
+  edge 0.06:   bets=774  staked=774.0u  profit=-34.0u  ROI=-4.4%  hit=43.9%  avg_edge=+13.8%
+  edge 0.06:   edge   bets   ROI     hit    avg_edge
+  edge 0.06:   CLV proxy: on model home-bets, market P(home) moved +0.04% open->close (positive = line moved toward our pick)
+  edge 0.10:   games matched with odds: 2355 / 2429
+  edge 0.10:   bets=353  staked=353.0u  profit=-33.5u  ROI=-9.5%  hit=46.7%  avg_edge=+16.1%
+  edge 0.10:   bets=497  staked=497.0u  profit=-23.9u  ROI=-4.8%  hit=43.1%  avg_edge=+17.1%
+  edge 0.10:   edge   bets   ROI     hit    avg_edge
+  edge 0.10:   CLV proxy: on model home-bets, market P(home) moved -0.01% open->close (positive = line moved toward our pick)
+===== v15 totals (pre-game/no-bullpen, 2024) =====
+  edge 0.0:   games matched with odds: 2355 / 2429
+  edge 0.0:   bets=827  staked=827.0u  profit=-48.5u  ROI=-5.9%  hit=49.5%  avg_edge=+9.3%
+  edge 0.0:   bets=1114  staked=1114.0u  profit=-18.6u  ROI=-1.7%  hit=51.6%  avg_edge=+11.0%
+  edge 0.02:   games matched with odds: 2355 / 2429
+  edge 0.02:   bets=699  staked=699.0u  profit=-37.9u  ROI=-5.4%  hit=49.6%  avg_edge=+10.9%
+  edge 0.02:   bets=996  staked=996.0u  profit=-41.3u  ROI=-4.2%  hit=50.3%  avg_edge=+12.2%
+  edge 0.04:   games matched with odds: 2355 / 2429
+  edge 0.04:   bets=598  staked=598.0u  profit=-24.9u  ROI=-4.2%  hit=50.3%  avg_edge=+12.2%
+  edge 0.04:   bets=854  staked=854.0u  profit=-34.7u  ROI=-4.1%  hit=50.4%  avg_edge=+13.7%
+  edge 0.06:   games matched with odds: 2355 / 2429
+  edge 0.06:   bets=511  staked=511.0u  profit=-28.6u  ROI=-5.6%  hit=49.5%  avg_edge=+13.4%
+  edge 0.06:   bets=755  staked=755.0u  profit=-23.5u  ROI=-3.1%  hit=50.9%  avg_edge=+14.8%
+  edge 0.10:   games matched with odds: 2355 / 2429
+  edge 0.10:   bets=320  staked=320.0u  profit=-19.5u  ROI=-6.1%  hit=49.4%  avg_edge=+16.6%
+  edge 0.10:   bets=516  staked=516.0u  profit=+4.2u  ROI=+0.8%  hit=52.9%  avg_edge=+18.0%
+===== v15 runline (pre-game/no-bullpen, 2024) =====
+  edge 0.0:   games matched with odds: 2355 / 2429
+  edge 0.0:   bets=980  staked=980.0u  profit=-88.5u  ROI=-9.0%  hit=48.0%  avg_edge=+8.7%
+  edge 0.0:   bets=1203  staked=1203.0u  profit=-47.4u  ROI=-3.9%  hit=52.6%  avg_edge=+9.8%
+  edge 0.02:   games matched with odds: 2355 / 2429
+  edge 0.02:   bets=826  staked=826.0u  profit=-72.6u  ROI=-8.8%  hit=48.1%  avg_edge=+10.1%
+  edge 0.02:   bets=1055  staked=1055.0u  profit=-51.6u  ROI=-4.9%  hit=52.2%  avg_edge=+11.0%
+  edge 0.04:   games matched with odds: 2355 / 2429
+  edge 0.04:   bets=681  staked=681.0u  profit=-55.6u  ROI=-8.2%  hit=48.6%  avg_edge=+11.6%
+  edge 0.04:   bets=916  staked=916.0u  profit=-55.4u  ROI=-6.0%  hit=51.3%  avg_edge=+12.2%
+  edge 0.06:   games matched with odds: 2355 / 2429
+  edge 0.06:   bets=571  staked=571.0u  profit=-44.6u  ROI=-7.8%  hit=49.2%  avg_edge=+12.9%
+  edge 0.06:   bets=771  staked=771.0u  profit=-42.2u  ROI=-5.5%  hit=51.9%  avg_edge=+13.6%
+  edge 0.10:   games matched with odds: 2355 / 2429
+  edge 0.10:   bets=345  staked=345.0u  profit=-34.5u  ROI=-10.0%  hit=48.7%  avg_edge=+16.2%
+  edge 0.10:   bets=499  staked=499.0u  profit=-33.2u  ROI=-6.7%  hit=51.1%  avg_edge=+16.7%

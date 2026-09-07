@@ -1,0 +1,105 @@
+game context file absent; evaluating with environment features zeroed
+rep 1/3: 512/6014
+rep 2/3: 512/6014
+rep 3/3: 512/6014
+{
+  "tag": "abcd_hbp_e_s42_ft15",
+  "season": 2024,
+  "reps": 3,
+  "c_events": true,
+  "min_pa": 150,
+  "real_coverage": {
+    "terminal_pas": 170593,
+    "batters_with_pa": 542,
+    "batters_at_min_pa": 382
+  },
+  "limit_seqs": null,
+  "comparable_full_slate": true,
+  "per_rep": [
+    {
+      "n_batters": 382,
+      "K_corr": 0.6532587631331844,
+      "BB_corr": 0.4368787976958698,
+      "Hit_corr": 0.2556248027933615,
+      "HR_corr": 0.2533230764356818,
+      "AVG_corr": 0.2112215096414568,
+      "sim_coverage": {
+        "terminal_pas": 171791,
+        "batters_with_pa": 542,
+        "batters_at_min_pa": 382
+      },
+      "events": [
+        1303,
+        325,
+        137,
+        1711,
+        392,
+        8507,
+        65,
+        38
+      ]
+    },
+    {
+      "n_batters": 382,
+      "K_corr": 0.6322447353938594,
+      "BB_corr": 0.48265630406597515,
+      "Hit_corr": 0.28557197016289637,
+      "HR_corr": 0.24600653235398826,
+      "AVG_corr": 0.2341856051789309,
+      "sim_coverage": {
+        "terminal_pas": 171791,
+        "batters_with_pa": 542,
+        "batters_at_min_pa": 382
+      },
+      "events": [
+        1395,
+        306,
+        173,
+        1785,
+        362,
+        8511,
+        72,
+        38
+      ]
+    },
+    {
+      "n_batters": 382,
+      "K_corr": 0.6586744637642988,
+      "BB_corr": 0.47439188195260185,
+      "Hit_corr": 0.21755719204476368,
+      "HR_corr": 0.2162207531039123,
+      "AVG_corr": 0.16343919260809536,
+      "sim_coverage": {
+        "terminal_pas": 171791,
+        "batters_with_pa": 542,
+        "batters_at_min_pa": 382
+      },
+      "events": [
+        1294,
+        297,
+        131,
+        1779,
+        351,
+        8343,
+        71,
+        36
+      ]
+    }
+  ],
+  "mean": {
+    "K_corr": 0.6480593207637809,
+    "BB_corr": 0.4646423279048156,
+    "Hit_corr": 0.25291798833367385,
+    "HR_corr": 0.23851678729786077,
+    "AVG_corr": 0.2029487691428277
+  },
+  "sd": {
+    "K_corr": 0.013960955774887493,
+    "BB_corr": 0.024396421365935787,
+    "Hit_corr": 0.03408808654066823,
+    "HR_corr": 0.019652425038863046,
+    "AVG_corr": 0.036091444961776784
+  },
+  "note": "Generated pitch/state history; pitcher/batter/park schedule remains exogenous. C events are sampled and counted, while the empirical engine retains base advancement."
+}
+saved -> data/eval2/pitchformer_abcd_hbp_e_s42_ft15_correlations.json

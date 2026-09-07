@@ -1,0 +1,30 @@
+# Cross-player rate correlation with confidence intervals (paired bootstrap, 20000 reps, 383 batters with >= 150 PA, 95% CI)
+
+## Per-model correlation (unpaired CI)
+
+| model | K | BB | Hit | HR | AVG |
+|---|---|---|---|---|---|
+| v16 | 0.769 [0.710, 0.821] | 0.645 [0.577, 0.708] | 0.422 [0.338, 0.513] | 0.607 [0.534, 0.672] | 0.611 [0.566, 0.654] |
+| v17a | 0.773 [0.717, 0.824] | 0.655 [0.589, 0.718] | 0.428 [0.339, 0.519] | 0.600 [0.526, 0.666] | 0.614 [0.570, 0.656] |
+| v17b | 0.765 [0.708, 0.819] | 0.657 [0.591, 0.719] | 0.389 [0.297, 0.486] | 0.609 [0.535, 0.675] | 0.605 [0.559, 0.651] |
+| v17c | 0.734 [0.667, 0.801] | 0.642 [0.572, 0.707] | 0.372 [0.282, 0.474] | 0.566 [0.489, 0.637] | 0.579 [0.529, 0.629] |
+
+## Paired difference vs v16 (the decisive test)
+
+| comparison | K | BB | Hit | HR | AVG |
+|---|---|---|---|---|---|
+| v17a - v16 | +0.004 [-0.009, +0.016] p=0.527  | +0.010 [-0.001, +0.021] p=0.086  | +0.006 [-0.023, +0.030] p=0.728  | -0.006 [-0.022, +0.008] p=0.405  | +0.003 [-0.007, +0.012] p=0.535  |
+| v17b - v16 | -0.004 [-0.018, +0.009] p=0.631  | +0.012 [-0.002, +0.026] p=0.088  | -0.033 [-0.069, -0.001] p=0.043* | +0.002 [-0.011, +0.015] p=0.737  | -0.006 [-0.020, +0.007] p=0.397  |
+| v17c - v16 | -0.034 [-0.066, -0.007] p=0.007* | -0.003 [-0.031, +0.025] p=0.829  | -0.051 [-0.084, -0.015] p=0.007* | -0.041 [-0.064, -0.018] p=0.001* | -0.032 [-0.048, -0.015] p=0.000* |
+
+`*` marks a difference whose CI excludes zero.
+
+## Why the paired CI is the right one
+
+For reference, the analytic (Fisher-z) SE on a SINGLE correlation at n=383 is about +/-0.032 in r units around the baseline AVG. That is the width of the unpaired view above and it is far too wide to resolve the differences this project cares about. The paired CI is narrower because both models see the same batters, so shared batter-level noise cancels in the difference.
+
+- v17a AVG: unpaired CI width 0.086, paired-vs-v16 CI width 0.019 (4.5x tighter).
+
+- v17b AVG: unpaired CI width 0.092, paired-vs-v16 CI width 0.026 (3.5x tighter).
+
+- v17c AVG: unpaired CI width 0.100, paired-vs-v16 CI width 0.032 (3.1x tighter).

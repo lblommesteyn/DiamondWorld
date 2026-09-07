@@ -1,0 +1,15 @@
+Building player table + sequences...
+  train games 17904  test games 4859  players 3260
+JEPA pretrain...
+  step 0  jepa-loss 36.7787  29s
+  step 500  jepa-loss 25.5425  34s
+  step 1000  jepa-loss 24.9410  37s
+  step 1500  jepa-loss 24.7288  40s
+  step 2000  jepa-loss 24.5606  43s
+  step 2500  jepa-loss 24.5029  46s
+  step 3000  jepa-loss 24.4249  49s
+  step 3500  jepa-loss 24.4206  52s
+Linear probe on frozen features...
+
+=== JEPA (probe) TEST (365608 PAs) ===
+  per-PA NLL 1.5109   accuracy 0.4583   (production ~1.52)

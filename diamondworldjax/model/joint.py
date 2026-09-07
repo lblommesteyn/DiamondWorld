@@ -181,6 +181,7 @@ def diamondworld_model(
     teacher_force: bool = True,
     player_skills_override: jnp.ndarray | None = None,
     direct_player_context: bool = False,
+    season_base: int = 2015,
 ) -> None:
     """
     Full DiamondWorldJAX NumPyro generative model.
@@ -213,13 +214,27 @@ def diamondworld_model(
             ).to_event(2),
         )
     else:
-        if player_skills_override.shape != (P, SKILL_DIM):
-            raise ValueError("player_skills_override must have shape (P, SKILL_DIM)")
+        if (player_skills_override.ndim not in (2, 3)
+                or player_skills_override.shape[0] != P
+                or player_skills_override.shape[-1] != SKILL_DIM):
+            raise ValueError(
+                "player_skills_override must have shape (P, SKILL_DIM) or "
+                "(P, seasons, SKILL_DIM)"
+            )
         player_skills = player_skills_override
 
     # ------------------------------------------------------------------ #
     # 1. Player embeddings  →  pitcher_z, batter_z  (B, T, 64)           #
     # ------------------------------------------------------------------ #
+    season_idx = None
+    if player_skills.ndim == 3:
+        if "season" not in batch:
+            raise ValueError("seasonal player skills require batch['season']")
+        season_idx = jnp.clip(
+            batch["season"].astype(jnp.int32) - season_base,
+            0,
+            player_skills.shape[1] - 1,
+        )
     pitcher_z, batter_z = encode_players_numpyro(
         player_table["stats"],
         player_table["league"],
@@ -227,6 +242,7 @@ def diamondworld_model(
         pitcher_ids   = batch["pitcher_ids"],
         batter_ids    = batch["batter_ids"],
         player_skills = player_skills,
+        season_idx    = season_idx,
     )  # (B, T, 64) each
 
     # ------------------------------------------------------------------ #

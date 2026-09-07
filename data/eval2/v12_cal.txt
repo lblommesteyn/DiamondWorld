@@ -1,0 +1,10 @@
+LEARNED CALIBRATION  logits=v12_logits.npz  n=38832 (fit 19416, val 19416)
+
+held-out (val) scores, lower better:
+raw model        val-NLL=1.5208  marg-L1=0.1343  T=1.000
+heuristic recal  val-NLL=1.5084  marg-L1=0.0208  T=1.000
+learned (b,T)    val-NLL=1.4967  marg-L1=0.0163  T=1.616
+
+learned bias b (order K,BB,HBP,1B,2B,3B,HR,out,E):
+  RECAL = np.array([+0.4862, +0.1217, -0.8375, +0.5439, -0.1745, -0.9782, -0.3992, +1.2376, +0.0000], dtype=np.float64)
+  temperature T = 1.6162

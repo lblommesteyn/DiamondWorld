@@ -1,0 +1,12 @@
+CLOSING THE STEAMER GAP: which lever buys what (2024, cross-player rate corr)
+  batters scored: 410
+
+  variant                                  K      BB     HIT      HR     AVG
+  Marcel (REG=1200, as shipped)        0.791   0.688   0.418   0.608   0.626
+  L1  + per-stat tuned regression      0.794   0.677   0.428   0.608   0.627
+  L2  + contact quality (xBA-style)    0.794   0.677   0.497   0.641   0.652
+  -- Steamer (measured)                0.820   0.702   0.510   0.651   0.671
+  -- DiamondWorld v15                  0.741   0.645   0.411   0.580   0.594
+
+  levers recover +0.026 of the +0.045 Marcel-to-Steamer gap (58%)
+  remaining to Steamer: +0.019

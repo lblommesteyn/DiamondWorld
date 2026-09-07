@@ -43,7 +43,7 @@ from ..data.pitch_seq import (build_id_maps, load_seasons, make_sequences,
 from ..model.pitchformer import (TransformerA, TransformerB, loss_a, loss_b,
                                  N_PITCH_TYPES)
 from ..model.transformer_c import TransformerC, loss_c
-from ..model.transformer_d import TransformerD, loss_d
+from ..model.transformer_d import N_BATTED, TransformerD, loss_d
 
 
 def batches(arrs, bs, rng=None, shuffle=True):
@@ -98,11 +98,14 @@ def baselines(train, test):
 
     m_ct = vte & (test["swing"] > 0)
     m_fl = m_ct & (test["contact"] > 0)
+    m_hbp = vte & (test["swing"] == 0)
     return {
         "type": float(nll_type),
         "swing": float(nll_sw),
         "contact": float(bern(ct.mean(), test["contact"], m_ct)),
         "foul": float(bern(fl.mean(), test["foul"], m_fl)),
+        "hbp": float(bern(train["hbp"][vt & (train["swing"] == 0)].mean(),
+                           test["hbp"], m_hbp)),
         "swing_marginal": float(sw.mean()),
     }
 
@@ -187,7 +190,7 @@ def main():
     ap.add_argument("--out", default="checkpoints/pitchformer")
     ap.add_argument("--tag", default="ab")
     ap.add_argument("--stack", default="ab",
-                    help="which heads to train: any of a, b, c")
+                    help="which heads to train: any of a, b, c, d")
     ap.add_argument("--events", default="data/processed/events.parquet")
     ap.add_argument("--game-context", default="data/processed/game_context.parquet")
     ap.add_argument("--no-env", action="store_true",
@@ -201,11 +204,15 @@ def main():
     tr_dfs = load_seasons(seasons)
     te_dfs = load_seasons([args.test_season])
 
+    # Keep checkpoint embedding shapes compatible with evaluation even for a
+    # row-limited smoke run.  The limit is a data-volume control, not a change
+    # to the player/park vocabulary contract.
+    maps = build_id_maps(tr_dfs)
+
     if args.limit_train_rows:
         tr_dfs = [d.head(args.limit_train_rows) for d in tr_dfs]
         te_dfs = [d.head(args.limit_train_rows) for d in te_dfs]
 
-    maps = build_id_maps(tr_dfs)
     print(f"pitchers={maps['n_pitcher']} batters={maps['n_batter']} "
           f"parks={maps['n_park']} (index 0 reserved for unknown)", flush=True)
 
@@ -260,7 +267,7 @@ def main():
                     bs=args.bs, lr=args.lr, seed=args.seed, name=f"B_{args.tag}",
                     out_dir=args.out)
         report["B"] = res_b
-        for k in ("swing", "contact", "foul"):
+        for k in ("swing", "contact", "foul", "hbp"):
             report["improvement_nats"][k] = base[k] - res_b[f"nll_{k}"]
 
     if "c" in args.stack:
@@ -286,12 +293,12 @@ def main():
             report["improvement_nats"][f] = cb[f] - res_c[f"nll_{f}"]
 
     if "d" in args.stack:
-        # Baselines for D: outcome against the empirical 5-way marginal over balls in
+        # Baselines for D: outcome against the empirical 6-way marginal over balls in
         # play, HR against its base rate, launch against a single Gaussian fitted to
         # the training launches. A head that learns only base rates scores zero lift.
         vtr = (train["valid"] * train["batted_valid"]) > 0
         vte = (test["valid"] * test["batted_valid"]) > 0
-        p_out = np.bincount(train["batted_out"][vtr], minlength=5).astype(np.float64)
+        p_out = np.bincount(train["batted_out"][vtr], minlength=N_BATTED).astype(np.float64)
         p_out /= p_out.sum()
         nll_out_b = float(-np.log(p_out[test["batted_out"][vte]]).mean())
         p_hr = float(np.clip(p_out[4], 1e-6, 1 - 1e-6))

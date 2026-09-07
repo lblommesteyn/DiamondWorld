@@ -1,0 +1,19 @@
+model: checkpoints/dwjax_pa_v22pf_s97/dwjax_step_0050000.pkl  contact_quality=True  per_stat_shrink=True  skill_prior=walk  pitchformer=True  recal=off
+pre-game sim over 2429 games x R=100 (hook model, crn off, staff=pregame)
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/home/jaden/Documents/Baseball/diamondworldjax/scripts/run_pregame_sim.py", line 183, in <module>
+    main()
+  File "/home/jaden/Documents/Baseball/diamondworldjax/scripts/run_pregame_sim.py", line 155, in main
+    H, A = s.run(games[i:i + args.chunk], R=args.r, seed=0, skill_mode="mean", crn=False)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jaden/Documents/Baseball/diamondworldjax/scripts/scenario_sim.py", line 92, in run
+    res = simulate(self.model_fn, self.params, self.pt, games,
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jaden/Documents/Baseball/diamondworldjax/scripts/simulate_games.py", line 583, in simulate
+    play_half(inning, 1, playing & ~game_over)
+  File "/home/jaden/Documents/Baseball/diamondworldjax/scripts/simulate_games.py", line 368, in play_half
+    pa_hist["inning"][g_idx, s] = _inn_val
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^^
+IndexError: index 120 is out of bounds for axis 1 with size 120

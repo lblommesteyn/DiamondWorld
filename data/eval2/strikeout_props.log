@@ -1,0 +1,28 @@
+  0/2429 games
+  640/2429 games
+  1280/2429 games
+  1920/2429 games
+STRIKEOUT-PROP SIGNAL TEST (2024, 4669 starts >=12 BF)
+
+  actual K: mean 4.97  | model_EK mean 5.36  | baseline_EK mean 5.14
+
+Predicting actual K (higher corr / lower MAE = better):
+  baseline (pitcher season K-rate): corr 0.337  MAE 1.847
+  model    (v12 matchup, calibrated): corr 0.332  MAE 1.899
+
+LINE CHECK: actual mean 4.97 vs line mean 5.14 => P(under)=0.553. The baseline line is biased, so:
+  NULL always-UNDER (no model): ROI +5.6%  |  always-OVER: ROI -14.7%
+
+PROP BACKTEST vs baseline-set line (over if actual>line), -110 both sides
+  edge(K)  bets   ROI     hit    (edge = |model_EK - line|)
+  0.00    4292   +13.1%  59.2%
+  0.25    3632   +15.2%  60.3%
+  0.50    2979   +18.2%  61.9%
+  0.75    2371   +20.9%  63.3%
+  1.00    1863   +22.6%  64.2%
+
+Reading it: the model does NOT out-predict the baseline (corr above), and its prop
+ROI only matches/exceeds the NULL always-under because it exploits the same biased
+synthetic line harder, not because it has matchup skill. A real book line is not
+biased this way, so this is NO evidence of a prop edge; that needs real prop odds.
+saved -> data/eval2/strikeout_props.txt

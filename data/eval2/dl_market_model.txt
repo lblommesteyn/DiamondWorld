@@ -1,0 +1,35 @@
+DL MARKET MODEL  fit=2023[:80%] (n=1787)  val=2023[80%:] (n=447)  test=2024 (n=2231)
+
+  test base rate home-win=0.523  market mean P(home)=0.534
+  models: heavy L2 + early stopping on val (fair test, not an overfit blowup)
+
+OUT-OF-SAMPLE LOG-LOSS (2024, lower=better)
+  market (closing line)      0.6699
+  Logistic(features)         0.6921
+  Model A: MLP(features)     0.6896
+  Model B: market + MLP      0.6700
+    Model B residual: mean|pB-market|=0.0020 (~0 => market efficient, nothing learnable)
+
+CLOSING-LINE BACKTEST 2024 - Logistic
+  edge   bets   ROI     hit
+  0.00   2231    -9.9%  42.3%
+  0.02   1815    -9.3%  41.7%
+  0.04   1421   -10.4%  40.1%
+  0.06   1085   -11.4%  38.8%
+  0.10    535   -14.0%  35.5%
+
+CLOSING-LINE BACKTEST 2024 - Model A (MLP)
+  edge   bets   ROI     hit
+  0.00   2231    -8.5%  41.0%
+  0.02   1806    -8.5%  39.6%
+  0.04   1433    -9.9%  37.8%
+  0.06   1067   -10.8%  36.1%
+  0.10    516   -11.2%  32.9%
+
+CLOSING-LINE BACKTEST 2024 - Model B (CLV)
+  edge   bets   ROI     hit
+  0.00   2231    -4.8%  49.8%
+  0.02      0    +0.0%   0.0%
+  0.04      0    +0.0%   0.0%
+  0.06      0    +0.0%   0.0%
+  0.10      0    +0.0%   0.0%

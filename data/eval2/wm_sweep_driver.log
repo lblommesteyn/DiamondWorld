@@ -1,0 +1,25 @@
+>>> --arch mlp
+mlp_L3_d128_dr0.0_ed0.0_wd0.0001_ls0.0_ens1          NLL 1.5356 acc 0.4336 margL1 0.0956 | corr K 0.439 BB 0.630 Hit 0.338 HR 0.591 AVG 0.500 (np=434, 74s)
+>>> --arch mlp --embed-dropout 0.3
+mlp_L3_d128_dr0.0_ed0.3_wd0.0001_ls0.0_ens1          NLL 1.5278 acc 0.4402 margL1 0.0605 | corr K 0.462 BB 0.631 Hit 0.341 HR 0.596 AVG 0.507 (np=434, 72s)
+>>> --arch transformer
+transformer_L3_d128_dr0.0_ed0.0_wd0.0001_ls0.0_ens1  NLL 1.5337 acc 0.4330 margL1 0.0627 | corr K 0.178 BB 0.609 Hit 0.327 HR 0.578 AVG 0.423 (np=434, 117s)
+>>> --arch transformer --embed-dropout 0.3
+transformer_L3_d128_dr0.0_ed0.3_wd0.0001_ls0.0_ens1  NLL 1.5322 acc 0.4332 margL1 0.0619 | corr K 0.178 BB 0.612 Hit 0.326 HR 0.576 AVG 0.423 (np=434, 118s)
+>>> --arch transformer --embed-dropout 0.5
+transformer_L3_d128_dr0.0_ed0.5_wd0.0001_ls0.0_ens1  NLL 1.5472 acc 0.4333 margL1 0.0641 | corr K 0.210 BB 0.615 Hit 0.340 HR 0.589 AVG 0.438 (np=434, 101s)
+>>> --arch transformer --dropout 0.1 --wd 1e-3
+transformer_L3_d128_dr0.1_ed0.0_wd0.001_ls0.0_ens1   NLL 1.5381 acc 0.4401 margL1 0.0638 | corr K 0.181 BB 0.619 Hit 0.334 HR 0.569 AVG 0.426 (np=434, 155s)
+>>> --arch transformer --embed-dropout 0.3 --label-smooth 0.05
+transformer_L3_d128_dr0.0_ed0.3_wd0.0001_ls0.05_ens1 NLL 1.5358 acc 0.4346 margL1 0.0781 | corr K 0.209 BB 0.612 Hit 0.335 HR 0.592 AVG 0.437 (np=434, 97s)
+>>> --arch transformer --layers 6 --dm 192
+transformer_L6_d192_dr0.0_ed0.0_wd0.0001_ls0.0_ens1  NLL 1.5261 acc 0.4503 margL1 0.0618 | corr K 0.236 BB 0.620 Hit 0.311 HR 0.594 AVG 0.440 (np=434, 126s)
+>>> --arch transformer --embed-dropout 0.3 --dropout 0.1 --wd 1e-3
+transformer_L3_d128_dr0.1_ed0.3_wd0.001_ls0.0_ens1   NLL 1.5348 acc 0.4400 margL1 0.0646 | corr K 0.177 BB 0.624 Hit 0.338 HR 0.573 AVG 0.428 (np=434, 98s)
+>>> --arch gru
+gru_L3_d128_dr0.0_ed0.0_wd0.0001_ls0.0_ens1          NLL 1.5212 acc 0.4336 margL1 0.0898 | corr K 0.194 BB 0.650 Hit 0.368 HR 0.607 AVG 0.455 (np=434, 506s)
+>>> --arch lstm --embed-dropout 0.3
+lstm_L3_d128_dr0.0_ed0.3_wd0.0001_ls0.0_ens1         NLL 1.5197 acc 0.4383 margL1 0.0657 | corr K 0.201 BB 0.641 Hit 0.367 HR 0.607 AVG 0.454 (np=434, 1615s)
+>>> --arch transformer --embed-dropout 0.3 --ensemble 3
+transformer_L3_d128_dr0.0_ed0.3_wd0.0001_ls0.0_ens3  NLL 1.5331 acc 0.4315 margL1 0.0932 | corr K 0.240 BB 0.621 Hit 0.342 HR 0.585 AVG 0.447 (np=434, 179s)
+WM_SWEEP_DONE 2026-07-20T05:45:38Z

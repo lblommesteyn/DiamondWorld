@@ -1,0 +1,43 @@
+{
+  "baselines": {
+    "type": 1.952772844243765,
+    "swing": 0.6611885271734869,
+    "contact": 0.541457189141538,
+    "foul": 0.6920739219037795,
+    "swing_marginal": 0.4705803394317627
+  },
+  "config": {
+    "train_seasons": "2015,2016,2017,2018,2019,2021,2022,2023",
+    "test_season": 2024,
+    "steps": 20000,
+    "bs": 32,
+    "lr": 0.0003,
+    "max_len": 160,
+    "d_model": 192,
+    "layers": 6,
+    "heads": 6,
+    "seed": 0,
+    "limit_train_rows": null,
+    "out": "checkpoints/pitchformer",
+    "tag": "cap_small",
+    "stack": "ab",
+    "events": "data/processed/events.parquet"
+  },
+  "improvement_nats": {
+    "type": 0.2763288760165621,
+    "swing": 0.2302181315421557,
+    "contact": 0.11378900589641455,
+    "foul": 0.030705265617835598
+  },
+  "A": {
+    "loss": 5.397809852253307,
+    "nll_stuff": 3.7213658891259667,
+    "nll_type": 1.676443968227203
+  },
+  "B": {
+    "loss": 1.5200072373935882,
+    "nll_contact": 0.4276681832451234,
+    "nll_foul": 0.6613686562859439,
+    "nll_swing": 0.43097039563133116
+  }
+}

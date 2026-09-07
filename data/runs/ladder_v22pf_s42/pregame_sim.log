@@ -1,0 +1,121 @@
+model: checkpoints/dwjax_pa_v22pf_s42/dwjax_step_0050000.pkl  contact_quality=True  per_stat_shrink=True  skill_prior=walk  pitchformer=True  recal=off
+pre-game sim over 2429 games x R=100 (hook model, crn off, staff=pregame)
+W0907 12:59:32.712741 1024674 bfc_allocator.cc:514] Allocator (GPU_0_bfc) ran out of memory trying to allocate 5.36GiB (rounded to 5760000000)requested by op 
+If the cause is memory fragmentation maybe the environment variable 'TF_GPU_ALLOCATOR=cuda_malloc_async' will improve the situation. 
+Current allocation summary follows.
+Current allocation summary follows.
+W0907 12:59:32.713170 1024674 bfc_allocator.cc:525] ***__*******************_____**************************************************************_________
+W0907 12:59:42.713529 1024674 bfc_allocator.cc:514] Allocator (GPU_0_bfc) ran out of memory trying to allocate 5.36GiB (rounded to 5760000000)requested by op 
+If the cause is memory fragmentation maybe the environment variable 'TF_GPU_ALLOCATOR=cuda_malloc_async' will improve the situation. 
+Current allocation summary follows.
+Current allocation summary follows.
+W0907 12:59:42.713728 1024674 bfc_allocator.cc:525] ***__*******************_____**************************************************************_________
+W0907 12:59:52.714088 1024674 bfc_allocator.cc:514] Allocator (GPU_0_bfc) ran out of memory trying to allocate 5.36GiB (rounded to 5760000000)requested by op 
+If the cause is memory fragmentation maybe the environment variable 'TF_GPU_ALLOCATOR=cuda_malloc_async' will improve the situation. 
+Current allocation summary follows.
+Current allocation summary follows.
+W0907 12:59:52.714462 1024674 bfc_allocator.cc:525] ***__*******************_____**************************************************************_________
+W0907 13:00:02.714940 1024674 bfc_allocator.cc:514] Allocator (GPU_0_bfc) ran out of memory trying to allocate 5.36GiB (rounded to 5760000000)requested by op 
+If the cause is memory fragmentation maybe the environment variable 'TF_GPU_ALLOCATOR=cuda_malloc_async' will improve the situation. 
+Current allocation summary follows.
+Current allocation summary follows.
+W0907 13:00:02.715245 1024674 bfc_allocator.cc:525] ***__*******************_____**************************************************************_________
+W0907 13:00:12.715614 1024674 bfc_allocator.cc:514] Allocator (GPU_0_bfc) ran out of memory trying to allocate 5.36GiB (rounded to 5760000000)requested by op 
+If the cause is memory fragmentation maybe the environment variable 'TF_GPU_ALLOCATOR=cuda_malloc_async' will improve the situation. 
+Current allocation summary follows.
+Current allocation summary follows.
+W0907 13:00:12.715889 1024674 bfc_allocator.cc:525] ***__*******************_____**************************************************************_________
+W0907 13:00:22.716208 1024674 bfc_allocator.cc:514] Allocator (GPU_0_bfc) ran out of memory trying to allocate 5.36GiB (rounded to 5760000000)requested by op 
+If the cause is memory fragmentation maybe the environment variable 'TF_GPU_ALLOCATOR=cuda_malloc_async' will improve the situation. 
+Current allocation summary follows.
+Current allocation summary follows.
+W0907 13:00:22.716559 1024674 bfc_allocator.cc:525] ***__*******************_____**************************************************************_________
+W0907 13:00:32.717036 1024674 bfc_allocator.cc:514] Allocator (GPU_0_bfc) ran out of memory trying to allocate 5.36GiB (rounded to 5760000000)requested by op 
+If the cause is memory fragmentation maybe the environment variable 'TF_GPU_ALLOCATOR=cuda_malloc_async' will improve the situation. 
+Current allocation summary follows.
+Current allocation summary follows.
+W0907 13:00:32.717330 1024674 bfc_allocator.cc:525] ***__*******************_____**************************************************************_________
+W0907 13:00:42.717787 1024674 bfc_allocator.cc:514] Allocator (GPU_0_bfc) ran out of memory trying to allocate 5.36GiB (rounded to 5760000000)requested by op 
+If the cause is memory fragmentation maybe the environment variable 'TF_GPU_ALLOCATOR=cuda_malloc_async' will improve the situation. 
+Current allocation summary follows.
+Current allocation summary follows.
+W0907 13:00:42.718151 1024674 bfc_allocator.cc:525] ***__*******************_____**************************************************************_________
+W0907 13:00:52.718496 1024674 bfc_allocator.cc:514] Allocator (GPU_0_bfc) ran out of memory trying to allocate 5.36GiB (rounded to 5760000000)requested by op 
+If the cause is memory fragmentation maybe the environment variable 'TF_GPU_ALLOCATOR=cuda_malloc_async' will improve the situation. 
+Current allocation summary follows.
+Current allocation summary follows.
+W0907 13:00:52.718575 1024674 bfc_allocator.cc:525] ***__*******************_____**************************************************************_________
+E0907 13:00:52.719037 1024550 autotuner.cc:494] Could not get config for HLO: %gemm_fusion_dot.1 = f32[100000,120,120]{2,1,0} fusion(%bitcast.11, %bitcast.10), kind=kCustom, calls=
+(parameter_0: f32[100000,120,32], parameter_1: f32[100000,32,120]) -> f32[100000,120,120] {
+  %parameter_0 = f32[100000,120,32]{2,1,0} parameter(0)
+  %parameter_1 = f32[100000,32,120]{2,1,0} parameter(1)
+  ROOT %dot.2 = f32[100000,120,120]{2,1,0} dot(%parameter_0, %parameter_1), lhs_batch_dims={0}, lhs_contracting_dims={2}, rhs_batch_dims={0}, rhs_contracting_dims={1}, metadata={op_name="jit(_einsum)/dot_general" stack_frame_id=15}
+}, metadata={op_name="jit(_einsum)/dot_general" stack_frame_id=15}, backend_config={"operation_queue_id":"0","fusion_backend_config":{"kind":"__triton_gemm"},"force_earliest_schedule":false,"reification_cost":[],"device_type":"DEVICE_TYPE_INVALID"}. Status: INTERNAL: Autotuning failed for HLO: %gemm_fusion_dot.1 = f32[100000,120,120]{2,1,0} fusion(%bitcast.11, %bitcast.10), kind=kCustom, calls=%gemm_fusion_dot.1_computation, metadata={op_name="jit(_einsum)/dot_general" stack_frame_id=15}, backend_config={"operation_queue_id":"0","fusion_backend_config":{"kind":"__triton_gemm"},"force_earliest_schedule":false,"reification_cost":[],"device_type":"DEVICE_TYPE_INVALID"}. Failed to pick best config: All configs failed during profiling.
+Failures (9):
+EXECUTION FAILED: RESOURCE_EXHAUSTED: Out of memory while trying to allocate 5.36GiB. [tf-allocator-allocation-error='']
+EXECUTION FAILED: RESOURCE_EXHAUSTED: Out of memory while trying to allocate 5.36GiB. [tf-allocator-allocation-error='']
+EXECUTION FAILED: RESOURCE_EXHAUSTED: Out of memory while trying to allocate 5.36GiB. [tf-allocator-allocation-error='']
+EXECUTION FAILED: RESOURCE_EXHAUSTED: Out of memory while trying to allocate 5.36GiB. [tf-allocator-allocation-error='']
+EXECUTION FAILED: RESOURCE_EXHAUSTED: Out of memory while trying to allocate 5.36GiB. [tf-allocator-allocation-error='']
+EXECUTION FAILED: RESOURCE_EXHAUSTED: Out of memory while trying to allocate 5.36GiB. [tf-allocator-allocation-error='']
+EXECUTION FAILED: RESOURCE_EXHAUSTED: Out of memory while trying to allocate 5.36GiB. [tf-allocator-allocation-error='']
+EXECUTION FAILED: RESOURCE_EXHAUSTED: Out of memory while trying to allocate 5.36GiB. [tf-allocator-allocation-error='']
+EXECUTION FAILED: RESOURCE_EXHAUSTED: Out of memory while trying to allocate 5.36GiB. [tf-allocator-allocation-error='']
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/home/jaden/Documents/Baseball/diamondworldjax/scripts/run_pregame_sim.py", line 183, in <module>
+    main()
+  File "/home/jaden/Documents/Baseball/diamondworldjax/scripts/run_pregame_sim.py", line 155, in main
+    H, A = s.run(games[i:i + args.chunk], R=args.r, seed=0, skill_mode="mean", crn=False)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jaden/Documents/Baseball/diamondworldjax/scripts/scenario_sim.py", line 92, in run
+    res = simulate(self.model_fn, self.params, self.pt, games,
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jaden/Documents/Baseball/diamondworldjax/scripts/simulate_games.py", line 491, in simulate
+    play_half(inning, 0, playing)
+  File "/home/jaden/Documents/Baseball/diamondworldjax/scripts/simulate_games.py", line 377, in play_half
+    model_fn(tb, pt, teacher_force=False)
+  File "/home/jaden/Documents/Baseball/diamondworldjax/model/pa_model.py", line 433, in pa_model
+    context = pa_transformer_numpyro(
+              ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jaden/Documents/Baseball/diamondworldjax/model/pa_transformer.py", line 121, in pa_transformer_numpyro
+    return transformer(context_raw, valid_mask, train=False)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jaden/Documents/Baseball/.venv/lib/python3.12/site-packages/numpyro/contrib/module.py", line 126, in apply_without_state
+    return nn_module.apply({"params": params}, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jaden/Documents/Baseball/diamondworldjax/model/pa_transformer.py", line 73, in __call__
+    x = CausalBlock(
+        ^^^^^^^^^^^^
+  File "/home/jaden/Documents/Baseball/diamondworldjax/model/pitchformer.py", line 92, in __call__
+    h = nn.MultiHeadDotProductAttention(
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jaden/Documents/Baseball/.venv/lib/python3.12/site-packages/flax/linen/attention.py", line 674, in __call__
+    x = self.attention_fn(*attn_args, **attn_kwargs)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jaden/Documents/Baseball/.venv/lib/python3.12/site-packages/flax/linen/attention.py", line 266, in dot_product_attention
+    attn_weights = dot_product_attention_weights(
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jaden/Documents/Baseball/.venv/lib/python3.12/site-packages/flax/linen/attention.py", line 132, in dot_product_attention_weights
+    attn_weights = einsum('...qhd,...khd->...hqk', query, key)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jaden/Documents/Baseball/.venv/lib/python3.12/site-packages/jax/_src/numpy/einsum.py", line 338, in einsum
+    return jit_einsum(operand_arrays, contractions, precision,
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/contextlib.py", line 81, in inner
+    return func(*args, **kwds)
+           ^^^^^^^^^^^^^^^^^^^
+jax.errors.JaxRuntimeError: INTERNAL: Autotuning failed for HLO: %gemm_fusion_dot.1 = f32[100000,120,120]{2,1,0} fusion(%bitcast.11, %bitcast.10), kind=kCustom, calls=%gemm_fusion_dot.1_computation, metadata={op_name="jit(_einsum)/dot_general" stack_frame_id=15}, backend_config={"operation_queue_id":"0","fusion_backend_config":{"kind":"__triton_gemm"},"force_earliest_schedule":false,"reification_cost":[],"device_type":"DEVICE_TYPE_INVALID"}. Failed to pick best config: All configs failed during profiling.
+Failures (9):
+EXECUTION FAILED: RESOURCE_EXHAUSTED: Out of memory while trying to allocate 5.36GiB. [tf-allocator-allocation-error='']
+EXECUTION FAILED: RESOURCE_EXHAUSTED: Out of memory while trying to allocate 5.36GiB. [tf-allocator-allocation-error='']
+EXECUTION FAILED: RESOURCE_EXHAUSTED: Out of memory while trying to allocate 5.36GiB. [tf-allocator-allocation-error='']
+EXECUTION FAILED: RESOURCE_EXHAUSTED: Out of memory while trying to allocate 5.36GiB. [tf-allocator-allocation-error='']
+EXECUTION FAILED: RESOURCE_EXHAUSTED: Out of memory while trying to allocate 5.36GiB. [tf-allocator-allocation-error='']
+EXECUTION FAILED: RESOURCE_EXHAUSTED: Out of memory while trying to allocate 5.36GiB. [tf-allocator-allocation-error='']
+EXECUTION FAILED: RESOURCE_EXHAUSTED: Out of memory while trying to allocate 5.36GiB. [tf-allocator-allocation-error='']
+EXECUTION FAILED: RESOURCE_EXHAUSTED: Out of memory while trying to allocate 5.36GiB. [tf-allocator-allocation-error='']
+EXECUTION FAILED: RESOURCE_EXHAUSTED: Out of memory while trying to allocate 5.36GiB. [tf-allocator-allocation-error='']
+--------------------
+For simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.

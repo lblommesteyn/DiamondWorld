@@ -1,0 +1,13 @@
+MARCEL vs v13 player-rate prediction (2024 actuals, cross-player corr)
+  batters scored: 380
+  stat   Marcel corr   v13 corr
+  K            0.791      0.652
+  BB           0.688      0.615
+  HIT          0.418      0.351
+  HR           0.608      0.607
+  AVG          0.626      0.556
+
+Marcel is the public baseline Steamer/ZiPS/THE BAT are benchmarked against
+(they beat it by a few % of correlation). Read: DiamondWorld is competitive
+with a real projection baseline on player rates, and its actual contribution
+is the full-game simulation projection systems cannot do (see ssac_analyses).

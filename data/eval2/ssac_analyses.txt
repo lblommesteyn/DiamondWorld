@@ -1,0 +1,20 @@
+GAME: home SP Kevin Gausman vs away SP Marcus Stroman, park 29
+  baseline home win prob = 0.520,  expected home runs = 5.29
+
+=== 1. COUNTERFACTUAL / WHAT-IF (change in home win prob) ===
+  home SP -> ace             (ace = Shohei Ohtani)               WP 0.520  (delta +0.000)  runs 5.18 (-0.12)
+  home SP -> replacement     (repl = Mike Pelfrey)               WP 0.475  (delta -0.045)  runs 5.21 (-0.09)
+  weakest hitter -> star bat (star = Aaron Judge into slot 6)    WP 0.532  (delta +0.012)  runs 5.39 (+0.10)
+
+=== 2. LINEUP CONSTRUCTION BY SIMULATION (home 9, expected runs) ===
+  actual order:    5.29 runs/game,  WP 0.520
+  best-found order:5.52 runs/game,  WP 0.565   (+0.22 runs, +0.045 WP)
+  worst order:     5.01 runs/game   (spread across 40 orders = 0.51 runs)
+  optimal batting order: Biggio -> Schneider -> Jr. -> Springer -> Kirk -> Turner -> Bichette -> Kiermaier -> Varsho
+
+=== 3. CORRELATED TAIL-RISK (baseline game, full distribution) ===
+  mean total 10.45, std 4.80
+  P(total >= 10) = 0.542   P(<=5) = 0.163
+  P(shutout by either) = 0.095   P(extras, tie after reg proxy |margin|-blur) ~ P(margin==0 pre) = 0.000
+  P(blowout >=5) = 0.315   P(home wins by >=5) = 0.165
+  total variance: sim 23.01 vs independent-Poisson 10.45 (ratio 2.20x => correlated overdispersion)

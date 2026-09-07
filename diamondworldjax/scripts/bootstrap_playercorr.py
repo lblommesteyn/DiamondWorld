@@ -107,9 +107,16 @@ def main() -> None:
     # intersect on the common prefix and require identical PA counts there.
     n_common = min(len(m["cnt"]) for m in models.values())
     ref_cnt = models[baseline]["cnt"][:n_common]
+    # Index 0 was the old pooled unknown-player sink. It is deliberately
+    # excluded from the metric below, so an older baseline that still contains
+    # its pooled PA total is compatible with corrected rate files everywhere
+    # that actually enters the paired comparison.
+    compare_counts = np.ones(n_common, dtype=bool)
+    if n_common:
+        compare_counts[0] = False
     for tag, m in models.items():
-        if not np.allclose(m["cnt"][:n_common], ref_cnt):
-            n_bad = int((m["cnt"][:n_common] != ref_cnt).sum())
+        if not np.allclose(m["cnt"][:n_common][compare_counts], ref_cnt[compare_counts]):
+            n_bad = int((m["cnt"][:n_common][compare_counts] != ref_cnt[compare_counts]).sum())
             raise SystemExit(
                 f"PA counts differ between {baseline!r} and {tag!r} on {n_bad} players; "
                 "these were not scored on the same test set, so a paired comparison is invalid."

@@ -60,10 +60,10 @@ class TransformerC(nn.Module):
     dropout: float = 0.1
 
     @nn.compact
-    def __call__(self, batch, *, train: bool):
+    def __call__(self, batch, *, train: bool, decode: bool = False):
         h, _ = Trunk(self.n_pitchers, self.n_batters, self.n_parks, self.d_model,
                      self.n_layers, self.n_heads, self.dropout, name="trunk")(
-            batch, train=train)
+            batch, train=train, decode=decode)
 
         obs = jnp.concatenate([
             jax.nn.one_hot(batch["pitch_type"], 8),

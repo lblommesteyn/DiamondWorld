@@ -1,0 +1,9 @@
+iso      latents=['player_skills']
+         guide=['player_skills'] -> OK 
+learned  latents=['player_skills', 'skill_tau']
+         guide=['player_skills', 'skill_tau'] -> OK 
+lkj      latents=['player_skills', 'skill_L', 'skill_tau']
+         guide=['player_skills', 'skill_L', 'skill_tau'] -> OK 
+walk     latents=['player_skill_eps', 'skill_walk_sigma']
+         guide=['player_skill_eps', 'skill_walk_sigma'] -> OK 
+ALL PRIORS COVERED

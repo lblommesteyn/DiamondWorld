@@ -4,7 +4,7 @@ import jax.numpy as jnp
 import numpy as np
 import numpyro.handlers as handlers
 
-from diamondworldjax.model.multitask import task_checkpoint_params
+from diamondworldjax.model.multitask import sample_shared_task_skills, task_checkpoint_params
 from diamondworldjax.model.pitch_transformer import PitchTransformer
 from diamondworldjax.train.svi import make_shared_task_skills_guide
 
@@ -37,6 +37,24 @@ def test_shared_task_guide_covers_every_latent_family():
     assert {"shared_player_skills", "pa_skill_residual", "pitch_skill_residual"} <= set(trace)
 
 
+def test_shared_task_walk_guide_is_seasonal_and_covers_walk_scale():
+    guide = make_shared_task_skills_guide(P=3, skill_prior="walk", n_seasons=9)
+    with handlers.seed(rng_seed=jax.random.PRNGKey(2)):
+        with handlers.trace() as trace:
+            guide({}, {}, teacher_force=True)
+    assert {"shared_player_skills", "pa_skill_residual", "pitch_skill_residual",
+            "skill_walk_sigma"} <= set(trace)
+    assert trace["shared_player_skills"]["value"].shape == (3, 9, 32)
+
+
+def test_shared_task_walk_model_returns_seasonal_skill_paths():
+    with handlers.seed(rng_seed=jax.random.PRNGKey(3)):
+        shared, pa_residual, pitch_residual = sample_shared_task_skills(
+            3, skill_prior="walk", n_seasons=9,
+        )
+    assert shared.shape == pa_residual.shape == pitch_residual.shape == (3, 9, 32)
+
+
 def test_task_checkpoint_export_marginalises_shared_and_residual_skills():
     params = {
         "pa/head$params": "pa-head",
@@ -47,8 +65,10 @@ def test_task_checkpoint_export_marginalises_shared_and_residual_skills():
         "pa_skill_residual_sigma": jnp.array([[0.4]]),
         "pitch_skill_residual_mu": jnp.array([[3.0]]),
         "pitch_skill_residual_sigma": jnp.array([[0.5]]),
+        "skill_walk_sigma_loc": jnp.array(0.3),
     }
     exported = task_checkpoint_params(params, "pa")
     assert exported["head$params"] == "pa-head"
     np.testing.assert_allclose(exported["player_mu"], [[3.0]])
     np.testing.assert_allclose(exported["player_sigma"], [[0.5]])
+    np.testing.assert_allclose(exported["skill_walk_sigma_loc"], 0.3)

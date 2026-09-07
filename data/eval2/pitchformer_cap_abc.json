@@ -1,0 +1,80 @@
+{
+  "baselines": {
+    "type": 1.952772844243765,
+    "swing": 0.6611885271734869,
+    "contact": 0.541457189141538,
+    "foul": 0.6920739219037795,
+    "swing_marginal": 0.4705803394317627
+  },
+  "config": {
+    "train_seasons": "2015,2016,2017,2018,2019,2021,2022,2023",
+    "test_season": 2024,
+    "steps": 10000,
+    "bs": 32,
+    "lr": 0.0003,
+    "max_len": 160,
+    "d_model": 192,
+    "layers": 4,
+    "heads": 6,
+    "seed": 0,
+    "limit_train_rows": null,
+    "out": "checkpoints/pitchformer",
+    "tag": "cap_abc",
+    "stack": "abc",
+    "events": "data/processed/events.parquet"
+  },
+  "improvement_nats": {
+    "type": 0.2866507787353356,
+    "swing": 0.2285213047616121,
+    "contact": 0.11601033442649666,
+    "foul": 0.033373447141755386,
+    "wild_pitch": 0.00702006331466906,
+    "passed_ball": 0.0004346535970035639,
+    "balk": 0.00017416012124174866,
+    "steal": 0.00908540256258212,
+    "caught_stealing": 0.00120714666458533,
+    "pickoff": 0.017870786945006205,
+    "error": 0.0033447522429357647,
+    "defensive_indiff": 0.0018617591316022657
+  },
+  "A": {
+    "loss": 5.509851802479137,
+    "nll_stuff": 3.8437297254960168,
+    "nll_type": 1.6661220655084295
+  },
+  "B": {
+    "loss": 1.5168145512514573,
+    "nll_contact": 0.4254468547150413,
+    "nll_foul": 0.6587004747620241,
+    "nll_swing": 0.4326672224118748
+  },
+  "baselines_c": {
+    "wild_pitch": 0.013758113986132723,
+    "wild_pitch_rate": 0.0022473193239420652,
+    "passed_ball": 0.002752508287737602,
+    "passed_ball_rate": 0.00040240102680400014,
+    "balk": 0.001597567845251573,
+    "balk_rate": 0.0001455048768548295,
+    "steal": 0.028567596067326156,
+    "steal_rate": 0.003103639930486679,
+    "caught_stealing": 0.004577319803096861,
+    "caught_stealing_rate": 0.0005230169044807553,
+    "pickoff": 0.05853799819344101,
+    "pickoff_rate": 0.01360313966870308,
+    "error": 0.01234931773415231,
+    "error_rate": 0.0016748724738135934,
+    "defensive_indiff": 0.0034116503996096128,
+    "defensive_indiff_rate": 0.00036306597758084536
+  },
+  "C": {
+    "loss": 0.0845533476514931,
+    "nll_balk": 0.0014234077240098243,
+    "nll_caught_stealing": 0.0033701731385115314,
+    "nll_defensive_indiff": 0.001549891268007347,
+    "nll_error": 0.009004565491216546,
+    "nll_passed_ball": 0.002317854690734038,
+    "nll_pickoff": 0.0406672112484348,
+    "nll_steal": 0.019482193504744037,
+    "nll_wild_pitch": 0.006738050671463663
+  }
+}

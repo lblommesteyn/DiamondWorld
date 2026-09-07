@@ -1,0 +1,1 @@
+PRODUCTION v12 (SVI, conditioned+recal) same metric | corr K 0.635 BB 0.376 Hit 0.368 HR 0.520 AVG 0.475 (np=434)

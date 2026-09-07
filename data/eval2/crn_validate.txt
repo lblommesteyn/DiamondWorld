@@ -1,0 +1,10 @@
+CRN VALIDATION: baseline vs one-starter-swap, R=400, same seed
+
+  CRN off : run delta +0.090 (SE 0.169), win delta -0.003 (SE 0.033), corr(base,cf) +0.041
+  CRN on  : run delta +0.010 (SE 0.087), win delta +0.022 (SE 0.022), corr(base,cf) +0.762
+
+  SE reduction: run delta 1.95x, win delta 1.50x
+  equivalent sim saving: run delta ~3.8x fewer replicas for the same SE
+
+  (CRN raises corr(base,cf) toward 1; Var(delta)=Var(base)+Var(cf)-2Cov,
+   so a higher covariance is exactly what shrinks the delta's SE.)

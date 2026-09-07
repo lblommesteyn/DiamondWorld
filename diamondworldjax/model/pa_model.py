@@ -385,7 +385,7 @@ def pa_model(
 
     # Player embeddings
     season_idx = None
-    if skill_prior == "walk" and player_skills_override is None:
+    if skill_prior == "walk":
         # Clamp into [0, n_seasons-1]. The clamp is what makes the test season work:
         # 2024 is unseen in training, so it maps to the last TRAINED season's skill,
         # which is exactly the "most recent form" quantity the recency lever

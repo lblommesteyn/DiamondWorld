@@ -1,0 +1,7 @@
+BASELINE v13 (train<=2022, test 2024): AVG 0.503 (K .641 BB .570 Hit .280 HR .522, np=332)
+### v15 (train<=2023, test 2024): previous season folded into features
+v15_2024 (SVI, conditioned+recal, skill=mean, train<= 2023, test 2024, mle=False) | corr K 0.741 BB 0.645 Hit 0.411 HR 0.580 AVG 0.594 (np=383, rookies_injected=0, rookies_kept=0)
+### v15 + MLE rookie fills (train<=2023, test 2024)
+v15_2024_mle (SVI, conditioned+recal, skill=mean, train<= 2023, test 2024, mle=True) | corr K 0.730 BB 0.641 Hit 0.414 HR 0.567 AVG 0.588 (np=399, rookies_injected=16, rookies_kept=16)
+### v16 (train<=2023, test 2024): v15 recipe + contact-quality (xBA-style) features [ONLY change]
+v16_2024 (SVI, conditioned+recal, skill=mean, train<= 2023, test 2024, contact-quality=True) | corr K 0.769 BB 0.645 Hit 0.422 HR 0.607 AVG 0.611 (np=383) | vs v15 0.594: +0.017 AVG (K +0.028, BB +0.000, Hit +0.011, HR +0.027)

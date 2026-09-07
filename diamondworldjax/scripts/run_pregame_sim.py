@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import gc
+import json
 import os
 
 import numpy as np
@@ -55,20 +56,42 @@ def main():
                     help="checkpoint .pkl; default is Sim's V15 (say so in --tag)")
     ap.add_argument("--contact-quality", action="store_true",
                     help="must match how the checkpoint was trained (v16+, v22+)")
+    ap.add_argument("--per-stat-shrink", action="store_true",
+                    help="must match how the checkpoint's player table was built")
+    ap.add_argument("--skill-prior", choices=["iso", "learned", "lkj", "walk"],
+                    default="iso", help="must match how the checkpoint was trained")
     ap.add_argument("--pitchformer", action="store_true",
                     help="must match: checkpoint trained with --pitchformer")
     ap.add_argument("--train-end", type=int, default=2023)
+    ap.add_argument("--recal-file", default="data/eval2/v13_cal_params.npz",
+                    help="Calibration .npz containing the selected vector (default: v13 heuristic file).")
+    ap.add_argument("--recal-key", default="b_heur",
+                    help="Array key in --recal-file (default: b_heur).")
+    ap.add_argument("--recal-scale", type=float, default=0.18,
+                    help="Multiplier for the calibration vector (default: 0.18).")
+    ap.add_argument("--no-recal", action="store_true",
+                    help="Sample raw outcome logits without a calibration vector.")
     ap.add_argument("--pregame-staff", action="store_true",
                     help="select relievers from prior games only, removing the "
                          "realized-bullpen leak described above")
     args = ap.parse_args()
 
     sim_kw = dict(hook_model=True, train_end=args.train_end,
-                  contact_quality=args.contact_quality, pitchformer=args.pitchformer)
+                  contact_quality=args.contact_quality,
+                  per_stat_shrink=args.per_stat_shrink,
+                  skill_prior=args.skill_prior,
+                  pitchformer=args.pitchformer,
+                  recal=args.recal_file,
+                  recal_key=args.recal_key,
+                  scale=args.recal_scale,
+                  apply_recal=not args.no_recal)
     if args.ckpt:
         sim_kw["ckpt"] = args.ckpt
     print(f"model: {sim_kw.get('ckpt', 'V15 default')}  contact_quality={args.contact_quality}"
-          f"  pitchformer={args.pitchformer}", flush=True)
+          f"  per_stat_shrink={args.per_stat_shrink}  skill_prior={args.skill_prior}"
+          f"  pitchformer={args.pitchformer}  recal="
+          f"{'off' if args.no_recal else f'{args.recal_file}[{args.recal_key}] x {args.recal_scale:g}'}",
+          flush=True)
     s = Sim(**sim_kw)
     outcomes = real_runs(2024)
     games = [g for g in s.real_games(2024, limit=10000, pregame_staff=args.pregame_staff)
@@ -97,6 +120,21 @@ def main():
     # can be resumed six times.
     ckdir = f"data/chunks/{args.tag}"
     os.makedirs(ckdir, exist_ok=True)
+    # A tag identifies a nominal run, but callers often sweep calibration scale
+    # or replica count under that tag.  Never splice those incompatible draws
+    # together merely because they cover the same game ids.
+    cache_config = json.dumps({
+        "ckpt": args.ckpt,
+        "r": args.r,
+        "train_end": args.train_end,
+        "contact_quality": args.contact_quality,
+        "per_stat_shrink": args.per_stat_shrink,
+        "skill_prior": args.skill_prior,
+        "pitchformer": args.pitchformer,
+        "recal_file": None if args.no_recal else args.recal_file,
+        "recal_key": None if args.no_recal else args.recal_key,
+        "recal_scale": None if args.no_recal else args.recal_scale,
+    }, sort_keys=True)
     starts = list(range(0, len(games), args.chunk))
     for i in starts:
         ck = f"{ckdir}/chunk_{i:06d}.npz"
@@ -107,15 +145,17 @@ def main():
         want = pk[i:i + args.chunk]
         if os.path.exists(ck):
             with np.load(ck) as z:
-                if "pk" in z and np.array_equal(z["pk"], want):
+                cached_config = str(z["config"].item()) if "config" in z else None
+                if ("pk" in z and np.array_equal(z["pk"], want)
+                        and cached_config == cache_config):
                     print(f"  {min(i + args.chunk, len(games))}/{len(games)} (cached)",
                           flush=True)
                     continue
-            print(f"  chunk {i} on disk covers different games, recomputing", flush=True)
+            print(f"  chunk {i} has a different game/configuration, recomputing", flush=True)
         H, A = s.run(games[i:i + args.chunk], R=args.r, seed=0, skill_mode="mean", crn=False)
         # Write to a temporary name and rename, so a death DURING the write cannot
         # leave a truncated chunk that a later resume would trust.
-        np.savez(ck + ".tmp.npz", H=H, A=A, pk=want)
+        np.savez(ck + ".tmp.npz", H=H, A=A, pk=want, config=cache_config)
         os.replace(ck + ".tmp.npz", ck)
         del H, A
         gc.collect()
@@ -126,6 +166,8 @@ def main():
         with np.load(f"{ckdir}/chunk_{i:06d}.npz") as z:
             if not np.array_equal(z["pk"], pk[i:i + args.chunk]):
                 raise SystemExit(f"chunk {i} game_pk mismatch at assembly")
+            if "config" not in z or str(z["config"].item()) != cache_config:
+                raise SystemExit(f"chunk {i} configuration mismatch at assembly")
             Hs.append(z["H"]); As.append(z["A"])
     sh = np.concatenate(Hs, 0); sa = np.concatenate(As, 0)
     if len(sh) != len(games):

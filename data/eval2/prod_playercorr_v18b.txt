@@ -1,0 +1,1 @@
+v18b (SVI, conditioned+recal, skill=mean, train<= 2023, test 2024, mle=False) | corr K 0.731 BB 0.631 Hit 0.421 HR 0.598 AVG 0.595 (np=383, rookies_injected=0, rookies_kept=0)

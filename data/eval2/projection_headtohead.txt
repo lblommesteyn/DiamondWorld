@@ -1,0 +1,19 @@
+HEAD-TO-HEAD: v15 vs Marcel vs Steamer (2024 actuals, cross-player rate corr)
+  qualified batters (>=150 PA in 2024): 410
+  scored by Marcel: 380   also projected by Steamer: 376
+
+  stat   Marcel(all)  Marcel(comm)  Steamer(comm)  v15(own set)
+  K            0.791         0.790          0.820         0.741
+  BB           0.688         0.685          0.702         0.645
+  HIT          0.418         0.420          0.510         0.411
+  HR           0.608         0.609          0.651         0.580
+  AVG          0.626         0.626          0.671         0.594
+
+  Steamer - Marcel on the common set: +0.045 AVG corr
+  set-restriction effect on Marcel:   -0.000 AVG corr
+  -> the common set is not a materially different population, so v15's
+     numbers transfer: v15 0.594 vs Marcel 0.626 (-0.032), and Steamer sits +0.045 above Marcel,
+     putting v15 about -0.077 against Steamer.
+
+Source: Steamer preseason 2024, Wayback capture of Razzball's public mirror.
+ZiPS and THE BAT have no usable preseason-2024 capture and are not estimated.

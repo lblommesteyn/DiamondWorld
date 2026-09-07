@@ -1,0 +1,12 @@
+HYBRID: SVI (v12) + discriminative MLP, per-batter rate correlation
+  batters (>=150 PA in both): 434
+
+  outcome     SVI     MLP   50/50    best
+  K         0.652   0.063   0.657   0.652
+  BB        0.615   0.640   0.642   0.640
+  Hit       0.351   0.333   0.351   0.351
+  HR        0.607   0.588   0.610   0.607
+  AVG       0.556   0.406   0.565   0.563
+
+50/50 = simple average of the two models' predicted rates.
+best  = per-outcome oracle (upper bound: pick the better model each outcome).

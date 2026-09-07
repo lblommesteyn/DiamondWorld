@@ -1,0 +1,64 @@
+top 1: 2429 half-innings
+bot 1: 2429 half-innings
+top 2: 2429 half-innings
+bot 2: 2429 half-innings
+top 3: 2429 half-innings
+bot 3: 2429 half-innings
+top 4: 2429 half-innings
+bot 4: 2429 half-innings
+top 5: 2429 half-innings
+bot 5: 2429 half-innings
+top 6: 2428 half-innings
+bot 6: 2428 half-innings
+top 7: 2428 half-innings
+bot 7: 2428 half-innings
+top 8: 2427 half-innings
+bot 8: 2426 half-innings
+top 9: 2425 half-innings
+bot 9: 867 half-innings
+top 10: 127 half-innings
+bot 10: 127 half-innings
+top 11: 33 half-innings
+bot 11: 33 half-innings
+top 12: 12 half-innings
+bot 12: 12 half-innings
+top 13: 2 half-innings
+bot 13: 2 half-innings
+{
+  "tag": "abcd_hbp_e_s42_ft15",
+  "season": 2024,
+  "c_events": true,
+  "games": 2429,
+  "truncated_half_innings": 23389,
+  "batch_games": 512,
+  "rollout_calls": 95,
+  "scheduled_pas": 179819,
+  "generated_pas": 146060,
+  "pa_outcomes": {
+    "K": 31648,
+    "BB": 15979,
+    "HBP": 1892,
+    "1B": 18358,
+    "2B": 5191,
+    "3B": 463,
+    "HR": 4559,
+    "out": 67967,
+    "E": 3
+  },
+  "home_mean": 2.101687937422808,
+  "away_mean": 2.099629477151091,
+  "total_mean": 4.201317414573898,
+  "home_win_rate": 0.423219431864965,
+  "events": [
+    859,
+    204,
+    67,
+    1888,
+    359,
+    8509,
+    23,
+    102
+  ],
+  "note": "Generated game state on observed lineup/staff schedule; not pre-game roster selection."
+}
+saved -> data/eval2/pitchformer_abcd_hbp_e_s42_ft15_games.json

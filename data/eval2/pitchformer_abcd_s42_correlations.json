@@ -1,0 +1,54 @@
+{
+  "tag": "abcd_s42",
+  "season": 2024,
+  "reps": 1,
+  "c_events": true,
+  "min_pa": 150,
+  "real_coverage": {
+    "terminal_pas": 170593,
+    "batters_with_pa": 542,
+    "batters_at_min_pa": 382
+  },
+  "limit_seqs": null,
+  "comparable_full_slate": true,
+  "per_rep": [
+    {
+      "n_batters": 372,
+      "K_corr": 0.6445795488683352,
+      "BB_corr": 0.4796533937159191,
+      "Hit_corr": 0.30196192496081237,
+      "HR_corr": 0.23974627131137421,
+      "AVG_corr": 0.2536814122270092,
+      "sim_coverage": {
+        "terminal_pas": 159299,
+        "batters_with_pa": 541,
+        "batters_at_min_pa": 372
+      },
+      "events": [
+        1208,
+        249,
+        85,
+        1832,
+        347,
+        10008,
+        1106,
+        37
+      ]
+    }
+  ],
+  "mean": {
+    "K_corr": 0.6445795488683352,
+    "BB_corr": 0.4796533937159191,
+    "Hit_corr": 0.30196192496081237,
+    "HR_corr": 0.23974627131137421,
+    "AVG_corr": 0.2536814122270092
+  },
+  "sd": {
+    "K_corr": 0.0,
+    "BB_corr": 0.0,
+    "Hit_corr": 0.0,
+    "HR_corr": 0.0,
+    "AVG_corr": 0.0
+  },
+  "note": "Generated pitch/state history; pitcher/batter/park schedule remains exogenous. C events are sampled and counted, while the empirical engine retains base advancement."
+}

@@ -122,12 +122,15 @@ Then Step 1 on each, and report the mean across seeds with the spread.
 
 ## Step 4: R3
 
-    python -m diamondworldjax.scripts.train_shared_skills --pa-pitchformer --seed 0 \
-      --tag v23_shared
+R3 must retain R2's PA recipe (2015--2023, outcome-only + fatigue, recency 2,
+contact-quality, per-stat shrinkage, and the seasonal walk). The shared hierarchy is
+the only changed model component. Use the wrapper, which trains, exports the PA
+component, and runs Steps 1 and 2:
 
-Then Steps 1 and 2 against it. Only start this after Step 1 has said whether R2 is
-a regression, because if attention is genuinely hurting the PA model there is no point
-sharing its embedding.
+    scripts/run_ladder_r3.sh v23_shared_s0 0 --seed 0
+
+Only start this after Step 1 has said whether R2 is a regression, because if attention
+is genuinely hurting the PA model there is no point sharing its embedding.
 
 ## Reporting
 

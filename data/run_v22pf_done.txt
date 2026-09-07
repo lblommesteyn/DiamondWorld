@@ -1,0 +1,9 @@
+START 2026-09-03T15:40:06Z
+  n=   150 PA raw=0.6: k=0.371 bb=0.309 hit=0.226 hr=0.226
+  n=  3000 PA raw=0.6: k=0.575 bb=0.553 hit=0.431 hr=0.431
+  (K should retain most raw signal at low PA; hit/HR should sit near league)
+[v22pf] using existing checkpoint checkpoints/dwjax_pa_v22pf/dwjax_step_0050000.pkl Thu 03 Sep 2026 11:40:06 AM EDT
+[v22pf] eval rc=0 Thu 03 Sep 2026 11:40:34 AM EDT
+v22pf (SVI, conditioned+recal, skill=mean, train<= 2023, test 2024, mle=False) | corr K 0.779 BB 0.693 Hit 0.474 HR 0.592 AVG 0.635 (np=382, rookies_injected=0, rookies_kept=0)
+PA counts differ between 'v16' and 'v22pf' on 1 players; these were not scored on the same test set, so a paired comparison is invalid.
+DONE 2026-09-03T15:40:34Z

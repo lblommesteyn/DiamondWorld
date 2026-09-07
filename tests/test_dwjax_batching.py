@@ -11,6 +11,7 @@ def _frame():
             "game_pk": [10, 10, 10, 10],
             "at_bat_number": [1, 1, 1, 2],
             "pitch_number": [1, 2, 3, 1],
+            "season": [2023, 2023, 2023, 2023],
             "inning": [1, 1, 1, 1],
             "half_bin": [0, 0, 0, 0],
             "balls": [0, 1, 1, 0],
@@ -60,6 +61,7 @@ def test_nullable_targets_keep_independent_masks_and_correct_ids():
     assert batch["park_ids"][0, 0].item() == 30
     assert batch["score_diff"][0, 0].item() == pytest.approx(0.2)
     assert np.allclose(batch["pitch_count_pa"][0, :4], [0.0, 0.1, 0.2, 0.0])
+    assert batch["season"][0, :4].tolist() == [2023, 2023, 2023, 2023]
 
 
 def test_padding_length_does_not_change_valid_masks():

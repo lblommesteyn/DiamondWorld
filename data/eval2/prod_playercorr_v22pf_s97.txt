@@ -1,0 +1,1 @@
+v22pf_s97 (SVI, conditioned+recal, skill=mean, train<= 2023, test 2024, mle=False) | corr K 0.836 BB 0.756 Hit 0.500 HR 0.613 AVG 0.676 (np=382, rookies_injected=0, rookies_kept=0)

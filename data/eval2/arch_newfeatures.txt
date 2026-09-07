@@ -1,0 +1,23 @@
+ARCHITECTURE x NEW-FEATURES SWEEP (recency 2.0, test 2024; player-corr AVG)
+baseline=train<=2022, +prev=train<=2023, +mle adds rookie fills
+### mlp ens3 ed0.1  baseline
+mlp_L2_d128_dr0.0_ed0.1_wd0.0001_ls0.0_ens3          NLL 1.5432 acc 0.4268 margL1 0.1322 | corr K 0.515 BB 0.593 Hit 0.280 HR 0.522 AVG 0.478 (np=332, 148s)
+### mlp ens3 ed0.1  +prev
+mlp_L2_d128_dr0.0_ed0.1_wd0.0001_ls0.0_ens3          NLL 1.4905 acc 0.4521 margL1 0.0251 | corr K 0.559 BB 0.647 Hit 0.323 HR 0.571 AVG 0.525 (np=383, 147s)
+### mlp ens3 ed0.1  +prev +mle
+mlp_L2_d128_dr0.0_ed0.1_wd0.0001_ls0.0_ens3          NLL 1.4859 acc 0.4555 margL1 0.0150 | corr K 0.534 BB 0.621 Hit 0.327 HR 0.568 AVG 0.513 (np=399, 140s)
+### transformer L3  baseline
+transformer_L3_d128_dr0.0_ed0.0_wd0.0001_ls0.0_ens1  NLL 1.5489 acc 0.4228 margL1 0.0998 | corr K 0.203 BB 0.568 Hit 0.266 HR 0.507 AVG 0.386 (np=332, 130s)
+### transformer L3  +prev
+transformer_L3_d128_dr0.0_ed0.0_wd0.0001_ls0.0_ens1  NLL 1.4990 acc 0.4451 margL1 0.0767 | corr K 0.227 BB 0.635 Hit 0.321 HR 0.573 AVG 0.439 (np=383, 149s)
+### gru L2          baseline
+gru_L2_d128_dr0.0_ed0.0_wd0.0001_ls0.0_ens1          NLL 1.5361 acc 0.4261 margL1 0.0856 | corr K 0.322 BB 0.569 Hit 0.281 HR 0.532 AVG 0.426 (np=332, 285s)
+### gru L2          +prev
+gru_L2_d128_dr0.0_ed0.0_wd0.0001_ls0.0_ens1          NLL 1.4897 acc 0.4531 margL1 0.0248 | corr K 0.462 BB 0.637 Hit 0.340 HR 0.572 AVG 0.503 (np=383, 255s)
+=== arch sweep DONE ===
+jepa baseline (train<=2022) | corr K 0.246 BB 0.043 Hit 0.108 HR 0.013 AVG 0.103 (np=332)
+jepa +prev   (train<=2023) | corr K 0.142 BB 0.033 Hit 0.069 HR 0.056 AVG 0.075 (np=383)
+smoke | corr K -0.094 BB -0.019 Hit 0.194 HR 0.356 AVG 0.109 (np=76)
+jepa-frozen | corr K 0.108 BB 0.007 Hit 0.110 HR 0.029 AVG 0.064 (np=383)
+jepa-finetune | corr K 0.737 BB 0.620 Hit 0.375 HR 0.426 AVG 0.539 (np=383)
+jepa-scratch | corr K 0.744 BB 0.595 Hit 0.365 HR 0.516 AVG 0.555 (np=383)

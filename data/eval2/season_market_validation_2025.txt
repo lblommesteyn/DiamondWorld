@@ -1,0 +1,6 @@
+SEASON x MARKET VALIDATION -- 2025 vs sportsbook (out-of-sample; rates frozen <= 2024)
+
+  1630 games priced+known, 498 series, 1605 within-series deviations
+  within-series regression of Kalshi P(home) move on model channels:
+    pitching channel t = -13.77   hitting channel t = +2.37
+  corr(model game-specific index, Kalshi move) within series = 0.329

@@ -1,0 +1,126 @@
+Importing JAX + NumPyro...
+  JAX devices: [CudaDevice(id=0)]
+Loading training seasons [2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023]...
+  6,009,774 pitches loaded.
+Building player table...
+  3,520 unique players.
+Filtering to PA-terminal rows...
+  1,541,926 plate appearances, 30 parks.
+Starting SVI: 50000 steps, lr=0.0003  [outcome-only v6]
+  player_skills KL scale = 0.00314744
+Initialising SVI...
+  Init done in 17.5s
+  step      0  ELBO =  -16251.51    elapsed = 54s  nan_skips = 0
+  step    500  ELBO =   -9409.26    elapsed = 256s  nan_skips = 0
+  step   1000  ELBO =   -8938.80    elapsed = 442s  nan_skips = 0
+  step   1500  ELBO =   -8728.05    elapsed = 632s  nan_skips = 0
+  step   2000  ELBO =   -8707.79    elapsed = 820s  nan_skips = 0
+  step   2500  ELBO =   -8335.92    elapsed = 1008s  nan_skips = 0
+  step   3000  ELBO =   -8247.67    elapsed = 1196s  nan_skips = 0
+  step   3500  ELBO =   -7485.57    elapsed = 1387s  nan_skips = 0
+  step   4000  ELBO =   -7363.12    elapsed = 1575s  nan_skips = 0
+  step   4500  ELBO =   -7351.52    elapsed = 1763s  nan_skips = 0
+  step   5000  ELBO =   -7374.33    elapsed = 1950s  nan_skips = 0
+  Checkpoint saved → /home/jaden/Documents/Baseball/checkpoints/dwjax_pa_v22pf_s42/dwjax_step_0005000.pkl
+  step   5500  ELBO =   -7130.31    elapsed = 2183s  nan_skips = 0
+  step   6000  ELBO =   -7279.91    elapsed = 2414s  nan_skips = 0
+  step   6500  ELBO =   -7173.44    elapsed = 2645s  nan_skips = 0
+  step   7000  ELBO =   -6826.77    elapsed = 2878s  nan_skips = 0
+  step   7500  ELBO =   -7013.54    elapsed = 3111s  nan_skips = 0
+  step   8000  ELBO =   -6798.34    elapsed = 3345s  nan_skips = 0
+  step   8500  ELBO =   -7069.23    elapsed = 3575s  nan_skips = 0
+  step   9000  ELBO =   -6992.76    elapsed = 3804s  nan_skips = 0
+  step   9500  ELBO =   -6851.08    elapsed = 4036s  nan_skips = 0
+  step  10000  ELBO =   -6856.75    elapsed = 4267s  nan_skips = 0
+  Checkpoint saved → /home/jaden/Documents/Baseball/checkpoints/dwjax_pa_v22pf_s42/dwjax_step_0010000.pkl
+  step  10500  ELBO =   -6793.53    elapsed = 4497s  nan_skips = 0
+  step  11000  ELBO =   -6877.70    elapsed = 4727s  nan_skips = 0
+  step  11500  ELBO =   -6974.40    elapsed = 4959s  nan_skips = 0
+  step  12000  ELBO =   -6776.86    elapsed = 5192s  nan_skips = 0
+  step  12500  ELBO =   -6865.81    elapsed = 5424s  nan_skips = 0
+  step  13000  ELBO =   -6731.73    elapsed = 5658s  nan_skips = 0
+  step  13500  ELBO =   -6808.58    elapsed = 5890s  nan_skips = 0
+  step  14000  ELBO =   -6683.18    elapsed = 6124s  nan_skips = 0
+  step  14500  ELBO =   -6701.95    elapsed = 6359s  nan_skips = 0
+  step  15000  ELBO =   -6787.51    elapsed = 6592s  nan_skips = 0
+  Checkpoint saved → /home/jaden/Documents/Baseball/checkpoints/dwjax_pa_v22pf_s42/dwjax_step_0015000.pkl
+  step  15500  ELBO =   -6807.05    elapsed = 6824s  nan_skips = 0
+  step  16000  ELBO =   -6783.27    elapsed = 7058s  nan_skips = 0
+  step  16500  ELBO =   -6615.82    elapsed = 7294s  nan_skips = 0
+  step  17000  ELBO =   -6671.30    elapsed = 7529s  nan_skips = 0
+  step  17500  ELBO =   -6637.83    elapsed = 7762s  nan_skips = 0
+  step  18000  ELBO =   -6725.87    elapsed = 7998s  nan_skips = 0
+  step  18500  ELBO =   -6836.21    elapsed = 8232s  nan_skips = 0
+  step  19000  ELBO =   -6646.43    elapsed = 8466s  nan_skips = 0
+  step  19500  ELBO =   -6609.46    elapsed = 8701s  nan_skips = 0
+  step  20000  ELBO =   -6616.34    elapsed = 8933s  nan_skips = 0
+  Checkpoint saved → /home/jaden/Documents/Baseball/checkpoints/dwjax_pa_v22pf_s42/dwjax_step_0020000.pkl
+  step  20500  ELBO =   -6756.42    elapsed = 9166s  nan_skips = 0
+  step  21000  ELBO =   -6386.12    elapsed = 9400s  nan_skips = 0
+  step  21500  ELBO =   -6754.76    elapsed = 9635s  nan_skips = 0
+  step  22000  ELBO =   -6534.13    elapsed = 9868s  nan_skips = 0
+  step  22500  ELBO =   -6427.12    elapsed = 10102s  nan_skips = 0
+  step  23000  ELBO =   -6492.00    elapsed = 10336s  nan_skips = 0
+  step  23500  ELBO =   -6784.85    elapsed = 10571s  nan_skips = 0
+  step  24000  ELBO =   -6537.20    elapsed = 10804s  nan_skips = 0
+  step  24500  ELBO =   -6744.45    elapsed = 11037s  nan_skips = 0
+  step  25000  ELBO =   -6465.20    elapsed = 11271s  nan_skips = 0
+  Checkpoint saved → /home/jaden/Documents/Baseball/checkpoints/dwjax_pa_v22pf_s42/dwjax_step_0025000.pkl
+  step  25500  ELBO =   -6613.96    elapsed = 11506s  nan_skips = 0
+  step  26000  ELBO =   -6362.22    elapsed = 11738s  nan_skips = 0
+  step  26500  ELBO =   -6453.97    elapsed = 11972s  nan_skips = 0
+  step  27000  ELBO =   -6430.43    elapsed = 12206s  nan_skips = 0
+  step  27500  ELBO =   -6820.81    elapsed = 12439s  nan_skips = 0
+  step  28000  ELBO =   -6464.36    elapsed = 12671s  nan_skips = 0
+  step  28500  ELBO =   -6620.56    elapsed = 12906s  nan_skips = 0
+  step  29000  ELBO =   -6601.94    elapsed = 13139s  nan_skips = 0
+  step  29500  ELBO =   -6611.21    elapsed = 13373s  nan_skips = 0
+  step  30000  ELBO =   -6702.09    elapsed = 13607s  nan_skips = 0
+  Checkpoint saved → /home/jaden/Documents/Baseball/checkpoints/dwjax_pa_v22pf_s42/dwjax_step_0030000.pkl
+  step  30500  ELBO =   -6587.57    elapsed = 13842s  nan_skips = 0
+  step  31000  ELBO =   -6348.15    elapsed = 14076s  nan_skips = 0
+  step  31500  ELBO =   -6348.60    elapsed = 14310s  nan_skips = 0
+  step  32000  ELBO =   -6639.31    elapsed = 14544s  nan_skips = 0
+  step  32500  ELBO =   -6512.45    elapsed = 14780s  nan_skips = 0
+  step  33000  ELBO =   -6459.90    elapsed = 15011s  nan_skips = 0
+  step  33500  ELBO =   -6642.50    elapsed = 15245s  nan_skips = 0
+  step  34000  ELBO =   -6740.30    elapsed = 15478s  nan_skips = 0
+  step  34500  ELBO =   -6464.74    elapsed = 15713s  nan_skips = 0
+  step  35000  ELBO =   -6307.07    elapsed = 15947s  nan_skips = 0
+  Checkpoint saved → /home/jaden/Documents/Baseball/checkpoints/dwjax_pa_v22pf_s42/dwjax_step_0035000.pkl
+  step  35500  ELBO =   -6337.68    elapsed = 16181s  nan_skips = 0
+  step  36000  ELBO =   -6374.28    elapsed = 16413s  nan_skips = 0
+  step  36500  ELBO =   -6455.40    elapsed = 16646s  nan_skips = 0
+  step  37000  ELBO =   -6524.58    elapsed = 16881s  nan_skips = 0
+  step  37500  ELBO =   -6585.91    elapsed = 17114s  nan_skips = 0
+  step  38000  ELBO =   -6526.98    elapsed = 17347s  nan_skips = 0
+  step  38500  ELBO =   -6747.01    elapsed = 17582s  nan_skips = 0
+  step  39000  ELBO =   -6661.56    elapsed = 17820s  nan_skips = 0
+  step  39500  ELBO =   -6379.47    elapsed = 18057s  nan_skips = 0
+  step  40000  ELBO =   -6354.00    elapsed = 18297s  nan_skips = 0
+  Checkpoint saved → /home/jaden/Documents/Baseball/checkpoints/dwjax_pa_v22pf_s42/dwjax_step_0040000.pkl
+  step  40500  ELBO =   -6470.79    elapsed = 18538s  nan_skips = 0
+  step  41000  ELBO =   -6424.38    elapsed = 18778s  nan_skips = 0
+  step  41500  ELBO =   -6564.99    elapsed = 19014s  nan_skips = 0
+  step  42000  ELBO =   -6722.04    elapsed = 19250s  nan_skips = 0
+  step  42500  ELBO =   -6396.68    elapsed = 19487s  nan_skips = 0
+  step  43000  ELBO =   -6705.15    elapsed = 19723s  nan_skips = 0
+  step  43500  ELBO =   -6368.49    elapsed = 19960s  nan_skips = 0
+  step  44000  ELBO =   -6587.15    elapsed = 20198s  nan_skips = 0
+  step  44500  ELBO =   -6651.38    elapsed = 20433s  nan_skips = 0
+  step  45000  ELBO =   -6681.10    elapsed = 20669s  nan_skips = 0
+  Checkpoint saved → /home/jaden/Documents/Baseball/checkpoints/dwjax_pa_v22pf_s42/dwjax_step_0045000.pkl
+  step  45500  ELBO =   -6531.73    elapsed = 20903s  nan_skips = 0
+  step  46000  ELBO =   -6538.98    elapsed = 21139s  nan_skips = 0
+  step  46500  ELBO =   -6453.53    elapsed = 21376s  nan_skips = 0
+  step  47000  ELBO =   -6448.49    elapsed = 21613s  nan_skips = 0
+  step  47500  ELBO =   -6369.20    elapsed = 21848s  nan_skips = 0
+  step  48000  ELBO =   -6426.85    elapsed = 22085s  nan_skips = 0
+  step  48500  ELBO =   -6622.70    elapsed = 22322s  nan_skips = 0
+  step  49000  ELBO =   -6166.95    elapsed = 22556s  nan_skips = 0
+  step  49500  ELBO =   -6163.86    elapsed = 22793s  nan_skips = 0
+  Checkpoint saved → /home/jaden/Documents/Baseball/checkpoints/dwjax_pa_v22pf_s42/dwjax_step_0050000.pkl
+
+Training done in 6.40h.
+Final ELBO = -6502.73
+Checkpoint dir: /home/jaden/Documents/Baseball/checkpoints/dwjax_pa_v22pf_s42

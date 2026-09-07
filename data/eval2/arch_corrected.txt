@@ -1,0 +1,21 @@
+CORRECTED ARCH x NEW-FEATURES SWEEP (K=0 fixed; recency 2.0; test 2024; player-corr AVG)
+baseline=train<=2022, +prev=train<=2023
+### mlp ens3      baseline
+mlp_L2_d128_dr0.0_ed0.1_wd0.0001_ls0.0_ens3          NLL 1.5440 acc 0.4259 margL1 0.1318 | corr K 0.681 BB 0.591 Hit 0.282 HR 0.525 AVG 0.520 (np=332, 145s)
+### mlp ens3      +prev
+mlp_L2_d128_dr0.0_ed0.1_wd0.0001_ls0.0_ens3          NLL 1.4905 acc 0.4521 margL1 0.0247 | corr K 0.768 BB 0.647 Hit 0.322 HR 0.572 AVG 0.577 (np=383, 156s)
+### transformer   baseline
+transformer_L3_d128_dr0.0_ed0.0_wd0.0001_ls0.0_ens1  NLL 1.5489 acc 0.4228 margL1 0.0998 | corr K 0.616 BB 0.568 Hit 0.266 HR 0.507 AVG 0.489 (np=332, 102s)
+### transformer   +prev
+transformer_L3_d128_dr0.0_ed0.0_wd0.0001_ls0.0_ens1  NLL 1.4990 acc 0.4451 margL1 0.0767 | corr K 0.766 BB 0.635 Hit 0.321 HR 0.573 AVG 0.574 (np=383, 84s)
+### gru           baseline
+gru_L2_d128_dr0.0_ed0.0_wd0.0001_ls0.0_ens1          NLL 1.5361 acc 0.4261 margL1 0.0855 | corr K 0.648 BB 0.569 Hit 0.281 HR 0.532 AVG 0.507 (np=332, 120s)
+### gru           +prev
+gru_L2_d128_dr0.0_ed0.0_wd0.0001_ls0.0_ens1          NLL 1.4897 acc 0.4531 margL1 0.0248 | corr K 0.765 BB 0.637 Hit 0.340 HR 0.572 AVG 0.578 (np=383, 137s)
+### jepa         baseline
+jepa baseline (train<=2022) | corr K 0.246 BB 0.043 Hit 0.108 HR 0.013 AVG 0.103 (np=332)
+  per-PA NLL 1.5003   accuracy 0.4632   (production ~1.52)
+### jepa         +prev
+jepa +prev   (train<=2023) | corr K 0.142 BB 0.033 Hit 0.069 HR 0.056 AVG 0.075 (np=383)
+  per-PA NLL 1.4929   accuracy 0.4629   (production ~1.52)
+=== DONE ===

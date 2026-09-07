@@ -1,0 +1,13 @@
+>>> --no-player-emb
+mlp_L3_d128_dr0.0_ed0.0_wd0.0001_ls0.0_ens1_noPE     NLL 1.5391 acc 0.4369 margL1 0.0679 | corr K 0.218 BB 0.628 Hit 0.313 HR 0.594 AVG 0.438 (np=434, 60s)
+>>> --no-player-emb --ensemble 3
+mlp_L3_d128_dr0.0_ed0.0_wd0.0001_ls0.0_ens3_noPE     NLL 1.5312 acc 0.4392 margL1 0.0680 | corr K 0.223 BB 0.642 Hit 0.336 HR 0.590 AVG 0.448 (np=434, 181s)
+>>> --embed-dropout 0.5
+mlp_L3_d128_dr0.0_ed0.5_wd0.0001_ls0.0_ens1          NLL 1.5378 acc 0.4365 margL1 0.0651 | corr K 0.524 BB 0.628 Hit 0.320 HR 0.604 AVG 0.519 (np=434, 63s)
+>>> --embed-dropout 0.3 --ensemble 3
+mlp_L3_d128_dr0.0_ed0.3_wd0.0001_ls0.0_ens3          NLL 1.5307 acc 0.4336 margL1 0.0993 | corr K 0.527 BB 0.641 Hit 0.337 HR 0.587 AVG 0.523 (np=434, 191s)
+>>> --layers 4 --dm 256 --embed-dropout 0.3
+mlp_L4_d256_dr0.0_ed0.3_wd0.0001_ls0.0_ens1          NLL 1.5391 acc 0.4291 margL1 0.1124 | corr K 0.432 BB 0.630 Hit 0.300 HR 0.599 AVG 0.490 (np=434, 59s)
+>>> --embed-dropout 0.3 --label-smooth 0.02
+mlp_L3_d128_dr0.0_ed0.3_wd0.0001_ls0.02_ens1         NLL 1.5318 acc 0.4368 margL1 0.0732 | corr K 0.488 BB 0.626 Hit 0.320 HR 0.598 AVG 0.508 (np=434, 94s)
+WM_SWEEP2_DONE 2026-07-20T05:57:23Z

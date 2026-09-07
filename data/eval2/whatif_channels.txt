@@ -1,0 +1,14 @@
+WHAT-IF CHANNELS: does the market price hitting as well as pitching?
+
+  555 series, 1690 within-series game-deviations (2024, market lines)
+  regressing market win-prob move on standardized channel deltas:
+    channel                 coef (WP)       SE       t
+    pitching (starter)        -0.0148   0.0008  -17.56
+    hitting (lineup)           0.0061   0.0008    7.28
+
+  marginal corr(market move, pitching channel) = -0.388
+  marginal corr(market move, hitting  channel) = 0.162
+
+  VERDICT: BOTH channels are priced by the market (|t|>2; pitching negative because the index is runs ALLOWED, so a worse home
+  starter lowers home win prob). The market reprices on hitting and pitching, so the
+  causal engine's scope is broad: starter-swap validation generalizes to hitter/lineup what-ifs.

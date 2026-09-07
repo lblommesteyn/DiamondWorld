@@ -1,0 +1,14 @@
+=== SWEEP (N=1200) ===
+label                      n   mean    std       KL    wass  p5+err  p8+err  var_err
+v6@0.20                 1200   8.02   4.02   0.0403   0.839  0.0288  0.0725    3.297
+label                      n   mean    std       KL    wass  p5+err  p8+err  var_err
+v6@0.30                 1200   8.50   4.21   0.0183   0.371  0.0138  0.0342    1.748
+label                      n   mean    std       KL    wass  p5+err  p8+err  var_err
+v6@0.40                 1200   8.62   4.30   0.0198   0.262  0.0038  0.0242    1.036
+label                      n   mean    std       KL    wass  p5+err  p8+err  var_err
+v9@0.35                 1200   8.60   4.35   0.0104   0.274  0.0004  0.0242    0.544
+label                      n   mean    std       KL    wass  p5+err  p8+err  var_err
+v9@0.45                 1200   8.65   4.55   0.0133   0.226  0.0221  0.0417    1.181
+label                      n   mean    std       KL    wass  p5+err  p8+err  var_err
+v9@0.55                 1200   8.92   4.41   0.0135   0.109  0.0037  0.0083    0.004
+DONE

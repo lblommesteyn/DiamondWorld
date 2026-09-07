@@ -1,0 +1,18 @@
+Loading checkpoint checkpoints/dwjax_pa_v11/dwjax_step_0050000.pkl
+  433 batters with >= 150 test PAs
+  batch 1/76  elapsed=8s
+  batch 21/76  elapsed=11s
+  batch 41/76  elapsed=14s
+  batch 61/76  elapsed=18s
+  batch 76/76  elapsed=24s
+
+=== Player-level stat reproduction (433 batters) ===
+  stat   real_mean   sim_mean      MAE    corr
+  AVG       0.2380     0.2083   0.0375   0.295
+  OBP       0.3094     0.2841   0.0393   0.256
+  SLG       0.3907     0.3215   0.0847   0.184
+  K%        0.2301     0.2524   0.0460   0.651
+  BB%       0.0824     0.0874   0.0220   0.399
+  HR%       0.0294     0.0208   0.0128   0.295
+
+  corr = cross-player correlation (does the model rank players correctly?)

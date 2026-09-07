@@ -1,0 +1,41 @@
+{
+  "baselines": {
+    "type": 1.864620440226796,
+    "swing": 0.6616744480439094,
+    "contact": 0.5163507056386483,
+    "foul": 0.6929135857370187,
+    "swing_marginal": 0.4772999882698059
+  },
+  "A": {
+    "loss": 24.11084607621314,
+    "nll_stuff": 21.73978501978055,
+    "nll_type": 2.3710610278895206
+  },
+  "B": {
+    "loss": 2.019135377776455,
+    "nll_contact": 0.5881530936335174,
+    "nll_foul": 0.7281432966111412,
+    "nll_swing": 0.702839002642833
+  },
+  "improvement_nats": {
+    "type": -0.5064405876627245,
+    "swing": -0.04116455459892365,
+    "contact": -0.07180238799486915,
+    "foul": -0.03522971087412252
+  },
+  "config": {
+    "train_seasons": "2023",
+    "test_season": 2024,
+    "steps": 20,
+    "bs": 4,
+    "lr": 0.0003,
+    "max_len": 40,
+    "d_model": 32,
+    "layers": 1,
+    "heads": 2,
+    "seed": 0,
+    "limit_train_rows": 20000,
+    "out": "checkpoints/pitchformer_smoke",
+    "tag": "smoke"
+  }
+}

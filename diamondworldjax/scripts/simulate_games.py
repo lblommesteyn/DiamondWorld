@@ -100,7 +100,7 @@ def simulate(
     shift=1.0, clock=1.0, recal=False, recal_scale=1.0, recal_vec=RECAL_V6,
     fixed_nine=False, no_bullpen=False, seed=0, platoon=False, recal_temp=1.0,
     skill_mode="prior", crn_keys=None, hook_model=None, max_pa_per_half=40,
-    pitchformer=False,
+    pitchformer=False, skill_prior="iso", simulation_season=2024,
 ):
     """Vectorized simulation across all games with real game structure.
 
@@ -123,6 +123,7 @@ def simulate(
     import jax
     import jax.numpy as jnp
     import numpyro.handlers as nh
+    from diamondworldjax.model.pa_inference import bucket_size, build_pa_inference
 
     if max_pa_per_half == 0:
         max_pa_per_half = None
@@ -140,7 +141,28 @@ def simulate(
         if skill_mode == "sample":
             sig = np.asarray(params.get("player_sigma", np.ones_like(mu)))
             mu = mu + sig * np.random.default_rng(seed).standard_normal(mu.shape)
-        params["player_skills"] = jnp.asarray(mu)
+        if skill_prior == "walk":
+            params["player_skill_eps"] = jnp.asarray(mu)
+            if "skill_walk_sigma_loc" in params:
+                params["skill_walk_sigma"] = params["skill_walk_sigma_loc"]
+        else:
+            params["player_skills"] = jnp.asarray(mu)
+
+    # The NumPyro model samples a global player-skill latent whenever it is not
+    # substituted.  In a PA-by-PA simulator that used to redraw the *global*
+    # quantity for every PA, which is both slow and incoherent.  Materialize one
+    # world-level draw here instead, allowing the cached pure-inference path below
+    # to reuse its player embeddings for the entire simulation.
+    if skill_mode == "prior" and "player_mu" in params:
+        skill_rng = np.random.default_rng(seed)
+        if skill_prior == "walk" and "player_skill_eps" not in params:
+            shape = np.asarray(params["player_mu"]).shape
+            params["player_skill_eps"] = jnp.asarray(skill_rng.standard_normal(shape))
+            if "skill_walk_sigma_loc" in params:
+                params["skill_walk_sigma"] = params["skill_walk_sigma_loc"]
+        elif skill_prior == "iso" and "player_skills" not in params:
+            shape = np.asarray(params["player_mu"]).shape
+            params["player_skills"] = jnp.asarray(skill_rng.standard_normal(shape))
 
     G = len(games)
     away_lineup = np.array([g["away_lineup"] for g in games], dtype=np.int64)  # (G,9)
@@ -153,6 +175,32 @@ def simulate(
     engine = pt["_engine"]
     starter_pas, reliever_pas = pt["_hook_dists"]
     rng_np = np.random.default_rng(seed)
+
+    # Standard PA models have no generated-history dependency.  Their logits can
+    # therefore be evaluated without entering NumPyro on every PA.  Build the
+    # immutable player/park tables once.  Custom model functions and unsupported
+    # prior families retain the legacy path below.
+    inference = None
+    _fn = model_fn.func if isinstance(model_fn, partial) else model_fn
+    _kw = dict(model_fn.keywords or {}) if isinstance(model_fn, partial) else {}
+    if _fn is pa_model and not _kw.get("pitchformer", False):
+        try:
+            inference = build_pa_inference(
+                params, pt,
+                outcome_only=_kw.get("outcome_only", False),
+                fatigue=_kw.get("fatigue", False),
+                platoon=_kw.get("platoon", False),
+                nested=_kw.get("nested", False),
+                bilinear_rank=_kw.get("bilinear_rank", 0),
+                skill_prior=_kw.get("skill_prior", skill_prior),
+                season_base=_kw.get("season_base", 2015),
+                n_seasons=_kw.get("n_seasons", 9),
+                simulation_season=simulation_season,
+            )
+        except (KeyError, ValueError):
+            # Checkpoints from experimental prior families can still be simulated
+            # through the original, fully general NumPyro route.
+            inference = None
 
     # Common-random-numbers state: one generator per game for the outcome stream
     # (gumbel + base-advancement uniform) and one for hooks. Games sharing a
@@ -223,6 +271,8 @@ def simulate(
             "pitch_count_game": np.zeros((G, MAX_PAS), np.float32),
             "pa_valid":         np.zeros((G, MAX_PAS), bool),
         }
+        if skill_prior == "walk":
+            pa_hist["season"] = np.full((G, MAX_PAS), simulation_season, np.int32)
         if platoon:
             pa_hist["bat_side"] = np.full((G, MAX_PAS), 0.5, np.float32)
             pa_hist["pit_hand"] = np.full((G, MAX_PAS), 0.5, np.float32)
@@ -357,6 +407,8 @@ def simulate(
                     "park_ids":         jnp.array(pa_hist["park_ids"][np.ix_(idx, cols)]),
                     "pitch_count_game": jnp.array(pa_hist["pitch_count_game"][np.ix_(idx, cols)]),
                 }
+                if skill_prior == "walk":
+                    tb["season"] = jnp.array(pa_hist["season"][np.ix_(idx, cols)])
                 if platoon:
                     tb["bat_side"] = jnp.array(pa_hist["bat_side"][np.ix_(idx, cols)])
                     tb["pit_hand"] = jnp.array(pa_hist["pit_hand"][np.ix_(idx, cols)])
@@ -384,22 +436,9 @@ def simulate(
                 pa_step[idx] += 1
 
             else:
-                # Original (G, 1) path — no history needed.
-                tb = {
-                    "pa_valid": jnp.ones((B, 1), bool),
-                    "inning": jnp.full((B, 1), _inn_val, jnp.float32),
-                    "half": jnp.full((B, 1), float(half), jnp.float32),
-                    "outs": jnp.array(_outs_val[:, None], jnp.float32),
-                    "base_state": jnp.array(_bs_val[:, None], jnp.float32),
-                    "score_diff": jnp.array(_sd_val[:, None], jnp.float32),
-                    "tto": jnp.array(_tto_val[:, None], jnp.float32),
-                    "shift_restricted": jnp.full((B, 1), shift, jnp.float32),
-                    "pitch_clock": jnp.full((B, 1), clock, jnp.float32),
-                    "pitcher_ids": jnp.array(pitcher[:, None]),
-                    "batter_ids": jnp.array(batter[:, None]),
-                    "park_ids": jnp.array(park[idx][:, None]),
-                    "pitch_count_game": jnp.array(_pc_val[:, None], jnp.float32),
-                }
+                # Ordinary PA path.  The fast adapter accepts a single PA per
+                # row and uses power-of-two buckets, preventing the shrinking
+                # active set from creating a new JIT shape at nearly every PA.
                 if platoon:
                     bat_known = (batter >= 0) & (batter < P)
                     pit_known = (pitcher >= 0) & (pitcher < P)
@@ -407,20 +446,77 @@ def simulate(
                     pit_side = np.full(B, 0.5, dtype=np.float32)
                     bat_side[bat_known] = np.asarray(pt["bat_hand"])[batter[bat_known]]
                     pit_side[pit_known] = np.asarray(pt["pit_hand"])[pitcher[pit_known]]
-                    tb["bat_side"] = jnp.array(bat_side[:, None])
-                    tb["pit_hand"] = jnp.array(pit_side[:, None])
-                rng_key, k = jax.random.split(rng_key)
-                with nh.seed(rng_seed=k):
-                    with nh.substitute(data=params):
-                        with nh.trace() as tr:
-                            model_fn(tb, pt, teacher_force=False)
-                if recal:
-                    logits = (np.array(tr["pa_outcome"]["fn"].logits)[:, 0, :] + recal_scale * recal_vec) / recal_temp
-                    gum = (np.stack([out_rng[g].gumbel(size=logits.shape[1]) for g in idx])
-                           if crn else rng_np.gumbel(size=logits.shape))
-                    oc = np.argmax(logits + gum, axis=-1).astype(np.int64)
                 else:
-                    oc = np.array(tr["pa_outcome"]["value"])[:, 0].astype(np.int64)
+                    bat_side = pit_side = np.zeros(B, dtype=np.float32)
+
+                if inference is not None:
+                    M = bucket_size(B)
+
+                    def _pad(values, dtype):
+                        out = np.zeros(M, dtype=dtype)
+                        out[:B] = values
+                        return out
+
+                    logits = np.asarray(inference.logits(
+                        inning=np.full(M, _inn_val, np.float32),
+                        half=np.full(M, float(half), np.float32),
+                        outs=_pad(_outs_val, np.float32),
+                        base_state=_pad(_bs_val, np.float32),
+                        score_diff=_pad(_sd_val, np.float32),
+                        tto=_pad(_tto_val, np.float32),
+                        shift_restricted=np.full(M, shift, np.float32),
+                        pitch_clock=np.full(M, clock, np.float32),
+                        pitch_count_game=_pad(_pc_val, np.float32),
+                        pitcher_ids=_pad(pitcher, np.int32),
+                        batter_ids=_pad(batter, np.int32),
+                        park_ids=_pad(park[idx], np.int32),
+                        bat_side=_pad(bat_side, np.float32),
+                        pit_hand=_pad(pit_side, np.float32),
+                    ))[:B]
+                    if recal:
+                        logits = (logits + recal_scale * recal_vec) / recal_temp
+                        gum = (np.stack([out_rng[g].gumbel(size=logits.shape[1]) for g in idx])
+                               if crn else rng_np.gumbel(size=logits.shape))
+                        oc = np.argmax(logits + gum, axis=-1).astype(np.int64)
+                    else:
+                        rng_key, k = jax.random.split(rng_key)
+                        oc = np.asarray(jax.random.categorical(k, jnp.asarray(logits), axis=-1)).astype(np.int64)
+                else:
+                    # Legacy fallback for custom models and unsupported checkpoint
+                    # variants.  Keeping it intact makes the optimization
+                    # transparent to external callers that supply their own model.
+                    tb = {
+                        "pa_valid": jnp.ones((B, 1), bool),
+                        "inning": jnp.full((B, 1), _inn_val, jnp.float32),
+                        "half": jnp.full((B, 1), float(half), jnp.float32),
+                        "outs": jnp.array(_outs_val[:, None], jnp.float32),
+                        "base_state": jnp.array(_bs_val[:, None], jnp.float32),
+                        "score_diff": jnp.array(_sd_val[:, None], jnp.float32),
+                        "tto": jnp.array(_tto_val[:, None], jnp.float32),
+                        "shift_restricted": jnp.full((B, 1), shift, jnp.float32),
+                        "pitch_clock": jnp.full((B, 1), clock, jnp.float32),
+                        "pitcher_ids": jnp.array(pitcher[:, None]),
+                        "batter_ids": jnp.array(batter[:, None]),
+                        "park_ids": jnp.array(park[idx][:, None]),
+                        "pitch_count_game": jnp.array(_pc_val[:, None], jnp.float32),
+                    }
+                    if skill_prior == "walk":
+                        tb["season"] = jnp.full((B, 1), simulation_season, jnp.int32)
+                    if platoon:
+                        tb["bat_side"] = jnp.array(bat_side[:, None])
+                        tb["pit_hand"] = jnp.array(pit_side[:, None])
+                    rng_key, k = jax.random.split(rng_key)
+                    with nh.seed(rng_seed=k):
+                        with nh.substitute(data=params):
+                            with nh.trace() as tr:
+                                model_fn(tb, pt, teacher_force=False)
+                    if recal:
+                        logits = (np.array(tr["pa_outcome"]["fn"].logits)[:, 0, :] + recal_scale * recal_vec) / recal_temp
+                        gum = (np.stack([out_rng[g].gumbel(size=logits.shape[1]) for g in idx])
+                               if crn else rng_np.gumbel(size=logits.shape))
+                        oc = np.argmax(logits + gum, axis=-1).astype(np.int64)
+                    else:
+                        oc = np.array(tr["pa_outcome"]["value"])[:, 0].astype(np.int64)
 
             occ_on += (bases[idx] > 0).sum()
             occ_n += B

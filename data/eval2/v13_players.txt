@@ -1,0 +1,10 @@
+=== Player-level stat reproduction (433 batters) ===
+  stat   real_mean   sim_mean      MAE    corr
+  AVG       0.2380     0.2493   0.0276   0.324
+  OBP       0.3094     0.3251   0.0311   0.347
+  SLG       0.3907     0.4152   0.0575   0.431
+  K%        0.2301     0.2333   0.0343   0.677
+  BB%       0.0824     0.0912   0.0193   0.616
+  HR%       0.0294     0.0304   0.0094   0.598
+
+  corr = cross-player correlation (does the model rank players correctly?)

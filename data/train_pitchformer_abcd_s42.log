@@ -1,0 +1,154 @@
+loading train seasons [2015, 2016, 2017, 2018, 2019, 2021, 2022, 2023], test 2024
+pitchers=2228 batters=2492 parks=31 (index 0 reserved for unknown)
+events table: 183,608 rows
+game context file absent, running without environment
+train seqs (48997, 160), pitches 5,745,512
+test  seqs (6014, 160), pitches 711,898
+baselines (test NLL): {'type': 1.952772844243765, 'swing': 0.6611885271734869, 'contact': 0.541457189141538, 'foul': 0.6920739219037795, 'swing_marginal': 0.4705803394317627}
+[A_abcd_s42] 2,248,712 parameters
+[A_abcd_s42] step 200/6000 loss 6.9099 (11s)
+[A_abcd_s42] step 400/6000 loss 6.6419 (13s)
+[A_abcd_s42] step 600/6000 loss 6.4698 (14s)
+[A_abcd_s42] step 800/6000 loss 6.3448 (15s)
+[A_abcd_s42] step 1000/6000 loss 5.8919 (17s)
+[A_abcd_s42] step 1200/6000 loss 6.0939 (18s)
+[A_abcd_s42] step 1400/6000 loss 5.5056 (20s)
+[A_abcd_s42] step 1600/6000 loss 5.6876 (21s)
+[A_abcd_s42] step 1800/6000 loss 5.2988 (22s)
+[A_abcd_s42] step 2000/6000 loss 5.3221 (24s)
+[A_abcd_s42] step 2200/6000 loss 5.3629 (25s)
+[A_abcd_s42] step 2400/6000 loss 5.1134 (27s)
+[A_abcd_s42] step 2600/6000 loss 5.2555 (28s)
+[A_abcd_s42] step 2800/6000 loss 5.1572 (30s)
+[A_abcd_s42] step 3000/6000 loss 4.8915 (31s)
+[A_abcd_s42] step 3200/6000 loss 4.9657 (32s)
+[A_abcd_s42] step 3400/6000 loss 4.8862 (34s)
+[A_abcd_s42] step 3600/6000 loss 4.9484 (35s)
+[A_abcd_s42] step 3800/6000 loss 4.8499 (37s)
+[A_abcd_s42] step 4000/6000 loss 4.8061 (39s)
+[A_abcd_s42] step 4200/6000 loss 4.9403 (40s)
+[A_abcd_s42] step 4400/6000 loss 4.8918 (42s)
+[A_abcd_s42] step 4600/6000 loss 4.5791 (44s)
+[A_abcd_s42] step 4800/6000 loss 4.5324 (45s)
+[A_abcd_s42] step 5000/6000 loss 4.6480 (47s)
+[A_abcd_s42] step 5200/6000 loss 4.6552 (48s)
+[A_abcd_s42] step 5400/6000 loss 4.7526 (50s)
+[A_abcd_s42] step 5600/6000 loss 4.3803 (52s)
+[A_abcd_s42] step 5800/6000 loss 4.6065 (53s)
+[A_abcd_s42] step 6000/6000 loss 4.7425 (55s)
+[A_abcd_s42] held-out: {'loss': 5.260128832118396, 'nll_stuff': 3.5772940309289942, 'nll_type': 1.6828347941770911}
+[B_abcd_s42] 2,308,915 parameters
+[B_abcd_s42] step 200/6000 loss 1.6631 (8s)
+[B_abcd_s42] step 400/6000 loss 1.6104 (10s)
+[B_abcd_s42] step 600/6000 loss 1.5913 (11s)
+[B_abcd_s42] step 800/6000 loss 1.5668 (13s)
+[B_abcd_s42] step 1000/6000 loss 1.5562 (14s)
+[B_abcd_s42] step 1200/6000 loss 1.5640 (16s)
+[B_abcd_s42] step 1400/6000 loss 1.5720 (17s)
+[B_abcd_s42] step 1600/6000 loss 1.5605 (19s)
+[B_abcd_s42] step 1800/6000 loss 1.5403 (20s)
+[B_abcd_s42] step 2000/6000 loss 1.5462 (22s)
+[B_abcd_s42] step 2200/6000 loss 1.5382 (23s)
+[B_abcd_s42] step 2400/6000 loss 1.5268 (25s)
+[B_abcd_s42] step 2600/6000 loss 1.4910 (26s)
+[B_abcd_s42] step 2800/6000 loss 1.5567 (27s)
+[B_abcd_s42] step 3000/6000 loss 1.5158 (29s)
+[B_abcd_s42] step 3200/6000 loss 1.5688 (30s)
+[B_abcd_s42] step 3400/6000 loss 1.5183 (32s)
+[B_abcd_s42] step 3600/6000 loss 1.5215 (34s)
+[B_abcd_s42] step 3800/6000 loss 1.4943 (35s)
+[B_abcd_s42] step 4000/6000 loss 1.5149 (37s)
+[B_abcd_s42] step 4200/6000 loss 1.5204 (39s)
+[B_abcd_s42] step 4400/6000 loss 1.5111 (40s)
+[B_abcd_s42] step 4600/6000 loss 1.5193 (42s)
+[B_abcd_s42] step 4800/6000 loss 1.4937 (44s)
+[B_abcd_s42] step 5000/6000 loss 1.4843 (45s)
+[B_abcd_s42] step 5200/6000 loss 1.4600 (47s)
+[B_abcd_s42] step 5400/6000 loss 1.4910 (49s)
+[B_abcd_s42] step 5600/6000 loss 1.4982 (51s)
+[B_abcd_s42] step 5800/6000 loss 1.5251 (52s)
+[B_abcd_s42] step 6000/6000 loss 1.5152 (54s)
+[B_abcd_s42] held-out: {'loss': 1.5272430685114733, 'nll_contact': 0.428746108862168, 'nll_foul': 0.6601506694752902, 'nll_swing': 0.4383462873053423}
+[C_abcd_s42] 2,310,456 parameters
+[C_abcd_s42] step 200/6000 loss 0.1113 (8s)
+[C_abcd_s42] step 400/6000 loss 0.1115 (10s)
+[C_abcd_s42] step 600/6000 loss 0.0816 (12s)
+[C_abcd_s42] step 800/6000 loss 0.1071 (13s)
+[C_abcd_s42] step 1000/6000 loss 0.0761 (15s)
+[C_abcd_s42] step 1200/6000 loss 0.0960 (16s)
+[C_abcd_s42] step 1400/6000 loss 0.0853 (18s)
+[C_abcd_s42] step 1600/6000 loss 0.0963 (19s)
+[C_abcd_s42] step 1800/6000 loss 0.0793 (21s)
+[C_abcd_s42] step 2000/6000 loss 0.0830 (22s)
+[C_abcd_s42] step 2200/6000 loss 0.0876 (23s)
+[C_abcd_s42] step 2400/6000 loss 0.0727 (25s)
+[C_abcd_s42] step 2600/6000 loss 0.0890 (26s)
+[C_abcd_s42] step 2800/6000 loss 0.0770 (28s)
+[C_abcd_s42] step 3000/6000 loss 0.0902 (30s)
+[C_abcd_s42] step 3200/6000 loss 0.0738 (31s)
+[C_abcd_s42] step 3400/6000 loss 0.0752 (33s)
+[C_abcd_s42] step 3600/6000 loss 0.0738 (34s)
+[C_abcd_s42] step 3800/6000 loss 0.0863 (36s)
+[C_abcd_s42] step 4000/6000 loss 0.0863 (38s)
+[C_abcd_s42] step 4200/6000 loss 0.0858 (39s)
+[C_abcd_s42] step 4400/6000 loss 0.0884 (41s)
+[C_abcd_s42] step 4600/6000 loss 0.0795 (43s)
+[C_abcd_s42] step 4800/6000 loss 0.1010 (45s)
+[C_abcd_s42] step 5000/6000 loss 0.0840 (47s)
+[C_abcd_s42] step 5200/6000 loss 0.1015 (49s)
+[C_abcd_s42] step 5400/6000 loss 0.0955 (51s)
+[C_abcd_s42] step 5600/6000 loss 0.0957 (53s)
+[C_abcd_s42] step 5800/6000 loss 0.0942 (54s)
+[C_abcd_s42] step 6000/6000 loss 0.0983 (56s)
+[C_abcd_s42] held-out: {'loss': 0.08551388170151787, 'nll_balk': 0.0014170474382687016, 'nll_caught_stealing': 0.0034565274640394844, 'nll_defensive_indiff': 0.0015561789092550212, 'nll_error': 0.009150296422269414, 'nll_passed_ball': 0.0023130280055033473, 'nll_pickoff': 0.040779691448504914, 'nll_steal': 0.020071044247995884, 'nll_wild_pitch': 0.006770067827098749}
+D baselines: outcome 0.9294  hr 0.1802  launch 3.0473
+[D_abcd_s42] 2,366,137 parameters
+[D_abcd_s42] step 200/6000 loss 3.5328 (10s)
+[D_abcd_s42] step 400/6000 loss 3.5278 (12s)
+[D_abcd_s42] step 600/6000 loss 3.4855 (14s)
+[D_abcd_s42] step 800/6000 loss 3.4551 (15s)
+[D_abcd_s42] step 1000/6000 loss 3.3010 (17s)
+[D_abcd_s42] step 1200/6000 loss 3.3275 (19s)
+[D_abcd_s42] step 1400/6000 loss 3.2915 (20s)
+[D_abcd_s42] step 1600/6000 loss 3.4619 (22s)
+[D_abcd_s42] step 1800/6000 loss 3.2508 (24s)
+[D_abcd_s42] step 2000/6000 loss 3.4046 (25s)
+[D_abcd_s42] step 2200/6000 loss 3.3504 (27s)
+[D_abcd_s42] step 2400/6000 loss 3.3114 (28s)
+[D_abcd_s42] step 2600/6000 loss 3.2772 (30s)
+[D_abcd_s42] step 2800/6000 loss 3.2593 (32s)
+[D_abcd_s42] step 3000/6000 loss 3.4169 (33s)
+[D_abcd_s42] step 3200/6000 loss 3.2830 (35s)
+[D_abcd_s42] step 3400/6000 loss 3.2683 (36s)
+[D_abcd_s42] step 3600/6000 loss 3.3043 (38s)
+[D_abcd_s42] step 3800/6000 loss 3.2560 (39s)
+[D_abcd_s42] step 4000/6000 loss 3.1494 (41s)
+[D_abcd_s42] step 4200/6000 loss 3.1479 (42s)
+[D_abcd_s42] step 4400/6000 loss 3.3134 (44s)
+[D_abcd_s42] step 4600/6000 loss 3.2661 (45s)
+[D_abcd_s42] step 4800/6000 loss 3.1265 (47s)
+[D_abcd_s42] step 5000/6000 loss 3.1607 (49s)
+[D_abcd_s42] step 5200/6000 loss 3.1851 (50s)
+[D_abcd_s42] step 5400/6000 loss 3.1643 (52s)
+[D_abcd_s42] step 5600/6000 loss 3.3105 (53s)
+[D_abcd_s42] step 5800/6000 loss 3.2222 (55s)
+[D_abcd_s42] step 6000/6000 loss 3.2543 (56s)
+[D_abcd_s42] held-out: {'loss': 3.3431840325421827, 'nll_hr': 0.055945905622712434, 'nll_launch': 2.786092195918853, 'nll_outcome': 0.5570918356671053}
+
+=== HELD-OUT IMPROVEMENT OVER BASELINE (nats/pitch, higher better) ===
+  type      +0.2699
+  swing     +0.2228
+  contact   +0.1127
+  foul      +0.0319
+  wild_pitch +0.0070
+  passed_ball +0.0004
+  balk      +0.0002
+  steal     +0.0085
+  caught_stealing +0.0011
+  pickoff   +0.0178
+  error     +0.0032
+  defensive_indiff +0.0019
+  outcome   +0.3723
+  hr        +0.1242
+  launch    +0.2613
+saved -> data/eval2/pitchformer_abcd_s42.json

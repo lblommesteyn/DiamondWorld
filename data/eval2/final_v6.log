@@ -1,0 +1,15 @@
+Hook dists: starter median 24 PA, reliever median 4 PA
+Extracting lineups for 4859 games...
+  4859 games usable
+
+=== runs-by-inning fraction (fatigue shape test) ===
+  inning   1    2    3    4    5    6    7    8    9   | late(6-9)
+  real  11.8 10.8 11.9 11.8 11.7 11.7 11.1 11.1  8.0  | 41.9%
+  sim   11.9 10.4 12.3 11.8 11.8 12.2 11.1 11.1  7.4  | 41.8%
+
+=== TRUE SIMULATION v2 (4859 games, 1018s) ===
+  runs/game   real 8.86   sim 8.48
+  occupancy   real 43.6%   sim 42.3%
+  home runs/g 4.34   away 4.14   home-win 54.6%  (ties 0)
+  extras      real 8.6%   sim 14.9%   walk-offs 8.8%   extra-inning runs 0.27/g
+  saved per-game runs -> data/eval2/final_v6.npy

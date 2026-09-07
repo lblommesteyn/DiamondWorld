@@ -1,0 +1,17 @@
+
+REAL (thru 9) (n=4859)
+  team runs: away mean=4.312 sd=3.177 | home mean=4.314 sd=3.053
+  home-away corr = +0.0077
+  margin(home-away): mean=+0.002 sd=4.389
+  P(tie after 9) = 0.0912   -> extra-inning rate
+
+SIM (v10_s035_scores.npz, after9) (n=4859)
+  team runs: away mean=4.361 sd=3.272 | home mean=4.230 sd=2.977
+  home-away corr = +0.0223
+  margin(home-away): mean=-0.132 sd=4.374
+  P(tie after 9) = 0.0916   -> extra-inning rate
+
+=== summary ===
+  tie-after-9:   real 0.0912   sim 0.0916   (sim/real 1.00x)
+  home-away corr: real +0.0077   sim +0.0223
+  margin sd:      real 4.389    sim 4.374

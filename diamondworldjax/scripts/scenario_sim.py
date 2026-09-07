@@ -30,7 +30,8 @@ RECAL = "data/eval2/v13_cal_params.npz"
 class Sim:
     def __init__(self, ckpt=V15, recal=RECAL, recency_hl=2.0, scale=0.18,
                  skill_mode="mean", recal_key="b_heur", train_end=2023, hook_model=False,
-                 contact_quality=False, pitchformer=False):
+                 contact_quality=False, per_stat_shrink=False, skill_prior="iso",
+                 pitchformer=False, apply_recal=True):
         # v15 (default) is trained through 2023, so its player embeddings are index-locked
         # to a 2015-2023 table; train_end must match the checkpoint (2022 for v13).
         # contact_quality must match the checkpoint too (True for v16, else the model
@@ -41,7 +42,8 @@ class Sim:
         train_seasons = list(range(2015, train_end + 1))
         train = load_seasons(train_seasons, data_root=processed_root())
         self.ptab = _build_player_table(train, recency_halflife=recency_hl,
-                                        contact_quality=contact_quality)
+                                        contact_quality=contact_quality,
+                                        per_stat_shrink=per_stat_shrink)
         self.park_map = _build_park_index(train)
         tp = train.filter(pl.col("pa_terminal"))
         engine = EmpiricalEngine().fit(tp)
@@ -58,12 +60,18 @@ class Sim:
                    "bat_hand": np.asarray(self.ptab.get("bat_hand", np.full(P, .5, np.float32))),
                    "pit_hand": np.asarray(self.ptab.get("pit_hand", np.full(P, .5, np.float32))),
                    "_engine": engine, "_hook_dists": hooks}
-        _mkw = dict(outcome_only=True, fatigue=True)
+        _mkw = dict(outcome_only=True, fatigue=True, skill_prior=skill_prior)
+        if skill_prior == "walk":
+            _mkw.update(season_base=train_seasons[0], n_seasons=len(train_seasons))
         if pitchformer:
             _mkw["pitchformer"] = True
         self.model_fn = partial(pa_model, **_mkw)
         self.pitchformer = pitchformer
-        self.recal_vec = np.load(recal)[recal_key].astype(np.float64)
+        self.skill_prior = skill_prior
+        self.apply_recal = apply_recal
+        self.recal_vec = (
+            np.load(recal)[recal_key].astype(np.float64) if apply_recal else None
+        )
         self.scale, self.skill_mode = scale, skill_mode
         self.stats = self.ptab["stats"]   # per-player [hit,bb,k,hr] rates
 
@@ -82,10 +90,11 @@ class Sim:
         # stream on the replica index pairs the same replica across all specs.
         crn_keys = np.tile(np.arange(R), len(specs)) if crn else None
         res = simulate(self.model_fn, self.params, self.pt, games,
-                       self.jax.random.PRNGKey(seed), recal=True, recal_scale=self.scale,
+                       self.jax.random.PRNGKey(seed), recal=self.apply_recal, recal_scale=self.scale,
                        recal_vec=self.recal_vec, seed=seed, skill_mode=sm, no_bullpen=no_bullpen,
                        crn_keys=crn_keys, hook_model=self.hook_model,
-                       pitchformer=self.pitchformer)
+                       pitchformer=self.pitchformer, skill_prior=self.skill_prior,
+                       simulation_season=2024)
         n = len(specs)
         return res["home"].reshape(n, R), res["away"].reshape(n, R)
 

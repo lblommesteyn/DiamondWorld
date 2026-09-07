@@ -1,0 +1,7 @@
+jepa-probe test NLL 1.5109 acc 0.4583 n 365608
+jepa-probe test NLL 1.5003 acc 0.4632 n 181955
+jepa-probe test NLL 1.4929 acc 0.4629 n 181955
+jepa-finetune test NLL 1.6481 acc 0.4254 n 181955
+jepa-frozen test NLL 1.4918 acc 0.4630 n 181955
+jepa-finetune test NLL 1.5351 acc 0.4322 n 181955
+jepa-scratch test NLL 1.5110 acc 0.4433 n 181955

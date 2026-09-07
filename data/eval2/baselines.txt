@@ -1,0 +1,16 @@
+Loading test [2023, 2024] for real reference...
+  real: mean=8.86 std=4.42 n=4859
+Fitting baselines on [2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022]...
+  fitting + simulating B0_markov...
+  fitting + simulating B1_negbinom...
+
+=== Run-distribution: identical metric, test [2023, 2024] ===
+  method         mean    std       KL    wass  p8+err  player stats?
+  real           8.86   4.42        -       -       -    (reference)
+  B0_markov      8.80   4.34   0.0163   0.120  0.0031 NO (no batter)
+  B1_negbinom    8.92   4.27   0.0170   0.179  0.0154 NO (no batter)
+  v9@0.35        8.46   4.31   0.0068   0.396  0.0428 YES (corr 0.58)
+
+  Run distribution: baselines and v9@0.35 are comparable (both fit the
+  aggregate). Player stat lines: baselines structurally cannot produce them
+  (no batter identity); v9@0.35 reproduces them. That is the differentiator.

@@ -1,0 +1,1 @@
+v14 (SVI, conditioned+recal, skill=mean) | corr K 0.597 BB 0.529 Hit 0.359 HR 0.639 AVG 0.531 (np=434)

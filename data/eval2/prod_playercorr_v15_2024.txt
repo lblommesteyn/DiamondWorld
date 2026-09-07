@@ -1,0 +1,1 @@
+v15_2024 (SVI, conditioned+recal, skill=mean, train<= 2023, test 2024, mle=False) | corr K 0.741 BB 0.645 Hit 0.411 HR 0.580 AVG 0.594 (np=383, rookies_injected=0, rookies_kept=0)

@@ -87,11 +87,11 @@ class CausalBlock(nn.Module):
     dropout: float = 0.1
 
     @nn.compact
-    def __call__(self, x, mask, *, train: bool):
+    def __call__(self, x, mask, *, train: bool, decode: bool = False):
         h = nn.LayerNorm()(x)
         h = nn.MultiHeadDotProductAttention(
             num_heads=self.n_heads, qkv_features=self.d_model,
-            dropout_rate=self.dropout, deterministic=not train,
+            dropout_rate=self.dropout, deterministic=not train, decode=decode,
         )(h, h, mask=mask)
         # The FIRST pitch of a sequence has no history, so its attention row is
         # fully masked. That does not raise: softmax over all-masked logits returns
@@ -138,20 +138,35 @@ class Trunk(nn.Module):
     dropout: float = 0.1
 
     @nn.compact
-    def __call__(self, batch, *, train: bool):
+    def __call__(self, batch, *, train: bool, decode: bool = False):
         ss = SuperState(self.n_pitchers, self.n_batters, self.n_parks,
                         d_model=self.d_model, name="super_state")(
             batch["pitcher_idx"], batch["batter_idx"], batch["park_idx"],
             batch["ctx"], batch["geom"])
 
         T = ss.shape[1]
-        pos = nn.Embed(1024, self.d_model, name="pos_emb")(jnp.arange(T))
-        x = ss + pos[None]
-
-        mask = causal_mask(batch["valid"].astype(bool))
+        if decode and T == 1:
+            # During rollout we receive one generated token at a time.  The
+            # attention modules retain K/V tensors in Flax's ``cache``
+            # collection; ``_cache_valid`` keeps padded or already-ended
+            # sequences out of that history.  The strict inequality preserves
+            # the training-time contract: a pitch can read *prior* pitches, not
+            # itself.
+            position = jnp.asarray(batch["_decode_position"], jnp.int32)
+            pos = nn.Embed(1024, self.d_model, name="pos_emb")(position[None])
+            x = ss + pos[None]
+            history_valid = batch["_cache_valid"].astype(bool)
+            strict_history = jnp.arange(history_valid.shape[1])[None, :] < position
+            mask = (history_valid & strict_history)[:, None, None, :]
+        else:
+            # The full-sequence path is unchanged.  It is also used once to
+            # allocate correctly shaped decode caches before a rollout begins.
+            pos = nn.Embed(1024, self.d_model, name="pos_emb")(jnp.arange(T))
+            x = ss + pos[None]
+            mask = causal_mask(batch["valid"].astype(bool))
         for i in range(self.n_layers):
             x = CausalBlock(self.d_model, self.n_heads, self.dropout,
-                            name=f"block_{i}")(x, mask, train=train)
+                            name=f"block_{i}")(x, mask, train=train, decode=decode)
         return nn.LayerNorm(name="out_norm")(x), ss
 
 
@@ -166,10 +181,10 @@ class TransformerA(nn.Module):
     dropout: float = 0.1
 
     @nn.compact
-    def __call__(self, batch, *, train: bool):
+    def __call__(self, batch, *, train: bool, decode: bool = False):
         h, _ = Trunk(self.n_pitchers, self.n_batters, self.n_parks, self.d_model,
                      self.n_layers, self.n_heads, self.dropout, name="trunk")(
-            batch, train=train)
+            batch, train=train, decode=decode)
 
         type_logits = nn.Dense(N_PITCH_TYPES, name="type_head")(h)
 
@@ -202,10 +217,10 @@ class TransformerB(nn.Module):
     dropout: float = 0.1
 
     @nn.compact
-    def __call__(self, batch, *, train: bool):
+    def __call__(self, batch, *, train: bool, decode: bool = False):
         h, _ = Trunk(self.n_pitchers, self.n_batters, self.n_parks, self.d_model,
                      self.n_layers, self.n_heads, self.dropout, name="trunk")(
-            batch, train=train)
+            batch, train=train, decode=decode)
 
         pitch = jnp.concatenate([
             jax.nn.one_hot(batch["pitch_type"], N_PITCH_TYPES),
@@ -219,6 +234,9 @@ class TransformerB(nn.Module):
             "swing_logit":   nn.Dense(1, name="swing")(z)[..., 0],
             "contact_logit": nn.Dense(1, name="contact")(z)[..., 0],
             "foul_logit":    nn.Dense(1, name="foul")(z)[..., 0],
+            # HBP is a terminal no-swing pitch.  It cannot belong in D, which
+            # is evaluated only after a ball is put in play.
+            "hbp_logit":     nn.Dense(1, name="hbp")(z)[..., 0],
         }
 
 
@@ -270,6 +288,7 @@ def loss_b(out, batch):
     l_swing = _bce(out["swing_logit"], swing, valid)
     l_contact = _bce(out["contact_logit"], contact, valid * swing)
     l_foul = _bce(out["foul_logit"], batch["foul"], valid * swing * contact)
-    total = l_swing + l_contact + l_foul
+    l_hbp = _bce(out["hbp_logit"], batch["hbp"], valid * (1 - swing))
+    total = l_swing + l_contact + l_foul + l_hbp
     return total, {"nll_swing": l_swing, "nll_contact": l_contact,
-                   "nll_foul": l_foul}
+                   "nll_foul": l_foul, "nll_hbp": l_hbp}

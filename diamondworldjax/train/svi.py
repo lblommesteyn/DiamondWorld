@@ -72,22 +72,34 @@ def make_shared_task_skills_guide(
     P: int,
     skill_dim: int = SKILL_DIM,
     kl_scale: float = 1.0,
+    skill_prior: str = "iso",
+    n_seasons: int = 1,
 ):
     """Mean-field guide for the shared-plus-task-residual hierarchy."""
     def _normal_site(name: str, scale: float):
+        shape = ((P, skill_dim) if skill_prior == "iso"
+                 else (P, n_seasons, skill_dim))
         mu = numpyro.param(
-            f"{name}_mu", jnp.zeros((P, skill_dim)),
+            f"{name}_mu", jnp.zeros(shape),
             constraint=constraints.interval(-5.0, 5.0),
         )
         sigma = numpyro.param(
-            f"{name}_sigma", jnp.full((P, skill_dim), scale),
+            f"{name}_sigma", jnp.full(shape, scale),
             constraint=constraints.interval(0.05, 2.0),
         )
-        numpyro.sample(name, dist.Normal(mu, sigma).to_event(2))
+        numpyro.sample(name, dist.Normal(mu, sigma).to_event(len(shape)))
 
     def guide(batch, player_table, teacher_force=True):
         del batch, player_table, teacher_force
+        if skill_prior not in {"iso", "walk"}:
+            raise ValueError("shared task skills support only 'iso' and 'walk'")
         with nhandlers.scale(scale=kl_scale):
+            if skill_prior == "walk":
+                walk = numpyro.param(
+                    "skill_walk_sigma_loc", jnp.asarray(0.3),
+                    constraint=constraints.interval(0.01, 1.0),
+                )
+                numpyro.sample("skill_walk_sigma", dist.Delta(walk))
             _normal_site("shared_player_skills", 0.3)
             _normal_site("pa_skill_residual", 0.15)
             _normal_site("pitch_skill_residual", 0.15)
@@ -321,23 +333,29 @@ def _apply_game_scheduled_sampling(
     import numpy as np
 
     params = svi.get_params(svi_state)
+    is_multitask = "pa" in batch and "pitch" in batch
+    pa_batch = batch["pa"] if is_multitask else batch
     rng_key, model_key, game_key = jax.random.split(rng_key, 3)
     with nhandlers.seed(rng_seed=model_key):
         with nhandlers.substitute(data=params):
             with nhandlers.trace() as tr:
                 model(batch, player_table, teacher_force=False)
-    if "pa_outcome" not in tr:
+    site_name = "pa/pa_outcome" if is_multitask else "pa_outcome"
+    if site_name not in tr:
         return batch
 
-    rolled = _rollout_pa_game_states(np.asarray(tr["pa_outcome"]["value"]), batch)
-    use_generated_game = jax.random.uniform(game_key, (batch["pa_valid"].shape[0],)) < ss_rate
-    return {
-        **batch,
+    rolled = _rollout_pa_game_states(np.asarray(tr[site_name]["value"]), pa_batch)
+    use_generated_game = jax.random.uniform(
+        game_key, (pa_batch["pa_valid"].shape[0],)
+    ) < ss_rate
+    updated_pa = {
+        **pa_batch,
         **{
-            name: jnp.where(use_generated_game[:, None], value, batch[name])
+            name: jnp.where(use_generated_game[:, None], value, pa_batch[name])
             for name, value in rolled.items()
         },
     }
+    return {**batch, "pa": updated_pa} if is_multitask else updated_pa
 
 
 def train(
@@ -389,7 +407,9 @@ def train(
     first_batch, first_player_table = next(batch_iter)
     P = first_player_table["stats"].shape[0]
     guide = (
-        make_shared_task_skills_guide(P, kl_scale=kl_scale)
+        make_shared_task_skills_guide(
+            P, kl_scale=kl_scale, skill_prior=skill_prior, n_seasons=n_seasons
+        )
         if shared_task_skills else
         make_player_skills_guide(P, kl_scale=kl_scale,
                                  skill_prior=skill_prior, n_seasons=n_seasons)
@@ -480,7 +500,9 @@ def train(
         _save_checkpoint(svi, svi_state, ckpt_dir, n_steps)
 
     if log_path is not None:
-        Path(log_path).write_text(json.dumps(losses, indent=2))
+        path = Path(log_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(losses, indent=2))
 
     return svi_state, guide, losses
 

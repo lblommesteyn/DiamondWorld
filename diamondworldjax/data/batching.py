@@ -81,6 +81,7 @@ def build_batch(df: pl.DataFrame, max_t: int = MAX_T) -> dict[str, Any]:
     tto_arr      = _alloc_f()
     shift_restr  = _alloc_f()
     pitch_clock  = _alloc_f()
+    season_arr   = _alloc_i()
 
     # Pitch package
     pitch_type   = _alloc_i(-1)
@@ -141,6 +142,7 @@ def build_batch(df: pl.DataFrame, max_t: int = MAX_T) -> dict[str, Any]:
     raw_tto      = _get("tto", 1)
     raw_sr       = _get("shift_restricted")
     raw_pc       = _get("pitch_clock")
+    raw_season   = _get("season")
     raw_pt       = _col("pitch_type_idx", -1)
     raw_rspd     = _get("release_speed")
     raw_px       = _get("plate_x")
@@ -206,6 +208,7 @@ def build_batch(df: pl.DataFrame, max_t: int = MAX_T) -> dict[str, Any]:
         _fill(tto_arr,     raw_tto / 3.0)
         _fill(shift_restr, raw_sr)
         _fill(pitch_clock, raw_pc)
+        _fill(season_arr,  raw_season)
         _fill(pitch_type,  raw_pt, fill=-1)
         _fill(release_spd, (raw_rspd - 90.0) / 10.0)
         _fill(plate_x,     raw_px)
@@ -315,6 +318,7 @@ def build_batch(df: pl.DataFrame, max_t: int = MAX_T) -> dict[str, Any]:
         "tto":           jnp.array(tto_arr),
         "shift_restricted": jnp.array(shift_restr),
         "pitch_clock":   jnp.array(pitch_clock),
+        "season":        jnp.array(season_arr),
         # Pitch package
         "pitch_type":    jnp.array(pitch_type),
         "release_speed": jnp.array(release_spd),

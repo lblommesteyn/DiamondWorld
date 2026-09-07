@@ -1,0 +1,13 @@
+PREVIOUS-SEASON ABLATION: projection of 2024 rates (cross-player corr)
+  batters (>=150 2024 PA): 410
+  config                                            K     BB    Hit     HR    AVG  n
+  model horizon (2015-2022, recency)            0.736  0.632  0.462  0.579  0.602  298
+    + previous season (2015-2023)               0.775  0.698  0.463  0.616  0.638  358
+  Marcel (2021-2023, 5/4/3)                     0.791  0.689  0.418  0.610  0.627  380
+  Marcel WITHOUT prev season (2020-2022)        0.730  0.621  0.439  0.562  0.588  323
+  previous season only (2023)                   0.774  0.689  0.396  0.563  0.605  336
+
+Read: compare 'model horizon' to '+ previous season' -- the gain is the value
+of feeding 2023 into the player rate features (which the model does not currently
+use). Marcel with vs without the previous season shows the same effect on a
+standard system. The previous season is the single most valuable prior.

@@ -1,0 +1,4 @@
+### baseline: table 2015-2022, test 2024
+v13_2024base (SVI, conditioned+recal, skill=mean, train<= 2022, test 2024, mle=False) | corr K 0.641 BB 0.570 Hit 0.280 HR 0.522 AVG 0.503 (np=332, rookies_injected=0, rookies_kept=0)
+### + previous season: table 2015-2023, test 2024
+### + prev season + MLE rookies: table 2015-2023, test 2024

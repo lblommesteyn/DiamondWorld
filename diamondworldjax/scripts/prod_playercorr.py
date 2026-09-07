@@ -39,6 +39,16 @@ def main():
                     help="Must match the checkpoint's --skill-prior (v17+).")
     ap.add_argument("--per-stat-shrink", action="store_true",
                     help="Must match the checkpoint's --per-stat-shrink.")
+    ap.add_argument("--pitchformer", action="store_true",
+                    help="Evaluate a causal PA-transformer checkpoint.")
+    ap.add_argument("--pitchformer-dim", type=int, default=128,
+                    help="PA transformer hidden width; must match the checkpoint.")
+    ap.add_argument("--pitchformer-layers", type=int, default=2,
+                    help="Number of PA transformer blocks; must match the checkpoint.")
+    ap.add_argument("--pitchformer-heads", type=int, default=4,
+                    help="Number of PA transformer attention heads; must match the checkpoint.")
+    ap.add_argument("--pitchformer-dropout", type=float, default=0.0,
+                    help="PA transformer dropout rate; must match the checkpoint.")
     ap.add_argument("--tag", default="v12")
     ap.add_argument("--train-end", type=int, default=2022,
                     help="Last training season for the player table (must match the checkpoint's "
@@ -61,6 +71,8 @@ def main():
         # prior at eval. Same class of mistake as the guide-coverage bug.
         site = "player_skill_eps" if args.skill_prior == "walk" else "player_skills"
         params = {**params, site: params["player_mu"]}
+        if args.skill_prior == "walk" and "skill_walk_sigma_loc" in params:
+            params["skill_walk_sigma"] = params["skill_walk_sigma_loc"]
     b_heur = np.load(args.recal)["b_heur"].astype(np.float64)
     trp = load_seasons(TRAIN, data_root=processed_root())
     ptab = _build_player_table(trp, recency_halflife=args.recency_halflife,
@@ -106,9 +118,20 @@ def main():
         # skill each PA reads) silently shifts. The test season is beyond the
         # trained range and is clamped to the last trained season by the model.
         _walk_kw = {"season_base": TRAIN[0], "n_seasons": len(TRAIN)}
-    model_fn = partial(pa_model, outcome_only=True, fatigue=True,
-                       bilinear_rank=args.bilinear_rank, nested=args.nested,
-                       skill_prior=args.skill_prior, **_walk_kw)
+    model_fn = partial(
+        pa_model,
+        outcome_only=True,
+        fatigue=True,
+        bilinear_rank=args.bilinear_rank,
+        nested=args.nested,
+        skill_prior=args.skill_prior,
+        pitchformer=args.pitchformer,
+        pitchformer_dim=args.pitchformer_dim,
+        pitchformer_layers=args.pitchformer_layers,
+        pitchformer_heads=args.pitchformer_heads,
+        pitchformer_dropout=args.pitchformer_dropout,
+        **_walk_kw,
+    )
     gids = te["game_pk"].unique().to_numpy()
 
     # per-batter accumulators

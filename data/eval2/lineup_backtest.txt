@@ -1,0 +1,13 @@
+LINEUP DECISION BACKTEST (winner's-curse corrected, independent selection/eval seeds)
+
+  50 games, 12 candidate orders, R_sel=100, R_eval=200
+
+  naive gain (biased, selection seeds):     +0.470 runs/game   <- winner's curse
+  honest gain (independent-seed eval):      -0.030 runs/game   95% CI [-0.122, +0.062]
+  fraction of games improved:               0.50
+  selected vs random order (independent):   +0.003 runs/game
+  actual  vs random order (independent):    +0.032 runs/game
+
+  Read: the honest gain is the winner's-curse-corrected estimate; it is far below the
+  naive selection-seed gain, and it is the simulator's own (not realized-outcome)
+  estimate of the lineup lever. Over a 162-game season it is roughly -4.8 runs.

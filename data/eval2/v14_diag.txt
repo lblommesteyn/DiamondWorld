@@ -1,0 +1,17 @@
+dumped 38832 PA logits -> data/eval2/v14_logits.npz
+
+outcome     real%   model%   ratio
+K          22.65%   29.41%   1.30x
+BB          8.39%    5.95%   0.71x
+HBP         1.13%    1.46%   1.29x
+1B         14.17%   13.09%   0.92x
+2B          4.36%    4.86%   1.11x
+3B          0.38%    0.39%   1.01x
+HR          3.09%    2.24%   0.72x
+out        45.82%   42.61%   0.93x
+E           0.00%    0.00%    nanx
+
+# recal vector (log(real/model)), order K,BB,HBP,1B,2B,3B,HR,out,E
+RECAL = np.array([
+    -0.2610, +0.3436, -0.2557, +0.0792, -0.1082, -0.0103, +0.3223, +0.0728, +0.0000,
+], dtype=np.float64)

@@ -1,0 +1,14 @@
+Building player table + sequences...
+  train games 17904  test games 4859  players 3260
+  step 0  train-nll 2.8717  26s
+  step 500  train-nll 1.4797  29s
+  step 1000  train-nll 1.4575  32s
+  step 1500  train-nll 1.4410  35s
+  step 2000  train-nll 1.4424  38s
+  step 2500  train-nll 1.4327  41s
+  step 3000  train-nll 1.4556  44s
+  step 3500  train-nll 1.4065  47s
+
+=== TRANSFORMER TEST (2023-24, 365608 PAs) ===
+  per-PA NLL 1.5417   accuracy 0.4428   marg-L1 0.0569
+  (production SVI model per-PA NLL ~1.52 for reference)

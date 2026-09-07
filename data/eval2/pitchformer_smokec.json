@@ -1,0 +1,65 @@
+{
+  "baselines": {
+    "type": 1.864620440226796,
+    "swing": 0.6616744480439094,
+    "contact": 0.5163507056386483,
+    "foul": 0.6929135857370187,
+    "swing_marginal": 0.4772999882698059
+  },
+  "config": {
+    "train_seasons": "2023",
+    "test_season": 2024,
+    "steps": 20,
+    "bs": 4,
+    "lr": 0.0003,
+    "max_len": 40,
+    "d_model": 32,
+    "layers": 1,
+    "heads": 2,
+    "seed": 0,
+    "limit_train_rows": 20000,
+    "out": "checkpoints/pitchformer_smoke",
+    "tag": "smokec",
+    "stack": "c",
+    "events": "data/processed/events.parquet"
+  },
+  "improvement_nats": {
+    "wild_pitch": -4.9611921914279045e-05,
+    "passed_ball": -0.0018790363428444828,
+    "balk": -0.0010497935940302044,
+    "steal": -0.0009429620557626639,
+    "caught_stealing": -0.0011784067722678962,
+    "pickoff": -0.007453725195730662,
+    "error": 3.269171128123666e-05,
+    "defensive_indiff": -0.0004245283318020706
+  },
+  "baselines_c": {
+    "wild_pitch": 0.01474640872647546,
+    "wild_pitch_rate": 0.0022499999031424522,
+    "passed_ball": 0.001516759221873642,
+    "passed_ball_rate": 0.0003000000142492354,
+    "balk": 0.0010403450064334467,
+    "balk_rate": 4.999999873689376e-05,
+    "steal": 0.03902397804030526,
+    "steal_rate": 0.004600000102072954,
+    "caught_stealing": 0.007679941329660514,
+    "caught_stealing_rate": 0.0005499999970197678,
+    "pickoff": 0.06550162391854686,
+    "pickoff_rate": 0.009650000371038914,
+    "error": 0.01664931438760644,
+    "error_rate": 0.0017999999690800905,
+    "defensive_indiff": 0.004992610121062588,
+    "defensive_indiff_rate": 0.0001500000071246177
+  },
+  "C": {
+    "loss": 0.16409635322142235,
+    "nll_balk": 0.002090138600463651,
+    "nll_caught_stealing": 0.00885834810192841,
+    "nll_defensive_indiff": 0.005417138452864658,
+    "nll_error": 0.016616622676325202,
+    "nll_passed_ball": 0.0033957955647181248,
+    "nll_pickoff": 0.07295534911427752,
+    "nll_steal": 0.039966940096067924,
+    "nll_wild_pitch": 0.01479602064838974
+  }
+}

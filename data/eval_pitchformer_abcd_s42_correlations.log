@@ -1,0 +1,81 @@
+game context file absent; evaluating with environment features zeroed
+rows: 512 ended: 0 scheduled PAs: 15565 generated PAs: 14477 remaining PAs: 1088
+scheduled: 15565 generated: 14477 ratio: 0.9300995823964022
+rep 1/1: 512/6014
+rows: 512 ended: 0 scheduled PAs: 15652 generated PAs: 14593 remaining PAs: 1059
+scheduled: 15652 generated: 14593 ratio: 0.9323409148990545
+rows: 512 ended: 0 scheduled PAs: 15674 generated PAs: 14519 remaining PAs: 1155
+scheduled: 15674 generated: 14519 ratio: 0.9263110884266939
+rows: 512 ended: 0 scheduled PAs: 15656 generated PAs: 14527 remaining PAs: 1129
+scheduled: 15656 generated: 14527 ratio: 0.9278870720490546
+rows: 512 ended: 0 scheduled PAs: 15331 generated PAs: 14330 remaining PAs: 1001
+scheduled: 15331 generated: 14330 ratio: 0.934707455482356
+rows: 512 ended: 0 scheduled PAs: 15550 generated PAs: 14321 remaining PAs: 1229
+scheduled: 15550 generated: 14321 ratio: 0.9209646302250803
+rows: 512 ended: 0 scheduled PAs: 15506 generated PAs: 14371 remaining PAs: 1135
+scheduled: 15506 generated: 14371 ratio: 0.9268025280536567
+rows: 512 ended: 0 scheduled PAs: 15997 generated PAs: 14885 remaining PAs: 1112
+scheduled: 15997 generated: 14885 ratio: 0.9304869663061824
+rows: 512 ended: 0 scheduled PAs: 15726 generated PAs: 14691 remaining PAs: 1035
+scheduled: 15726 generated: 14691 ratio: 0.9341854254101488
+rows: 512 ended: 0 scheduled PAs: 15616 generated PAs: 14375 remaining PAs: 1241
+scheduled: 15616 generated: 14375 ratio: 0.9205302254098361
+rows: 512 ended: 0 scheduled PAs: 15888 generated PAs: 14630 remaining PAs: 1258
+scheduled: 15888 generated: 14630 ratio: 0.9208207452165156
+rows: 382 ended: 0 scheduled PAs: 11578 generated PAs: 10649 remaining PAs: 929
+scheduled: 11578 generated: 10649 ratio: 0.9197616168595613
+{
+  "tag": "abcd_s42",
+  "season": 2024,
+  "reps": 1,
+  "c_events": true,
+  "min_pa": 150,
+  "real_coverage": {
+    "terminal_pas": 170593,
+    "batters_with_pa": 542,
+    "batters_at_min_pa": 382
+  },
+  "limit_seqs": null,
+  "comparable_full_slate": true,
+  "per_rep": [
+    {
+      "n_batters": 372,
+      "K_corr": 0.6445795488683352,
+      "BB_corr": 0.4796533937159191,
+      "Hit_corr": 0.30196192496081237,
+      "HR_corr": 0.23974627131137421,
+      "AVG_corr": 0.2536814122270092,
+      "sim_coverage": {
+        "terminal_pas": 159299,
+        "batters_with_pa": 541,
+        "batters_at_min_pa": 372
+      },
+      "events": [
+        1208,
+        249,
+        85,
+        1832,
+        347,
+        10008,
+        1106,
+        37
+      ]
+    }
+  ],
+  "mean": {
+    "K_corr": 0.6445795488683352,
+    "BB_corr": 0.4796533937159191,
+    "Hit_corr": 0.30196192496081237,
+    "HR_corr": 0.23974627131137421,
+    "AVG_corr": 0.2536814122270092
+  },
+  "sd": {
+    "K_corr": 0.0,
+    "BB_corr": 0.0,
+    "Hit_corr": 0.0,
+    "HR_corr": 0.0,
+    "AVG_corr": 0.0
+  },
+  "note": "Generated pitch/state history; pitcher/batter/park schedule remains exogenous. C events are sampled and counted, while the empirical engine retains base advancement."
+}
+saved -> data/eval2/pitchformer_abcd_s42_correlations.json
