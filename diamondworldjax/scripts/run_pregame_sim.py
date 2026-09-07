@@ -48,12 +48,28 @@ def main():
     ap.add_argument("--r", type=int, default=100)
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--chunk", type=int, default=250)
+    # Which model to simulate with. Without these the script silently loaded v15
+    # regardless of what the --tag claimed, which is how a sweep labelled v16 came
+    # to have been run on v15. Now the checkpoint is explicit.
+    ap.add_argument("--ckpt", default=None,
+                    help="checkpoint .pkl; default is Sim's V15 (say so in --tag)")
+    ap.add_argument("--contact-quality", action="store_true",
+                    help="must match how the checkpoint was trained (v16+, v22+)")
+    ap.add_argument("--pitchformer", action="store_true",
+                    help="must match: checkpoint trained with --pitchformer")
+    ap.add_argument("--train-end", type=int, default=2023)
     ap.add_argument("--pregame-staff", action="store_true",
                     help="select relievers from prior games only, removing the "
                          "realized-bullpen leak described above")
     args = ap.parse_args()
 
-    s = Sim(hook_model=True)                       # pre-game-legit bullpen via the fitted hazard
+    sim_kw = dict(hook_model=True, train_end=args.train_end,
+                  contact_quality=args.contact_quality, pitchformer=args.pitchformer)
+    if args.ckpt:
+        sim_kw["ckpt"] = args.ckpt
+    print(f"model: {sim_kw.get('ckpt', 'V15 default')}  contact_quality={args.contact_quality}"
+          f"  pitchformer={args.pitchformer}", flush=True)
+    s = Sim(**sim_kw)
     outcomes = real_runs(2024)
     games = [g for g in s.real_games(2024, limit=10000, pregame_staff=args.pregame_staff)
              if g["park"] != 0 and int(g["game_pk"]) in outcomes]
