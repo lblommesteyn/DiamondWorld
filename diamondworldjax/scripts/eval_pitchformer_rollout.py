@@ -18,6 +18,8 @@ from pathlib import Path
 import numpy as np
 import polars as pl
 
+from diamondworldjax.model.pitchformer_checkpoint import (restore_metadata, head_kwargs, add_skill_season,
+    trainable_optimizer, export_shared_head, save_metadata)
 from diamondworldjax.data.pitch_seq import build_id_maps, load_seasons, make_sequences
 from diamondworldjax.model.pitchformer import TransformerA, TransformerB
 from diamondworldjax.model.transformer_c import TransformerC
@@ -126,13 +128,18 @@ def main() -> None:
     ap.add_argument("--no-env", action="store_true", help="Must match training.")
     ap.add_argument("--no-geom", action="store_true", help="Must match training.")
     ap.add_argument("--out", default=None)
+    ap.add_argument('--skill-mode', choices=['auto', 'mean', 'sample'], default='auto',
+                    help='auto samples native Bayesian skills once per rep; keeps exported worlds and ordinary checkpoints fixed')
     args = ap.parse_args()
+    if args.reps < 1:
+        ap.error('--reps must be positive')
+    metadata = restore_metadata(args, args.tag)
     if args.reps < 1 or args.batch < 1 or args.min_pa < 1:
         raise SystemExit("--reps, --batch, and --min-pa must be positive")
 
-    train_years = [2015, 2016, 2017, 2018, 2019, 2021, 2022, 2023]
+    train_years = metadata["train_years"] if metadata else [2015, 2016, 2017, 2018, 2019, 2021, 2022, 2023]
     train = load_seasons(train_years)
-    maps = build_id_maps(train)
+    maps = metadata["maps"] if metadata else build_id_maps(train)
     test = load_seasons([args.season])[0]
     context_path = Path(args.game_context)
     if args.no_env:
@@ -144,15 +151,13 @@ def main() -> None:
         # not turn a checkpoint evaluation into a file-not-found failure.
         print("game context file absent; evaluating with environment features zeroed", flush=True)
         gctx = None
-    seqs = make_sequences(test, maps, args.max_len, game_ctx=gctx)
+    seqs = add_skill_season(make_sequences(test, maps, args.max_len, game_ctx=gctx), metadata)
     if args.no_geom:
         seqs["geom"][:] = 0.0
     if args.limit_seqs:
         seqs = {name: value[:args.limit_seqs] for name, value in seqs.items()}
 
-    kw = dict(n_pitchers=maps["n_pitcher"], n_batters=maps["n_batter"],
-              n_parks=maps["n_park"], d_model=args.d_model,
-              n_layers=args.layers, n_heads=args.heads)
+    kw = head_kwargs(args, maps, metadata)
     root = Path(args.params_dir)
     def head(letter: str, cls):
         path = root / f"{letter}_{args.tag}_params.pkl"
@@ -164,13 +169,16 @@ def main() -> None:
     if a is None or b is None:
         raise SystemExit("A and B checkpoints are required for a pitch rollout")
     heads = PitchformerHeads(a, b, c, d, ap_, bp, cp, dp)
+    from diamondworldjax.eval.pitchformer_worlds import PitchformerWorlds
+    worlds = PitchformerWorlds(heads, args.params_dir, args.tag, metadata,
+                              args.skill_mode, args.seed)
     engine = EmpiricalEngine().fit(pl.concat(train).filter(pl.col("pa_terminal")))
     c_engine = None
     if args.c_events:
         event_path = Path(args.events)
         if c is None or not event_path.exists():
             raise SystemExit("--c-events requires a C checkpoint and extracted events parquet")
-        c_engine = CTransitionEngine().fit(pl.concat(train), pl.read_parquet(event_path))
+        c_engine = CTransitionEngine(event_mode=getattr(c, "c_event_mode", "legacy")).fit(pl.concat(train), pl.read_parquet(event_path))
 
     # Full-slate real rates are comparable only when every sequence is rolled.
     terminal = test.filter(pl.col("pa_terminal") & pl.col("pa_outcome").is_not_null())
@@ -184,6 +192,7 @@ def main() -> None:
     rep_results = []
     nseq = len(seqs["valid"])
     for rep in range(args.reps):
+        heads = worlds.for_rep(rep)
         sampled: list[tuple[int, int]] = []
         event_counts = np.zeros(8, dtype=np.int64)
         for start in range(0, nseq, args.batch):
@@ -213,6 +222,7 @@ def main() -> None:
         "min_pa": args.min_pa, "real_coverage": _coverage(real_counts, args.min_pa),
         "limit_seqs": args.limit_seqs, "comparable_full_slate": args.limit_seqs is None,
         "per_rep": rep_results,
+        "skill_policy": worlds.report(args.reps),
         "mean": {key: _finite_mean([r[key] for r in rep_results]) for key in keys},
         "sd": {key: _finite_sd([r[key] for r in rep_results]) if args.reps > 1 else 0.0 for key in keys},
         "note": ("Generated pitch/state history; pitcher/batter/park schedule remains exogenous. "

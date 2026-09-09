@@ -181,6 +181,7 @@ def simulate(
     # immutable player/park tables once.  Custom model functions and unsupported
     # prior families retain the legacy path below.
     inference = None
+    seq_inference = None
     _fn = model_fn.func if isinstance(model_fn, partial) else model_fn
     _kw = dict(model_fn.keywords or {}) if isinstance(model_fn, partial) else {}
     if _fn is pa_model and not _kw.get("pitchformer", False):
@@ -198,9 +199,29 @@ def simulate(
                 simulation_season=simulation_season,
             )
         except (KeyError, ValueError):
-            # Checkpoints from experimental prior families can still be simulated
-            # through the original, fully general NumPyro route.
             inference = None
+    elif _fn is pa_model and _kw.get("pitchformer", False):
+        from diamondworldjax.model.pa_inference import build_pa_sequence_inference
+        try:
+            seq_inference = build_pa_sequence_inference(
+                params, pt,
+                pa_arch=_kw.get("pa_arch", "transformer"),
+                position_encoding=_kw.get("pitchformer_position", "auto"),
+                d_model=_kw.get("pitchformer_dim", 128),
+                n_layers=_kw.get("pitchformer_layers", 2),
+                n_heads=_kw.get("pitchformer_heads", 4),
+                outcome_only=_kw.get("outcome_only", False),
+                fatigue=_kw.get("fatigue", False),
+                platoon=_kw.get("platoon", False),
+                nested=_kw.get("nested", False),
+                bilinear_rank=_kw.get("bilinear_rank", 0),
+                skill_prior=_kw.get("skill_prior", skill_prior),
+                season_base=_kw.get("season_base", 2015),
+                n_seasons=_kw.get("n_seasons", 9),
+                simulation_season=simulation_season,
+            )
+        except (KeyError, ValueError):
+            seq_inference = None
 
     # Common-random-numbers state: one generator per game for the outcome stream
     # (gumbel + base-advancement uniform) and one for hooks. Games sharing a
@@ -254,8 +275,11 @@ def simulate(
     # game. We allocate a fixed-size buffer per game and fill it as PAs are
     # played. Each model call sends (B, t_max) where t_max is the furthest
     # any active game has progressed, and pa_valid masks unused positions.
-    MAX_PAS = 120   # generous upper bound (~70 real PAs per game)
-    if pitchformer:
+    MAX_PAS = 512   # generous upper bound (~70 real PAs per game)
+    seq_carry = None
+    if pitchformer and seq_inference is not None:
+        seq_carry = seq_inference.init_carry(G)
+    if pitchformer and seq_inference is None:
         pa_hist = {
             "inning":           np.zeros((G, MAX_PAS), np.float32),
             "half":             np.zeros((G, MAX_PAS), np.float32),
@@ -361,10 +385,83 @@ def simulate(
             _tto_val = tto / 3.0
             _pc_val = np.clip(ps["pa"][idx] * PITCHES_PER_PA / 120.0, 0, 1.5).astype(np.float32)
 
-            if pitchformer:
-                # Write current PA features into the history buffer.
+            if pitchformer and seq_inference is not None:
+                # Fast path: pure-JAX sequence model step, no NumPyro.
+                nonlocal seq_carry
+                if platoon:
+                    bat_known = (batter >= 0) & (batter < P)
+                    pit_known = (pitcher >= 0) & (pitcher < P)
+                    bat_side = np.full(B, 0.5, dtype=np.float32)
+                    pit_side = np.full(B, 0.5, dtype=np.float32)
+                    bat_side[bat_known] = np.asarray(pt["bat_hand"])[batter[bat_known]]
+                    pit_side[pit_known] = np.asarray(pt["pit_hand"])[pitcher[pit_known]]
+                else:
+                    bat_side = pit_side = np.zeros(B, dtype=np.float32)
+
+                M = bucket_size(B)
+                def _pad(values, dtype):
+                    out = np.zeros(M, dtype=dtype)
+                    out[:B] = values
+                    return out
+
+                # Grow transformer history only for games that need it. Most games
+                # retain the small buffer; no observations are dropped at its boundary.
+                if seq_inference.pa_arch == "transformer":
+                    history, valid_history, positions = seq_carry
+                    capacity = history.shape[1]
+                    if np.any(np.asarray(positions)[idx] >= capacity):
+                        new_capacity = min(capacity * 2, 512)
+                        if new_capacity <= capacity:
+                            raise ValueError("PA transformer history capacity exceeded")
+                        seq_carry = (jnp.pad(history, ((0, 0), (0, new_capacity-capacity), (0, 0))),
+                                     jnp.pad(valid_history, ((0, 0), (0, new_capacity-capacity))), positions)
+                # Slice active games' carry, padded to bucket size.
+                idx_pad = np.zeros(M, dtype=np.int64)
+                idx_pad[:B] = idx
+                active_carry = jax.tree.map(lambda x: x[idx_pad], seq_carry)
+
+                active_carry, logits_j = seq_inference.step(
+                    active_carry,
+                    inning=np.full(M, _inn_val, np.float32),
+                    half=np.full(M, float(half), np.float32),
+                    outs=_pad(_outs_val, np.float32),
+                    base_state=_pad(_bs_val, np.float32),
+                    score_diff=_pad(_sd_val, np.float32),
+                    tto=_pad(_tto_val, np.float32),
+                    shift_restricted=np.full(M, shift, np.float32),
+                    pitch_clock=np.full(M, clock, np.float32),
+                    pitch_count_game=_pad(_pc_val, np.float32),
+                    pitcher_ids=_pad(pitcher, np.int32),
+                    batter_ids=_pad(batter, np.int32),
+                    park_ids=_pad(park[idx], np.int32),
+                    bat_side=_pad(bat_side, np.float32),
+                    pit_hand=_pad(pit_side, np.float32),
+                )
+
+                # Write back carry for active games only.
+                seq_carry = jax.tree.map(
+                    lambda full, upd: full.at[idx].set(upd[:B]),
+                    seq_carry, active_carry,
+                )
+
+                logits = np.asarray(logits_j)[:B]
+                if recal:
+                    logits = (logits + recal_scale * recal_vec) / recal_temp
+                    gum = (np.stack([out_rng[g].gumbel(size=logits.shape[1]) for g in idx])
+                           if crn else rng_np.gumbel(size=logits.shape))
+                    oc = np.argmax(logits + gum, axis=-1).astype(np.int64)
+                else:
+                    rng_key, k = jax.random.split(rng_key)
+                    oc = np.asarray(jax.random.categorical(
+                        k, jnp.asarray(logits), axis=-1,
+                    )).astype(np.int64)
+
+            elif pitchformer:
+                # Legacy NumPyro fallback for pitchformer (no fast adapter).
                 for i_loc, g_idx in enumerate(idx):
                     s = pa_step[g_idx]
+                    if s >= MAX_PAS:
+                        raise ValueError("PA history capacity exceeded")
                     pa_hist["inning"][g_idx, s] = _inn_val
                     pa_hist["half"][g_idx, s] = float(half)
                     pa_hist["outs"][g_idx, s] = _outs_val[i_loc]
@@ -379,7 +476,7 @@ def simulate(
                     pa_hist["pitch_count_game"][g_idx, s] = _pc_val[i_loc]
                     pa_hist["pa_valid"][g_idx, s] = True
                     if platoon:
-                        P_ = P  # avoid shadowing
+                        P_ = P
                         b_known = (batter[i_loc] >= 0) & (batter[i_loc] < P_)
                         p_known = (pitcher[i_loc] >= 0) & (pitcher[i_loc] < P_)
                         pa_hist["bat_side"][g_idx, s] = (
@@ -387,10 +484,8 @@ def simulate(
                         pa_hist["pit_hand"][g_idx, s] = (
                             np.asarray(pt["pit_hand"])[pitcher[i_loc]] if p_known else 0.5)
 
-                # Build tb from the full history, padded to MAX_PAS so JAX
-                # sees one fixed shape and compiles once (not per-T).
-                steps = pa_step[idx] + 1       # per-game sequence length
-                pos = (steps - 1).astype(np.int64)  # index of the current PA
+                steps = pa_step[idx] + 1
+                pos = (steps - 1).astype(np.int64)
                 cols = np.arange(MAX_PAS)
                 tb = {
                     "pa_valid":         jnp.array(pa_hist["pa_valid"][np.ix_(idx, cols)]),
@@ -419,20 +514,16 @@ def simulate(
                         with nh.trace() as tr:
                             model_fn(tb, pt, teacher_force=False)
 
-                # Extract logits/value at each game's CURRENT position.
                 if recal:
-                    full_logits = np.array(tr["pa_outcome"]["fn"].logits)  # (B, MAX_PAS, 9)
-                    logits_cur = full_logits[np.arange(B), pos, :]         # (B, 9)
+                    full_logits = np.array(tr["pa_outcome"]["fn"].logits)
+                    logits_cur = full_logits[np.arange(B), pos, :]
                     logits_cur = (logits_cur + recal_scale * recal_vec) / recal_temp
                     gum = (np.stack([out_rng[g].gumbel(size=logits_cur.shape[1]) for g in idx])
                            if crn else rng_np.gumbel(size=logits_cur.shape))
                     oc = np.argmax(logits_cur + gum, axis=-1).astype(np.int64)
                 else:
-                    # Use NumPyro's traced sample at the current position so
-                    # the JAX RNG stream is respected (preserves CRN pairing).
                     oc = np.array(tr["pa_outcome"]["value"])[np.arange(B), pos].astype(np.int64)
 
-                # Advance the step counter AFTER extracting logits.
                 pa_step[idx] += 1
 
             else:
@@ -626,6 +717,14 @@ def _rate_stats(c: np.ndarray) -> dict[str, float] | None:
             "K%": c[0] / pa, "HR%": c[6] / pa}
 
 
+def select_game_ids(frame, limit):
+    """Sorted held-out cohort; zero means every game, matching ABCD."""
+    if limit is not None and limit < 0:
+        raise ValueError('limit-games must be nonnegative')
+    ids = frame['game_pk'].unique().sort().to_numpy()
+    return ids[:limit] if limit else ids
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--ckpt", type=Path, required=True)
@@ -646,7 +745,7 @@ def main() -> None:
                     help="Array key in --recal-file to use as the recal vector (e.g. b, b_heur).")
     ap.add_argument("--recal-temp", type=float, default=1.0,
                     help="Temperature for learned calibration: logits=(logits+scale*vec)/T.")
-    ap.add_argument("--skill-mode", choices=["prior", "mean", "sample"], default="prior",
+    ap.add_argument("--skill-mode", choices=["prior", "mean", "sample"], default="mean",
                     help="Latent skill at eval: prior=sample N(0,1) (default, legacy); "
                          "mean=use posterior mean player_mu; sample=one posterior draw.")
     ap.add_argument("--recency-halflife", type=float, default=None,
@@ -665,6 +764,9 @@ def main() -> None:
     ap.add_argument("--pitchformer-layers", type=int, default=2)
     ap.add_argument("--pitchformer-heads", type=int, default=4)
     ap.add_argument("--pitchformer-dropout", type=float, default=0.0)
+    ap.add_argument("--pa-arch", type=str, default="transformer",
+                    choices=["transformer", "gru"],
+                    help="PA sequence model architecture (requires --pitchformer).")
     ap.add_argument("--use-park", action="store_true",
                     help="Feed real park indices (v9+ checkpoints trained with the "
                          "park_idx fix; pre-v9 park embeddings trained on all-zeros).")
@@ -679,16 +781,20 @@ def main() -> None:
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--max-pa-per-half", type=int, default=40,
                     help="Safety cap for generated half-innings; 0 disables truncation.")
+    from diamondworldjax.model.pa_checkpoint import (add_eval_arguments, restore_config,
+        model_kwargs, player_table as checkpoint_player_table, posterior_params)
+    add_eval_arguments(ap)
     args = ap.parse_args()
 
     import jax
     import jax.numpy as jnp
 
     with open(args.ckpt, "rb") as f:
-        params = pickle.load(f)["params"]
-    train_pitches = load_seasons(TRAIN, data_root=processed_root())
-    ptab = _build_player_table(train_pitches, recency_halflife=args.recency_halflife)
-    park_map = _build_park_index(train_pitches) if args.use_park else None
+        ckpt = pickle.load(f)
+    train_seasons, test_seasons = restore_config(ckpt, args)
+    params = posterior_params(ckpt["params"], args.skill_prior, args.skill_mode, args.seed)
+    train_pitches = load_seasons(train_seasons, data_root=processed_root())
+    ptab, park_map = checkpoint_player_table(ckpt, train_pitches, args)
     train_pa = train_pitches.filter(pl.col("pa_terminal"))
     engine = EmpiricalEngine().fit(train_pa)
     hook_dists = fit_hook_dists(train_pa)
@@ -696,8 +802,8 @@ def main() -> None:
           f"reliever median {np.median(hook_dists[1]):.0f} PA", flush=True)
     del train_pitches, train_pa
 
-    test_pa = load_seasons(TEST, data_root=processed_root()).filter(pl.col("pa_terminal"))
-    keep = test_pa["game_pk"].unique().sort().to_numpy()[:args.limit_games]
+    test_pa = load_seasons(test_seasons, data_root=processed_root()).filter(pl.col("pa_terminal"))
+    keep = select_game_ids(test_pa, args.limit_games)
     test_pa = test_pa.filter(pl.col("game_pk").is_in(keep.tolist()))
 
     # real reference
@@ -721,22 +827,7 @@ def main() -> None:
           "unknown_index": ptab["unknown_index"],
           "bat_hand": np.asarray(ptab["bat_hand"]), "pit_hand": np.asarray(ptab["pit_hand"]),
           "_engine": engine, "_hook_dists": hook_dists}
-    mkw = {}
-    if args.outcome_only:
-        mkw["outcome_only"] = True
-    if args.fatigue:
-        mkw["fatigue"] = True
-    if args.platoon:
-        mkw["platoon"] = True
-    if args.pitchformer:
-        mkw.update(
-            pitchformer=True,
-            pitchformer_dim=args.pitchformer_dim,
-            pitchformer_layers=args.pitchformer_layers,
-            pitchformer_heads=args.pitchformer_heads,
-            pitchformer_dropout=args.pitchformer_dropout,
-        )
-    model_fn = partial(pa_model, **mkw) if mkw else pa_model
+    model_fn = partial(pa_model, **model_kwargs(args))
 
     if args.recal_file is not None:
         _recal_vec = np.load(args.recal_file)[args.recal_key].astype(np.float64)
@@ -753,6 +844,7 @@ def main() -> None:
         fixed_nine=args.fixed_nine, no_bullpen=args.no_bullpen, seed=args.seed,
         platoon=args.platoon, recal_temp=args.recal_temp, skill_mode=args.skill_mode,
         max_pa_per_half=None if args.max_pa_per_half == 0 else args.max_pa_per_half,
+        skill_prior=args.skill_prior, simulation_season=max(test_seasons),
         pitchformer=args.pitchformer,
     )
     away, home, total = res["away"], res["home"], res["away"] + res["home"]

@@ -351,6 +351,8 @@ def main() -> None:
                         help="Prior on the per-player skill latent. iso = N(0,I) (v6..v16); "
                              "learned = per-dimension learned scale (adaptive shrinkage); "
                              "lkj = full learned correlation. Eval scripts must pass the same.")
+    parser.add_argument("--runs-upweight", type=float, default=2.0,
+                        help="Loss weight multiplier for non-zero run events (0 = disable).")
     parser.add_argument("--player-agg-weight", type=float, default=0.0,
                         help="Weight on the per-batter aggregation loss (0 = off). Reweights "
                              "the objective from per-PA (where ~99.7%% of the signal is the "
@@ -378,6 +380,9 @@ def main() -> None:
                         help="Number of PA transformer attention heads.")
     parser.add_argument("--pitchformer-dropout", type=float, default=0.0,
                         help="PA transformer dropout rate during training.")
+    parser.add_argument("--pa-arch", type=str, default="transformer",
+                        choices=["transformer", "gru"],
+                        help="PA sequence model architecture (requires --pitchformer).")
     parser.add_argument("--tag", type=str, default=None,
                         help="Checkpoint/log dir tag override (e.g. v6).")
     parser.add_argument("--train-end", type=int, default=2022,
@@ -386,6 +391,7 @@ def main() -> None:
                              "recency-weighted rate features then weight 2023 highest, the "
                              "single most valuable prior for 2024 (see prev_season_ablation). "
                              "Eval must then test 2024 only (2023 becomes in-sample).")
+    parser.add_argument("--pitchformer-position", choices=["learned", "sinusoidal"], default="sinusoidal")
     args = parser.parse_args()
 
     global _CKPT_DIR, _LOG_PATH, TRAIN_SEASONS
@@ -423,7 +429,7 @@ def main() -> None:
     print(f"  {len(pa_df):,} plate appearances, {len(park_map)} parks.", flush=True)
 
     game_ids = pa_df["game_pk"].unique().to_numpy()
-    np.random.shuffle(game_ids)
+    np.random.default_rng(args.seed).shuffle(game_ids)
     chunks = [game_ids[i:i + args.batch] for i in range(0, len(game_ids), args.batch)]
     batch_iter = _infinite_batch_iter(pa_df, chunks, player_table_np["id_to_idx"], player_table_np)
 
@@ -465,11 +471,21 @@ def main() -> None:
             pitchformer_layers=args.pitchformer_layers,
             pitchformer_heads=args.pitchformer_heads,
             pitchformer_dropout=args.pitchformer_dropout,
+            pa_arch=args.pa_arch, pitchformer_position=args.pitchformer_position,
         )
+    _mkw["runs_upweight"] = args.runs_upweight
     _mkw["kl_scale"] = kl_scale
     model_fn = partial(pa_model, **_mkw)
 
+    from diamondworldjax.model.pa_checkpoint import MODEL_FIELDS
+    metadata = {"pa_metadata": {
+        "version": 1, "train_seasons": TRAIN_SEASONS,
+        "config": {name: getattr(args, name) for name in (*MODEL_FIELDS,
+            "train_end", "recency_halflife", "contact_quality", "per_stat_shrink")},
+        "player_table": player_table_np, "park_map": park_map,
+    }}
     svi_state, guide, losses = train(
+        checkpoint_metadata = metadata,
         model            = model_fn,
         batch_iter       = batch_iter,
         n_steps          = args.steps,

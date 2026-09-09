@@ -19,6 +19,8 @@ import numpy as np
 import optax
 import polars as pl
 
+from diamondworldjax.model.pitchformer_checkpoint import (restore_metadata, head_kwargs, add_skill_season,
+    trainable_optimizer, export_shared_head, save_metadata)
 from diamondworldjax.data.pitch_seq import build_id_maps, load_seasons, make_sequences
 from diamondworldjax.model.pitchformer import TransformerA, TransformerB, loss_a, loss_b
 from diamondworldjax.model.transformer_c import TransformerC, loss_c
@@ -92,12 +94,16 @@ def main() -> None:
     ap.add_argument("--no-env", action="store_true")
     ap.add_argument("--no-geom", action="store_true")
     args = ap.parse_args()
+    metadata = restore_metadata(args, args.init_tag)
+    if metadata and metadata.get("bayesian"):
+        raise ValueError("Bayesian ABCD requires its variational likelihood objective; "
+                         "rollout fine-tuning cannot update the exported mean tables.")
     if args.steps < 1 or args.batch < 1 or not 0 <= args.self_conditioned_fraction <= 1:
         raise SystemExit("steps/batch must be positive and self-conditioned fraction must be in [0, 1]")
 
-    years = [2015, 2016, 2017, 2018, 2019, 2021, 2022, 2023]
+    years = metadata["train_years"] if metadata else [2015, 2016, 2017, 2018, 2019, 2021, 2022, 2023]
     train = load_seasons(years)
-    maps = build_id_maps(train)
+    maps = metadata["maps"] if metadata else build_id_maps(train)
     context_path = Path(args.game_context)
     gctx = None if args.no_env or not context_path.exists() else pl.read_parquet(context_path)
     event_path = Path(args.events)
@@ -105,18 +111,38 @@ def main() -> None:
         raise SystemExit(f"C fine-tuning requires extracted event labels: {event_path}")
     seqs = make_sequences(pl.concat(train), maps, args.max_len,
                           events=pl.read_parquet(event_path), game_ctx=gctx)
+    seqs = add_skill_season(seqs, metadata)
     if args.no_geom:
         seqs["geom"][:] = 0.0
     root = Path(args.params_dir)
-    kw = dict(n_pitchers=maps["n_pitcher"], n_batters=maps["n_batter"],
-              n_parks=maps["n_park"], d_model=args.d_model, n_layers=args.layers, n_heads=args.heads)
+    kw = head_kwargs(args, maps, metadata)
     models = (TransformerA(**kw), TransformerB(**kw), TransformerC(**kw), TransformerD(**kw))
     params = [_load(root / f"{letter}_{args.init_tag}_params.pkl") for letter in "ABCD"]
     opt = optax.chain(optax.clip_by_global_norm(1.0), optax.adamw(args.lr, weight_decay=1e-4))
+    opt = trainable_optimizer(opt)
+    shared_params = None
+    if metadata and metadata["config"].get("shared_emb"):
+        from diamondworldjax.scripts.train_pitchformer import SharedPitchformer
+        shared_kw = {k: v for k, v in kw.items() if k != "residual_dim"}
+        shared_model = SharedPitchformer(**shared_kw, heads="abcd", d_residual=kw["residual_dim"])
+        shared_params = _load(root / f"shared_{args.init_tag}_params.pkl")
+        shared_state = opt.init(shared_params)
+        losses_by_head = (loss_a, loss_b, loss_c, loss_d)
+        @jax.jit
+        def shared_step(p, state, batches, key):
+            def objective(variables):
+                keys = jax.random.split(key, 4)
+                losses = jnp.stack([loss_fn(shared_model.apply(variables, batch, head=head,
+                    train=True, rngs={"dropout": k}), batch)[0]
+                    for head, batch, k, loss_fn in zip("abcd", batches, keys, losses_by_head)])
+                return losses.sum(), losses
+            (_, losses), grads = jax.value_and_grad(objective, has_aux=True)(p)
+            updates, state = opt.update(grads, state, p)
+            return optax.apply_updates(p, updates), state, losses
     states = [opt.init(p) for p in params]
     steps = [_step_fn(model, loss, opt) for model, loss in zip(models, (loss_a, loss_b, loss_c, loss_d))]
     engine = EmpiricalEngine().fit(pl.concat(train).filter(pl.col("pa_terminal")))
-    c_engine = CTransitionEngine().fit(pl.concat(train), pl.read_parquet(event_path))
+    c_engine = CTransitionEngine(event_mode=getattr(models[2], "c_event_mode", "legacy")).fit(pl.concat(train), pl.read_parquet(event_path))
     rng = np.random.default_rng(args.seed)
     key = jax.random.PRNGKey(args.seed)
     nseq = len(seqs["valid"])
@@ -136,18 +162,28 @@ def main() -> None:
             base = {name: jnp.asarray(value) for name, value in raw.items()}
             batches = (base, base, base, base)
         losses = []
-        for j in range(4):
+        if shared_params is not None:
             key, step_key = jax.random.split(key)
-            params[j], states[j], loss = steps[j](params[j], states[j], batches[j], step_key)
-            losses.append(float(loss))
+            shared_params, shared_state, values = shared_step(shared_params, shared_state, batches, step_key)
+            losses = [float(v) for v in values]
+            params = [export_shared_head(shared_params, head) for head in "abcd"]
+        else:
+            for j in range(4):
+                key, step_key = jax.random.split(key)
+                params[j], states[j], loss = steps[j](params[j], states[j], batches[j], step_key)
+                losses.append(float(loss))
         if (i + 1) % 50 == 0 or i == 0:
             row = {"step": i + 1, "ss_rate": rate, "sampled_sequences": int(use.sum()),
                    **{letter: loss for letter, loss in zip("ABCD", losses)}}
             log.append(row)
             print(row, flush=True)
 
+    if shared_params is not None:
+        _save(root / f"shared_{args.tag}_params.pkl", shared_params)
     for letter, p in zip("ABCD", params):
         _save(root / f"{letter}_{args.tag}_params.pkl", p)
+    if metadata:
+        save_metadata(args.params_dir, args.tag, metadata)
     out = Path("data/eval2") / f"pitchformer_finetune_{args.tag}.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps({"config": vars(args), "log": log}, indent=2) + "\n")

@@ -87,11 +87,17 @@ def main() -> None:
     parser.add_argument("--pitchformer-layers", type=int, default=2)
     parser.add_argument("--pitchformer-heads", type=int, default=4)
     parser.add_argument("--pitchformer-dropout", type=float, default=0.0)
+    parser.add_argument("--pa-arch", type=str, default="transformer",
+                        choices=["transformer", "gru"],
+                        help="PA sequence model architecture (requires --pitchformer).")
     parser.add_argument("--recency-halflife", type=float, default=None,
                         help="Match a recency-trained model (v12+): same half-life as training.")
-    parser.add_argument("--skill-mode", choices=["prior", "mean"], default="prior",
+    parser.add_argument("--skill-mode", choices=["prior", "mean", "sample"], default="mean",
                         help="mean uses the learned player_mu (v13+ with the KL-scale fix).")
     parser.add_argument("--seed", type=int, default=0)
+    from diamondworldjax.model.pa_checkpoint import (add_eval_arguments, restore_config,
+        model_kwargs, player_table as checkpoint_player_table, posterior_params)
+    add_eval_arguments(parser)
     args = parser.parse_args()
 
     import jax
@@ -101,22 +107,17 @@ def main() -> None:
 
     print(f"Loading checkpoint {args.ckpt}", flush=True)
     with open(args.ckpt, "rb") as f:
-        params = pickle.load(f)["params"]
-    if args.skill_mode == "mean" and "player_mu" in params:
-        params = {**params, "player_skills": params["player_mu"]}
-
-    train_pitches = load_seasons(TRAIN_SEASONS, data_root=processed_root())
-    ptab = _build_player_table(train_pitches, recency_halflife=args.recency_halflife)
-    # Real park indices (0 = unknown park is OOD for v9+, which collapses to all-K);
-    # the test parquet lacks park_idx, so materialise it from the train park map.
-    # Opt-in: pre-v9 checkpoints trained on park_idx=0 and must keep seeing it.
-    park_map = _build_park_index(train_pitches) if args.use_park else None
+        ckpt = pickle.load(f)
+    train_seasons, test_seasons = restore_config(ckpt, args)
+    params = posterior_params(ckpt["params"], args.skill_prior, args.skill_mode, args.seed)
+    train_pitches = load_seasons(train_seasons, data_root=processed_root())
+    ptab, park_map = checkpoint_player_table(ckpt, train_pitches, args)
     del train_pitches
     all_ids = ptab["all_ids"]            # index -> real id
     id_to_idx = ptab["id_to_idx"]
     P = len(all_ids)
 
-    test_pa = load_seasons(TEST_SEASONS, data_root=processed_root()).filter(pl.col("pa_terminal"))
+    test_pa = load_seasons(test_seasons, data_root=processed_root()).filter(pl.col("pa_terminal"))
     if park_map is not None:
         test_pa = apply_park_idx(test_pa, park_map)
 
@@ -138,22 +139,7 @@ def main() -> None:
           "unknown_index": ptab["unknown_index"],
           "bat_hand": jnp.array(ptab.get("bat_hand", np.full(len(ptab["hand"]), 0.5, np.float32))),
           "pit_hand": jnp.array(ptab.get("pit_hand", np.full(len(ptab["hand"]), 0.5, np.float32)))}
-    _mkw = {}
-    if args.outcome_only:
-        _mkw["outcome_only"] = True
-    if args.fatigue:
-        _mkw["fatigue"] = True
-    if args.platoon:
-        _mkw["platoon"] = True
-    if args.pitchformer:
-        _mkw.update(
-            pitchformer=True,
-            pitchformer_dim=args.pitchformer_dim,
-            pitchformer_layers=args.pitchformer_layers,
-            pitchformer_heads=args.pitchformer_heads,
-            pitchformer_dropout=args.pitchformer_dropout,
-        )
-    model_fn = partial(pa_model, **_mkw) if _mkw else pa_model
+    model_fn = partial(pa_model, **model_kwargs(args))
 
     sim_counts = np.zeros((P, 9), dtype=np.float64)
     game_ids = test_pa["game_pk"].unique().to_numpy()

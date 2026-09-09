@@ -310,6 +310,9 @@ def pa_model(
     pitchformer_layers: int = 2,
     pitchformer_heads: int = 4,
     pitchformer_dropout: float = 0.0,
+    pa_arch: str = "transformer",
+    pitchformer_position: str = "auto",
+    runs_upweight: float = 2.0,
     player_skills_override: jnp.ndarray | None = None,
 ) -> None:
     B, T = batch["pa_valid"].shape
@@ -429,15 +432,25 @@ def pa_model(
     context_raw = jnp.concatenate([game_state, pitcher_z, batter_z, park_emb], axis=-1)  # (B, T, 144/145)
 
     if pitchformer:
-        from .pa_transformer import pa_transformer_numpyro
-        context = pa_transformer_numpyro(
-            context_raw,
-            batch["pa_valid"],
-            d_model=pitchformer_dim,
-            n_layers=pitchformer_layers,
-            n_heads=pitchformer_heads,
-            dropout=pitchformer_dropout,
-        )
+        if pa_arch == "gru":
+            from .pa_transformer import pa_gru_numpyro
+            context = pa_gru_numpyro(
+                context_raw,
+                batch["pa_valid"],
+                d_model=pitchformer_dim,
+                n_layers=pitchformer_layers,
+            )
+        else:
+            from .pa_transformer import pa_transformer_numpyro
+            context = pa_transformer_numpyro(
+                context_raw,
+                batch["pa_valid"],
+                d_model=pitchformer_dim,
+                n_layers=pitchformer_layers,
+                n_heads=pitchformer_heads,
+                dropout=pitchformer_dropout,
+                train=teacher_force, position_encoding=pitchformer_position,
+            )
     else:
         context = context_raw
 
@@ -517,7 +530,7 @@ def pa_model(
             extra_lp = dist.Categorical(logits=runs_logits).log_prob(runs_obs)
             numpyro.factor(
                 "runs_upweight",
-                jnp.where(runs_obs > 0, RUNS_UPWEIGHT * extra_lp, 0.0),
+                jnp.where(runs_obs > 0, runs_upweight * extra_lp, 0.0),
             )
 
         # Base state after PA

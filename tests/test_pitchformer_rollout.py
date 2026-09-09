@@ -1,6 +1,7 @@
 import jax.numpy as jnp
 import jax
 import numpy as np
+from flax.core import unfreeze
 
 from diamondworldjax.domain import PAOutcome
 from diamondworldjax.model.pitchformer import TransformerA, TransformerB
@@ -167,3 +168,47 @@ def test_cached_rollout_restores_trailing_padding():
     assert got["active"].shape == (1, 4)
     assert not got["active"][0, 2:].any()
     assert np.all(got["pa_outcome"][0, 2:] == -1)
+
+
+def test_cached_rollout_stops_when_generated_third_out_ends_half():
+    """A per-half cached rollout must not consume rows from the next half."""
+    batch = _batch(b=1, t=12)
+    kw = dict(n_pitchers=4, n_batters=4, n_parks=4,
+              d_model=12, n_layers=1, n_heads=3, dropout=0.0,
+              window_size=1)
+    a, b = TransformerA(**kw), TransformerB(**kw)
+    jbatch = {name: jnp.asarray(value) for name, value in batch.items()}
+    a_params = unfreeze(a.init(jax.random.PRNGKey(10), jbatch, train=False))
+    b_params = unfreeze(b.init(jax.random.PRNGKey(11), jbatch, train=False))
+
+    # Make every pitch a strike in the zone: three strikeouts produce the
+    # third out on pitch nine.  These are real Transformer heads so the test
+    # exercises the cached compiled scan rather than the reference fallback.
+    a_params["params"]["stuff_mu"]["kernel"] = jnp.zeros_like(
+        a_params["params"]["stuff_mu"]["kernel"])
+    a_params["params"]["stuff_mu"]["bias"] = jnp.zeros_like(
+        a_params["params"]["stuff_mu"]["bias"])
+    a_params["params"]["stuff_logsigma"]["kernel"] = jnp.zeros_like(
+        a_params["params"]["stuff_logsigma"]["kernel"])
+    a_params["params"]["stuff_logsigma"]["bias"] = jnp.full_like(
+        a_params["params"]["stuff_logsigma"]["bias"], -30.0)
+    for name in ("swing", "hbp"):
+        b_params["params"][name]["kernel"] = jnp.zeros_like(
+            b_params["params"][name]["kernel"])
+        b_params["params"][name]["bias"] = jnp.full_like(
+            b_params["params"][name]["bias"], -100.0)
+
+    got = rollout_batch(
+        PitchformerHeads(a, b, None, None, a_params, b_params),
+        batch,
+        seed=3,
+        engine=EmpiricalEngine(),
+        decode_len=12,
+    )
+
+    np.testing.assert_array_equal(got["active"][0, :9], np.ones(9, bool))
+    assert not got["active"][0, 9:].any()
+    # _initial_state starts synthetic rollouts in the fifth inning.
+    assert got["final_state"]["inning"][0] == 5
+    assert got["final_state"]["half"][0] == 1
+    assert not got["final_state"]["ended"][0]

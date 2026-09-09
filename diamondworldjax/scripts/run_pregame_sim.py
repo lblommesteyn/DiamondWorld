@@ -62,6 +62,9 @@ def main():
                     default="iso", help="must match how the checkpoint was trained")
     ap.add_argument("--pitchformer", action="store_true",
                     help="must match: checkpoint trained with --pitchformer")
+    ap.add_argument("--pa-arch", type=str, default="transformer",
+                    choices=["transformer", "gru"],
+                    help="PA sequence model architecture (requires --pitchformer).")
     ap.add_argument("--train-end", type=int, default=2023)
     ap.add_argument("--recal-file", default="data/eval2/v13_cal_params.npz",
                     help="Calibration .npz containing the selected vector (default: v13 heuristic file).")
@@ -81,6 +84,7 @@ def main():
                   per_stat_shrink=args.per_stat_shrink,
                   skill_prior=args.skill_prior,
                   pitchformer=args.pitchformer,
+                  pa_arch=args.pa_arch,
                   recal=args.recal_file,
                   recal_key=args.recal_key,
                   scale=args.recal_scale,

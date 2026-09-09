@@ -44,7 +44,7 @@ import flax.linen as nn
 import jax
 import jax.numpy as jnp
 
-from .pitchformer import Trunk, N_PITCH_TYPES
+from .pitchformer import Trunk, N_PITCH_TYPES, _loss_valid
 
 N_BATTED = 6
 LAUNCH_DIM = 2
@@ -58,13 +58,26 @@ class TransformerD(nn.Module):
     n_layers: int = 4
     n_heads: int = 6
     dropout: float = 0.1
+    player_mode: str = "id"
+    skill_seasons: int = 1
+    residual_dim: int = 0
+    pitch_history: bool = False
+    position_encoding: str = "learned"
+    window_size: int = 0
+    observation_masks: bool = False
+    c_event_mode: str = "legacy"
+    c_support: tuple | None = None
 
     @nn.compact
     def __call__(self, batch, *, train: bool, decode: bool = False,
-                 output_heads: bool = True):
+                 output_heads: bool = True, ss_override=None):
         h, _ = Trunk(self.n_pitchers, self.n_batters, self.n_parks, self.d_model,
-                     self.n_layers, self.n_heads, self.dropout, name="trunk")(
-            batch, train=train, decode=decode)
+                     self.n_layers, self.n_heads, self.dropout,
+                     player_mode=self.player_mode, skill_seasons=self.skill_seasons,
+                     residual_dim=self.residual_dim, pitch_history=self.pitch_history,
+                     position_encoding=self.position_encoding, window_size=self.window_size,
+                     observation_masks=self.observation_masks, c_event_mode=self.c_event_mode, name="trunk")(
+            batch, train=train, decode=decode, ss_override=ss_override)
 
         # Decode must advance D's independently-trained causal trunk on every
         # pitch.  Its launch/outcome heads are needed only for balls in play,
@@ -104,7 +117,7 @@ def _masked_mean(x, m):
 
 
 def loss_d(out, batch):
-    valid = batch["valid"]
+    valid = _loss_valid(batch)
 
     # D1 scored only where a launch was actually measured.
     mu, ls = out["launch_mu"], out["launch_logsigma"]

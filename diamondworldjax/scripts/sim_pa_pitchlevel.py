@@ -52,6 +52,7 @@ import jax.numpy as jnp
 import numpy as np
 import polars as pl
 
+from ..model.pitchformer_checkpoint import restore_metadata, head_kwargs, add_skill_season
 from ..data.pitch_seq import (build_id_maps, load_seasons, make_sequences,
                               STUFF_CENTRE, STUFF_SCALE)
 from ..model.pitchformer import TransformerA, TransformerB
@@ -85,22 +86,26 @@ def main():
     ap.add_argument("--limit-seqs", type=int, default=None)
     ap.add_argument("--out", default="data/eval2/pitchlevel_playercorr.json")
     args = ap.parse_args()
+    metadata = restore_metadata(args)
 
-    train_seasons = [2015, 2016, 2017, 2018, 2019, 2021, 2022, 2023]
+    train_seasons = metadata["train_years"] if metadata else [2015, 2016, 2017, 2018, 2019, 2021, 2022, 2023]
     tr_dfs = load_seasons(train_seasons)
-    maps = build_id_maps(tr_dfs)
+    maps = metadata["maps"] if metadata else build_id_maps(tr_dfs)
     del tr_dfs
 
     te = load_seasons([args.season])[0]
-    seqs = make_sequences(te, maps, args.max_len)
+    from pathlib import Path
+    context_path = Path(metadata["config"].get("game_context", "data/processed/game_context.parquet")) if metadata else None
+    gctx = pl.read_parquet(context_path) if context_path and context_path.exists() and not args.no_env else None
+    seqs = add_skill_season(make_sequences(te, maps, args.max_len, game_ctx=gctx), metadata)
+    if metadata and args.no_geom:
+        seqs["geom"][:] = 0
     if args.limit_seqs:
         seqs = {k: v[:args.limit_seqs] for k, v in seqs.items()}
     n_seq, T = seqs["valid"].shape
     print(f"{n_seq:,} sequences x {T}", flush=True)
 
-    kw = dict(n_pitchers=maps["n_pitcher"], n_batters=maps["n_batter"],
-              n_parks=maps["n_park"], d_model=args.d_model,
-              n_layers=args.layers, n_heads=args.heads)
+    kw = head_kwargs(args, maps, metadata)
     A, B = TransformerA(**kw), TransformerB(**kw)
     pa = load_params(f"{args.params_dir}/A_{args.tag}_params.pkl")
     pb = load_params(f"{args.params_dir}/B_{args.tag}_params.pkl")

@@ -183,18 +183,21 @@ def main() -> None:
     parser.add_argument("--pitchformer-layers", type=int, default=2)
     parser.add_argument("--pitchformer-heads", type=int, default=4)
     parser.add_argument("--pitchformer-dropout", type=float, default=0.0)
+    parser.add_argument("--pa-arch", type=str, default="transformer",
+                        choices=["transformer", "gru"],
+                        help="PA sequence model architecture (requires --pitchformer).")
+    from diamondworldjax.model.pa_checkpoint import (add_eval_arguments, restore_config,
+        model_kwargs, player_table as checkpoint_player_table, posterior_params)
+    add_eval_arguments(parser)
     args = parser.parse_args()
 
     mode = ("engine-rollout" if args.engine_rollout
             else "free-rollout" if args.free_rollout else "conditioned")
-    if args.out is None:
-        args.out = _RESULTS_DIR / f"dwjax_pa_{mode}.json"
 
     print("Importing JAX + NumPyro...", flush=True)
     import jax
     import jax.numpy as jnp
     print(f"  JAX devices: {jax.devices()}", flush=True)
-    print(f"  Eval mode  : {mode}", flush=True)
 
     import polars as pl
     from diamondworldjax.data.pipeline import load_seasons
@@ -205,14 +208,24 @@ def main() -> None:
     print(f"Loading checkpoint: {args.ckpt}", flush=True)
     with open(args.ckpt, "rb") as f:
         ckpt = pickle.load(f)
-    params = ckpt["params"]
+    train_seasons, test_seasons = restore_config(ckpt, args)
+    params = posterior_params(ckpt["params"], args.skill_prior, args.skill_mode, args.seed)
+    if args.outcome_only and not args.engine_rollout:
+        if args.free_rollout:
+            raise ValueError("Outcome-only models require --engine-rollout for game runs")
+        args.engine_rollout = True
+        mode = "engine-rollout"
+        print("Outcome-only checkpoint: using empirical-engine game rollout", flush=True)
+    if args.out is None:
+        args.out = _RESULTS_DIR / f"dwjax_pa_{mode}.json"
+    print(f"  Eval mode  : {mode}", flush=True)
     step   = ckpt.get("step", "?")
     print(f"  Loaded step {step} ({len(params)} param entries)", flush=True)
 
-    print(f"Building player table from {TRAIN_SEASONS}...", flush=True)
-    train_pitches = load_seasons(TRAIN_SEASONS, data_root=_DATA_ROOT)
-    player_table_np = _build_player_table(train_pitches)
-    park_map = _build_park_index(train_pitches)
+    print(f"Building player table from {train_seasons}...", flush=True)
+    train_pitches = load_seasons(train_seasons, data_root=_DATA_ROOT)
+    player_table_np, park_map = checkpoint_player_table(ckpt, train_pitches, args)
+    park_map = park_map or {}
     P = len(player_table_np["all_ids"])
     print(f"  {P:,} players, {len(park_map)} parks.", flush=True)
 
@@ -227,8 +240,8 @@ def main() -> None:
         hook_dists = fit_hook_dists(train_pa)
     del train_pitches
 
-    print(f"Loading test seasons {TEST_SEASONS}...", flush=True)
-    test_pitches = load_seasons(TEST_SEASONS, data_root=_DATA_ROOT)
+    print(f"Loading test seasons {test_seasons}...", flush=True)
+    test_pitches = load_seasons(test_seasons, data_root=_DATA_ROOT)
     test_pa = test_pitches.filter(pl.col("pa_terminal"))
     if args.use_park:
         test_pa = apply_park_idx(test_pa, park_map)
@@ -252,23 +265,12 @@ def main() -> None:
         "league": jnp.array(player_table_np["league"]),
         "hand":   jnp.array(player_table_np["hand"]),
         "unknown_index": player_table_np["unknown_index"],
+        "bat_hand": player_table_np["bat_hand"], "pit_hand": player_table_np["pit_hand"],
     }
 
     from functools import partial as _partial
-    _mkw = {}
-    if args.outcome_only:
-        _mkw["outcome_only"] = True
-    if args.fatigue:
-        _mkw["fatigue"] = True
-    if args.pitchformer:
-        _mkw.update(
-            pitchformer=True,
-            pitchformer_dim=args.pitchformer_dim,
-            pitchformer_layers=args.pitchformer_layers,
-            pitchformer_heads=args.pitchformer_heads,
-            pitchformer_dropout=args.pitchformer_dropout,
-        )
-    model_fn = _partial(pa_model, **_mkw) if _mkw else pa_model
+    _mkw = model_kwargs(args)
+    model_fn = _partial(pa_model, **_mkw)
 
     if args.free_rollout:
         sample_fn = _free_rollout_sample
@@ -297,7 +299,9 @@ def main() -> None:
                 model_fn, params, pt, game_chunk, jax.random.fold_in(master_key, b_idx),
                 args.samples, seed=args.seed + b_idx,
                 recal=args.recal, recal_vec=RECAL_VECTOR,
-                pitchformer=args.pitchformer,
+                pitchformer=args.pitchformer, skill_prior=args.skill_prior,
+                simulation_season=max(test_seasons), skill_mode=args.skill_mode,
+                platoon=args.platoon,
             )
             sim_chunks.append(away + home)
             if b_idx % 10 == 0 or b_idx + 1 == len(game_chunks):
@@ -335,7 +339,9 @@ def main() -> None:
         print(f"  {k:24s} = {v:.5f}")
 
     _RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(json.dumps(metrics, indent=2))
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    args.out.write_text(json.dumps({**metrics, "mode": mode, "train_seasons": train_seasons,
+        "test_seasons": test_seasons, "skill_mode": args.skill_mode}, indent=2))
     print(f"\nSaved → {args.out}", flush=True)
 
     print("\n=== comparison row ===")

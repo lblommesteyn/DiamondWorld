@@ -61,11 +61,19 @@ def _sample_c_event(logits: jax.Array, key: jax.Array) -> jax.Array:
     P(any event) under independent Bernoulli heads, then distribute an event
     across its possible types in proportion to their marginal probabilities.
     """
+    if logits.shape[-1] == 256:
+        return jax.random.categorical(key, logits, axis=-1) - 1
     p = jax.nn.sigmoid(logits)
     p_none = jnp.prod(1.0 - p, axis=-1, keepdims=True)
     p_event = (1.0 - p_none) * p / jnp.maximum(p.sum(axis=-1, keepdims=True), 1e-8)
     probs = jnp.concatenate([p_none, p_event], axis=-1)
     return jax.random.categorical(key, jnp.log(jnp.clip(probs, 1e-8, 1.0)), axis=-1) - 1
+
+
+def _event_flags(event, mode):
+    if mode == 'bundles':
+        return (((event + 1)[..., None] & (1 << jnp.arange(8))) != 0)
+    return jax.nn.one_hot(jnp.maximum(event, 0), 8, dtype=bool) & (event >= 0)[..., None]
 
 
 def _initial_state(batch: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
@@ -166,12 +174,12 @@ def _supports_cached_decode(heads: PitchformerHeads) -> bool:
 def _cache_template(head: Any, params: dict[str, Any], batch: dict[str, np.ndarray]) -> Any:
     """Create an empty Flax K/V cache for one head and one batch shape."""
     B, T = batch["valid"].shape
-    key = (type(head), head.n_pitchers, head.n_batters, head.n_parks,
-           head.d_model, head.n_layers, head.n_heads, B, T)
+    key = (head, B, T)
     cached = _CACHE_TEMPLATES.get(key)
     if cached is not None:
         return cached
     init_batch = {name: jnp.asarray(value) for name, value in batch.items()}
+    init_batch["valid"] = jnp.zeros_like(init_batch["valid"])
     init_batch["_decode_position"] = jnp.array(0, jnp.int32)
     init_batch["_cache_valid"] = init_batch["valid"].astype(bool)
     # The full token shape only allocates cache tensors here; the subsequent
@@ -185,7 +193,7 @@ def _cache_template(head: Any, params: dict[str, Any], batch: dict[str, np.ndarr
 def _cached_apply(model: Any, params: dict[str, Any], cache: Any,
                   token: dict[str, jax.Array], *, output_heads: bool = True) -> tuple[dict[str, jax.Array], Any]:
     """Decode one token and return the updated K/V cache."""
-    variables = {"params": params["params"], "cache": cache}
+    variables = {**params, "cache": cache}
     if output_heads:
         out, updated = model.apply(variables, token, train=False, decode=True,
                                    mutable=("cache",))
@@ -223,15 +231,16 @@ def _empirical_tables(engine: EmpiricalEngine) -> dict[str, jax.Array]:
 
 def _c_tables(c_engine: CTransitionEngine | None) -> dict[str, jax.Array]:
     """Pack C's sparse empirical adapter into a static JAX lookup table."""
+    event_count = 255 if getattr(c_engine, "event_mode", "legacy") == "bundles" else len(EVENT_FLAGS)
     choices = [1]
     if c_engine is not None:
         choices.extend(len(v) for v in c_engine._base.values())
     max_choices = max(choices)
-    base = np.zeros((len(EVENT_FLAGS), 8, 3, max_choices), np.int32)
+    base = np.zeros((event_count, 8, 3, max_choices), np.int32)
     outs = np.zeros_like(base)
     runs = np.zeros_like(base)
-    count = np.ones((len(EVENT_FLAGS), 8, 3), np.int32)
-    for event in range(len(EVENT_FLAGS)):
+    count = np.ones((event_count, 8, 3), np.int32)
+    for event in range(event_count):
         for bs in range(8):
             for out in range(3):
                 base[event, bs, out, 0] = bs
@@ -259,7 +268,7 @@ def _sample_empirical(tables: dict[str, jax.Array], base: jax.Array, outs: jax.A
 
 def _sample_c_transition(tables: dict[str, jax.Array], event: jax.Array,
                          base: jax.Array, outs: jax.Array, key: jax.Array) -> tuple[jax.Array, jax.Array, jax.Array]:
-    event = jnp.clip(event, 0, len(EVENT_FLAGS) - 1)
+    event = jnp.clip(event, 0, tables["count"].shape[0] - 1)
     base = jnp.clip(base, 0, 7)
     outs = jnp.clip(outs, 0, 2)
     count = tables["count"][event, base, outs]
@@ -438,9 +447,7 @@ def _compiled_rollout(
 
         if has_c:
             out_c, cache_c = _cached_apply(c, c_params, cache_c, token)
-            event = jax.random.categorical(
-                kc, jnp.concatenate([jnp.zeros((B, 1)), out_c["event_logits"][:, 0]], axis=1)
-            ).astype(jnp.int32) - 1
+            event = _sample_c_event(out_c["event_logits"][:, 0], kc).astype(jnp.int32)
             event = jnp.where(active, event, -1)
         else:
             event = jnp.full(B, -1, jnp.int32)
@@ -517,13 +524,21 @@ def _compiled_rollout(
         return (next_state, history_valid, cache_a, cache_b, cache_c, cache_d, key), record'''
 
     def body(carry, t):
-        state, history_valid, cache_a, cache_b, cache_c, cache_d, key = carry
+        (state, half_complete, history_valid,
+         cache_a, cache_b, cache_c, cache_d, key) = carry
 
         # ------------------------------------------------------------------
         # 1. Determine whether this rollout row is active and which scheduled
         #    PA supplies exogenous batter/pitcher/park/matchup information.
         # ------------------------------------------------------------------
-        active = original["valid"][:, t].astype(bool) & ~state["ended"]
+        # ``rollout_batch`` receives one observed half-inning at a time.  A
+        # generated third out must therefore stop this *call*, while leaving
+        # ``state["ended"]`` reserved for an actually completed game.  Otherwise
+        # the remaining source rows from (say) the top half would be consumed as
+        # the bottom half before the outer game evaluator can supply its proper
+        # schedule.
+        active = (original["valid"][:, t].astype(bool)
+                  & ~state["ended"] & ~half_complete)
 
         if has_schedule:
             source_ok = state["pa_slot"] < source_counts
@@ -649,6 +664,9 @@ def _compiled_rollout(
             "_decode_position": t,
             "_cache_valid": history_valid,
         }
+
+        if "skill_season" in original:
+            token["skill_season"] = jnp.take_along_axis(original["skill_season"], source[:, None], axis=1)
 
         key, ktype, kstuff, kb, kcontact, kfoul, khbp, kc, kd1, kd2, kpa, kct = (
             jax.random.split(key, 12)
@@ -1083,8 +1101,11 @@ def _compiled_rollout(
 
         c_third_out = c_apply & (next_state["outs"] >= 3)
 
-        # A third out ends the HALF-INNING, not the rollout/game.
+        # A third out ends the HALF-INNING, not the game.  ``half_complete``
+        # stops the remainder of this per-half rollout without poisoning the
+        # persistent game-level ``ended`` flag.
         half_over = inning_over | c_third_out
+        next_half_complete = half_complete | half_over
 
         # Clear inning-specific state.
         next_state["base"] = jnp.where(
@@ -1143,13 +1164,6 @@ def _compiled_rollout(
         # Actual rollout/game-ending conditions
         # ------------------------------------------------------------
         ended = state["ended"]
-
-        # If you're replaying a fixed PA schedule, exhausting it ends the rollout.
-        if has_schedule:
-            source_ok = state["pa_slot"] < source_counts
-            active = ~state["ended"] & source_ok
-        else:
-            active = original["valid"][:, t].astype(bool) & ~state["ended"]
 
         if stop_when_decided:
             # Walkoff: home takes the lead during bottom of 9th or later.
@@ -1250,6 +1264,23 @@ def _compiled_rollout(
         # ------------------------------------------------------------------
         # 10. Record generated pitch.
         # ------------------------------------------------------------------
+        # ------------------------------------------------------------------
+        # Probability fields for PIT calibration.
+        # Record the B-head logit-probabilities and D-head outcome logits
+        # at every pitch so downstream code can compose an implied PA
+        # outcome distribution at terminal positions.
+        # ------------------------------------------------------------------
+        swing_prob = jax.nn.sigmoid(out_b["swing_logit"][:, 0])
+        contact_prob = jax.nn.sigmoid(out_b["contact_logit"][:, 0])
+        foul_prob = jax.nn.sigmoid(out_b["foul_logit"][:, 0])
+        hbp_prob = jax.nn.sigmoid(out_b["hbp_logit"][:, 0])
+
+        if has_d:
+            d_outcome_logits = out_d_post["outcome_logits"][:, 0]   # (B, 6)
+            d_outcome_probs = jax.nn.softmax(d_outcome_logits, axis=-1)
+        else:
+            d_outcome_probs = jnp.zeros((B, 6), jnp.float32)
+
         record = {
             "ctx": ctx,
             "active": active,
@@ -1266,20 +1297,23 @@ def _compiled_rollout(
             "contact": contact,
             "foul": foul,
             "hbp": hit_by_pitch,
-            "event": (
-                jax.nn.one_hot(
-                    jnp.maximum(event, 0),
-                    len(EVENT_FLAGS),
-                    dtype=bool,
-                )
-                & (event >= 0)[:, None]
-            ),
+            "event": _event_flags(jnp.where(c_apply, event, -1), getattr(c, 'c_event_mode', 'legacy')),
             "batter_idx": batter,
+            # PIT calibration fields
+            "swing_prob": swing_prob,
+            "contact_prob": contact_prob,
+            "foul_prob": foul_prob,
+            "hbp_prob": hbp_prob,
+            "d_outcome_probs": d_outcome_probs,
+            "zone": zone,
+            "balls": state["balls"],
+            "strikes": state["strikes"],
         }
 
         return (
             (
                 next_state,
+                next_half_complete,
                 history_valid,
                 next_cache_a,
                 next_cache_b,
@@ -1290,16 +1324,17 @@ def _compiled_rollout(
             record,
         )
 
-    carry = (state, jnp.zeros((B, T), bool), cache_a, cache_b, cache_c, cache_d, key)
+    carry = (state, jnp.zeros(B, bool), jnp.zeros((B, T), bool),
+             cache_a, cache_b, cache_c, cache_d, key)
     final, records = jax.lax.scan(body, carry, jnp.arange(T, dtype=jnp.int32))
     final_state = final[0]
-    return records, final_state
+    return records, final_state, final[3:7]
 
 
 def _rollout_batch_cached(
     heads: PitchformerHeads, batch: dict[str, np.ndarray], *, seed: int, engine: EmpiricalEngine,
     c_engine: CTransitionEngine | None, initial_state: dict[str, np.ndarray] | None,
-    stop_when_decided: bool, decode_len: int | None,
+    stop_when_decided: bool, decode_len: int | None, initial_cache=None,
 ) -> dict[str, np.ndarray]:
     """Run the checkpoint path with K/V cache + one compiled scan."""
 
@@ -1343,7 +1378,9 @@ def _rollout_batch_cached(
     cache_d = _cache_template(heads.d, heads.d_params, original) if heads.d is not None else None
     c_tables = _c_tables(c_engine)
     c_tables["enabled"] = jnp.array(int(c_engine is not None and heads.c is not None), jnp.int32)
-    records, final_state = _compiled_rollout(
+    if initial_cache is not None:
+        cache_a, cache_b, cache_c, cache_d = initial_cache
+    records, final_state, final_cache = _compiled_rollout(
         a=heads.a, b=heads.b, c=heads.c, d=heads.d,
         has_c=heads.c is not None and heads.c_params is not None,
         has_d=heads.d is not None and heads.d_params is not None,
@@ -1358,7 +1395,9 @@ def _rollout_batch_cached(
     )
     out = {name: np.asarray(jnp.swapaxes(value, 0, 1)) for name, value in records.items()}
     out["final_state"] = {name: np.asarray(value) for name, value in final_state.items()}
-    return _restore_trailing_padding(out, rollout_t)
+    out = _restore_trailing_padding(out, rollout_t)
+    out["final_cache"] = jax.tree.map(np.asarray, final_cache)
+    return out
 
 
 def _rollout_batch_reference(
@@ -1386,6 +1425,10 @@ def _rollout_batch_reference(
         if name in rolling:
             rolling[name].fill(0)
     rolling["valid"].fill(0)
+    # Generated measurements are observed; source-feed missingness is irrelevant.
+    for name in ("type_valid", "stuff_observed", "launch_observed"):
+        if name in rolling:
+            rolling[name].fill(1)
     state = _initial_state(original) if initial_state is None else {
         name: np.asarray(value).copy() for name, value in initial_state.items()
     }
@@ -1405,6 +1448,15 @@ def _rollout_batch_reference(
         "hbp": np.zeros((B, T), bool),
         "event": np.zeros((B, T, len(EVENT_FLAGS)), bool),
         "batter_idx": np.zeros((B, T), np.int32),
+        # PIT calibration fields
+        "swing_prob": np.zeros((B, T), np.float32),
+        "contact_prob": np.zeros((B, T), np.float32),
+        "foul_prob": np.zeros((B, T), np.float32),
+        "hbp_prob": np.zeros((B, T), np.float32),
+        "d_outcome_probs": np.zeros((B, T, 6), np.float32),
+        "zone": np.zeros((B, T), bool),
+        "balls": np.zeros((B, T), np.int32),
+        "strikes": np.zeros((B, T), np.int32),
     }
 
     for t in range(T):
@@ -1456,7 +1508,6 @@ def _rollout_batch_reference(
             out_c = heads.c.apply(heads.c_params, {name: jnp.asarray(value) for name, value in rolling.items()}, train=False)
             event = np.asarray(_sample_c_event(out_c["event_logits"][:, t], kc)).astype(np.int32)
             event[~active] = -1
-            records["event"][np.arange(B), t, np.maximum(event, 0)] = event >= 0
 
         px = stuff[:, 3] * STUFF_SCALE[3] + STUFF_CENTRE[3]
         pz = stuff[:, 4] * STUFF_SCALE[4] + STUFF_CENTRE[4]
@@ -1500,6 +1551,7 @@ def _rollout_batch_reference(
         # terminal PA rows already use the empirical PA transition, where a
         # second runner transition would double count the same movement.
         c_apply = active & ~terminal & (event >= 0) & (c_engine is not None)
+        records["event"][:, t] = np.asarray(_event_flags(jnp.asarray(np.where(c_apply, event, -1)), getattr(heads.c, "c_event_mode", "legacy")))
         if c_apply.any() and c_engine is not None:
             ct = c_engine.sample(event, state["base"], state["outs"], rng)
             state["base"] = np.where(c_apply, ct["base"], state["base"])
@@ -1530,8 +1582,55 @@ def _rollout_batch_reference(
         records["foul"][:, t] = foul
         records["hbp"][:, t] = hit_by_pitch
         records["batter_idx"][:, t] = rolling["batter_idx"][:, t]
+        # PIT calibration fields
+        records["swing_prob"][:, t] = np.asarray(jax.nn.sigmoid(out_b["swing_logit"][:, t]))
+        records["contact_prob"][:, t] = np.asarray(jax.nn.sigmoid(out_b["contact_logit"][:, t]))
+        records["foul_prob"][:, t] = np.asarray(jax.nn.sigmoid(out_b["foul_logit"][:, t]))
+        records["hbp_prob"][:, t] = np.asarray(jax.nn.sigmoid(out_b["hbp_logit"][:, t]))
+        zone_mask = (np.abs(px) <= ZONE_HALF_WIDTH) & (pz >= ZONE_BOTTOM) & (pz <= ZONE_TOP)
+        records["zone"][:, t] = zone_mask
+        records["balls"][:, t] = state["balls"]
+        records["strikes"][:, t] = state["strikes"]
+        if in_play.any() and heads.d is not None and heads.d_params is not None:
+            records["d_outcome_probs"][:, t] = np.asarray(jax.nn.softmax(out_d["outcome_logits"][:, t], axis=-1))
     records["final_state"] = state
     return records
+
+
+class GameHistory:
+    """Per-game strict-window caches, independent of batching and decode padding."""
+    def __init__(self, policy='game'):
+        self.policy = policy
+        self.rows = {}
+
+    def key(self, game, inning, half):
+        if self.policy == 'half_inning':
+            return (int(game), int(inning), int(half))
+        if self.policy == 'batting_side':
+            return (int(game), int(half))
+        return int(game)
+
+    def get(self, heads, batch, games, inning, half):
+        if self.policy == 'legacy':
+            return None
+        if heads.a.window_size <= 0:
+            raise ValueError('History continuation requires a strict window checkpoint')
+        values = []
+        for i, game in enumerate(games):
+            key = self.key(game, inning, half)
+            if key in self.rows:
+                values.append(self.rows[key])
+            else:
+                one = {k: v[i:i+1] for k, v in batch.items()}
+                values.append(tuple(_cache_template(model, params, one) if model is not None else None
+                    for model, params in [(heads.a,heads.a_params),(heads.b,heads.b_params),
+                                          (heads.c,heads.c_params),(heads.d,heads.d_params)]))
+        return jax.tree.map(lambda *xs: jnp.concatenate(xs, axis=0), *values)
+
+    def put(self, games, inning, half, cache):
+        if self.policy != 'legacy':
+            for i, game in enumerate(games):
+                self.rows[self.key(game, inning, half)] = jax.tree.map(lambda x: x[i:i+1], cache)
 
 
 def rollout_batch(
@@ -1544,6 +1643,7 @@ def rollout_batch(
     initial_state: dict[str, np.ndarray] | None = None,
     stop_when_decided: bool = False,
     decode_len: int | None = None,
+    initial_cache=None,
 ) -> dict[str, np.ndarray]:
     """Free-roll a padded batch of half-inning pitch sequences.
 
@@ -1554,8 +1654,10 @@ def rollout_batch(
     if _supports_cached_decode(heads):
         return _rollout_batch_cached(
             heads, batch, seed=seed, engine=engine, c_engine=c_engine,
-            initial_state=initial_state, stop_when_decided=stop_when_decided, decode_len=decode_len,
+            initial_state=initial_state, stop_when_decided=stop_when_decided, decode_len=decode_len, initial_cache=initial_cache,
         )
+    if initial_cache is not None:
+        raise ValueError("History continuation requires checkpoint-backed cached heads")
     return _rollout_batch_reference(
         heads, batch, seed=seed, engine=engine, c_engine=c_engine,
         initial_state=initial_state, stop_when_decided=stop_when_decided,

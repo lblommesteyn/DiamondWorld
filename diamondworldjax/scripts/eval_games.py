@@ -57,6 +57,9 @@ def main() -> None:
     parser.add_argument("--pitchformer-layers", type=int, default=2)
     parser.add_argument("--pitchformer-heads", type=int, default=4)
     parser.add_argument("--pitchformer-dropout", type=float, default=0.0)
+    parser.add_argument("--pa-arch", type=str, default="transformer",
+                        choices=["transformer", "gru"],
+                        help="PA sequence model architecture (requires --pitchformer).")
     parser.add_argument("--use-park", action="store_true")
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
@@ -104,6 +107,7 @@ def main() -> None:
     if args.pitchformer:
         model_kwargs.update(
             pitchformer=True,
+            pa_arch=args.pa_arch,
             pitchformer_dim=args.pitchformer_dim,
             pitchformer_layers=args.pitchformer_layers,
             pitchformer_heads=args.pitchformer_heads,

@@ -27,7 +27,6 @@ from numpyro.distributions import constraints
 import numpyro.handlers as nhandlers
 import optax
 from numpyro.infer import SVI, Trace_ELBO
-from numpyro.infer.svi import SVIState
 from numpyro.optim import optax_to_numpyro
 
 DEFAULT_LR        = 1e-3
@@ -335,11 +334,17 @@ def _apply_game_scheduled_sampling(
     params = svi.get_params(svi_state)
     is_multitask = "pa" in batch and "pitch" in batch
     pa_batch = batch["pa"] if is_multitask else batch
-    rng_key, model_key, game_key = jax.random.split(rng_key, 3)
+    guide_key, model_key, game_key = jax.random.split(rng_key, 3)
+    # Variational parameter names are not model sample-site names. Draw the
+    # guide once, then replay its complete latent hierarchy into the model.
+    guide_trace = nhandlers.trace(nhandlers.seed(
+        nhandlers.substitute(svi.guide, data=params), rng_seed=guide_key
+    )).get_trace(batch, player_table, teacher_force=False)
     with nhandlers.seed(rng_seed=model_key):
         with nhandlers.substitute(data=params):
-            with nhandlers.trace() as tr:
-                model(batch, player_table, teacher_force=False)
+            with nhandlers.replay(trace=guide_trace):
+                with nhandlers.trace() as tr:
+                    model(batch, player_table, teacher_force=False)
     site_name = "pa/pa_outcome" if is_multitask else "pa_outcome"
     if site_name not in tr:
         return batch
@@ -356,6 +361,49 @@ def _apply_game_scheduled_sampling(
         },
     }
     return {**batch, "pa": updated_pa} if is_multitask else updated_pa
+
+
+def _validate_resume_metadata(checkpoint, current):
+    """Reject a known configuration or registry change before reusing weights."""
+    import numpy as np
+    saved = checkpoint.get("pa_metadata")
+    expected = (current or {}).get("pa_metadata")
+    if not saved or not expected:
+        return  # Legacy checkpoints still receive parameter-tree checks.
+    for field in ("config", "train_seasons", "park_map", "player_table"):
+        left, left_tree = jax.tree_util.tree_flatten(saved.get(field))
+        right, right_tree = jax.tree_util.tree_flatten(expected.get(field))
+        if left_tree != right_tree or any(
+                not np.array_equal(a, b, equal_nan=True) if np.asarray(a).dtype.kind in "fc"
+                else not np.array_equal(a, b) for a, b in zip(left, right)):
+            raise ValueError(f"Cannot resume with changed PA {field}; use a compatible configuration")
+
+
+def _resume_params(svi, state, key, batch, player_table, loaded):
+    """Restore constrained checkpoint values through SVI's inverse transforms.
+
+    This is a parameter warm start, not an exact optimizer/RNG continuation.
+    New parameter sites keep their initialized values. Existing sites must have
+    matching trees/shapes; incompatible checkpoints must not silently remap them.
+    """
+    import numpy as np
+    current = svi.get_params(state)
+    unknown = set(loaded) - set(current)
+    if unknown:
+        raise ValueError(f"Checkpoint contains incompatible parameter sites: {sorted(unknown)}")
+    for name, value in loaded.items():
+        old, old_tree = jax.tree_util.tree_flatten(value)
+        new, new_tree = jax.tree_util.tree_flatten(current[name])
+        if old_tree != new_tree or any(np.shape(a) != np.shape(b) for a, b in zip(old, new)):
+            raise ValueError(f"Checkpoint parameter shape/tree mismatch: {name}")
+        if any(not np.isfinite(x).all() for x in old):
+            raise ValueError(f"Non-finite checkpoint parameter: {name}")
+    restored = svi.init(key, batch, player_table, teacher_force=True,
+                        init_params={**current, **loaded})
+    unconstrained = jax.tree_util.tree_leaves(svi.optim.get_params(restored.optim_state))
+    if any(not np.isfinite(x).all() for x in unconstrained):
+        raise ValueError("Checkpoint parameters are outside the current guide constraints")
+    return restored
 
 
 def train(
@@ -381,6 +429,7 @@ def train(
                                     # from the prior every step instead of being learned
     n_seasons: int        = 1,      # season axis, only used by skill_prior="walk"
     shared_task_skills: bool = False,
+    checkpoint_metadata: dict | None = None,
 ) -> tuple[Any, Any, list[float]]:
     """
     Run SVI training.
@@ -399,7 +448,7 @@ def train(
     Returns
     -------
     svi_state : final SVI state (contains params)
-    guide     : empty_guide (returned for API compatibility with Predictive)
+    guide     : variational player-skill guide used by SVI and posterior replay
     losses    : list of ELBO values (one per step)
     """
     optimizer = make_optimizer(lr, n_steps=n_steps, cosine_decay=cosine_decay, cosine_alpha=cosine_alpha)
@@ -431,19 +480,12 @@ def train(
     print(f"  Init done in {time.time()-t0:.1f}s", flush=True)
 
     if resume_path is not None:
-        loaded_params = load_checkpoint(Path(resume_path))
-        # Merge: overlay checkpoint values onto the freshly-initialised param
-        # tree so that new params (fusion layer, player_mu, player_sigma) keep
-        # their init values and the optimizer state covers the full tree.
-        # Reinitialising with only loaded_params (a subset) leaves new params
-        # without Adam moment estimates, which produces NaN on the first update.
-        current_params = svi.get_params(svi_state)
-        merged_params = {**current_params, **loaded_params}
-        new_optim_state = svi.optim.init(merged_params)
-        svi_state = SVIState(new_optim_state, svi_state.mutable_state, svi_state.rng_key)
-        print(f"  Resumed params from {resume_path}", flush=True)
-        print(f"  Checkpoint keys loaded: {len(loaded_params)}  "
-              f"new keys (fresh init): {len(merged_params) - len(loaded_params)}", flush=True)
+        with open(resume_path, "rb") as f:
+            checkpoint = pickle.load(f)
+        _validate_resume_metadata(checkpoint, checkpoint_metadata)
+        svi_state = _resume_params(svi, svi_state, init_key, first_batch,
+                                   first_player_table, checkpoint["params"])
+        print(f"  Resumed parameters from {resume_path} (optimizer/schedule restarted)", flush=True)
 
     losses: list[float] = []
     nan_skips = 0
@@ -494,10 +536,10 @@ def train(
             )
 
         if ckpt_dir is not None and step > 0 and step % CKPT_INTERVAL == 0:
-            _save_checkpoint(svi, svi_state, ckpt_dir, step)
+            _save_checkpoint(svi, svi_state, ckpt_dir, step, checkpoint_metadata)
 
     if ckpt_dir is not None:
-        _save_checkpoint(svi, svi_state, ckpt_dir, n_steps)
+        _save_checkpoint(svi, svi_state, ckpt_dir, n_steps, checkpoint_metadata)
 
     if log_path is not None:
         path = Path(log_path)
@@ -507,11 +549,11 @@ def train(
     return svi_state, guide, losses
 
 
-def _save_checkpoint(svi: SVI, state, ckpt_dir: Path, step: int) -> None:
+def _save_checkpoint(svi: SVI, state, ckpt_dir: Path, step: int, metadata=None) -> None:
     params = svi.get_params(state)
     path   = ckpt_dir / f"dwjax_step_{step:07d}.pkl"
     with open(path, "wb") as f:
-        pickle.dump({"step": step, "params": params}, f)
+        pickle.dump({"step": step, "params": params, **(metadata or {})}, f)
     print(f"  Checkpoint saved → {path}", flush=True)
 
 

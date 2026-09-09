@@ -34,7 +34,7 @@ import flax.linen as nn
 import jax
 import jax.numpy as jnp
 
-from .pitchformer import Trunk
+from .pitchformer import Trunk, _loss_valid
 
 # Order matters: it is the column order of the label array the loader builds.
 EVENT_FLAGS = ("wild_pitch", "passed_ball", "balk", "steal", "caught_stealing",
@@ -58,12 +58,26 @@ class TransformerC(nn.Module):
     n_layers: int = 4
     n_heads: int = 6
     dropout: float = 0.1
+    player_mode: str = "id"
+    skill_seasons: int = 1
+    residual_dim: int = 0
+    pitch_history: bool = False
+    position_encoding: str = "learned"
+    window_size: int = 0
+    observation_masks: bool = False
+    c_event_mode: str = "legacy"
+    c_support: tuple | None = None
 
     @nn.compact
-    def __call__(self, batch, *, train: bool, decode: bool = False):
+    def __call__(self, batch, *, train: bool, decode: bool = False,
+                 ss_override=None):
         h, _ = Trunk(self.n_pitchers, self.n_batters, self.n_parks, self.d_model,
-                     self.n_layers, self.n_heads, self.dropout, name="trunk")(
-            batch, train=train, decode=decode)
+                     self.n_layers, self.n_heads, self.dropout,
+                     player_mode=self.player_mode, skill_seasons=self.skill_seasons,
+                     residual_dim=self.residual_dim, pitch_history=self.pitch_history,
+                     position_encoding=self.position_encoding, window_size=self.window_size,
+                     observation_masks=self.observation_masks, c_event_mode=self.c_event_mode, name="trunk")(
+            batch, train=train, decode=decode, ss_override=ss_override)
 
         obs = jnp.concatenate([
             jax.nn.one_hot(batch["pitch_type"], 8),
@@ -79,14 +93,26 @@ class TransformerC(nn.Module):
         # Bias initialised negative so every head starts near the base rate of a
         # rare event rather than at p=0.5. Starting at 0.5 on an event that occurs
         # twice in 100,000 pitches spends the early steps undoing the init.
-        logits = nn.Dense(N_EVENTS, name="events",
-                          bias_init=nn.initializers.constant(-6.0))(z)
+        logits = nn.Dense(256 if self.c_event_mode == "bundles" else N_EVENTS, name="events",
+                          bias_init=(lambda key, shape, dtype=jnp.float32: jnp.full(shape, -6., dtype).at[0].set(0.))
+                          if self.c_event_mode == "bundles" else nn.initializers.constant(-6.0))(z)
+        if self.c_event_mode == "bundles" and self.c_support is not None:
+            base = sum((batch['ctx'][..., 3+i] > .5).astype(jnp.int32) * (1 << i) for i in range(3))
+            outs = jnp.clip(jnp.rint(batch['ctx'][..., 2] * 2).astype(jnp.int32), 0, 2)
+            supported = jnp.asarray(self.c_support, dtype=bool).reshape(256, 24).T[base * 3 + outs]
+            logits = jnp.where(supported, logits, -1e30)
         return {"event_logits": logits}
 
 
 def loss_c(out, batch):
     """Masked BCE per event, plus the per-event breakdown for reporting."""
-    valid = batch["valid"][..., None]
+    if out['event_logits'].shape[-1] == 256:
+        target = jnp.sum(batch['events'].astype(jnp.int32) * (1 << jnp.arange(8)), -1)
+        logp = jnp.take_along_axis(jax.nn.log_softmax(out['event_logits']), target[..., None], -1)[..., 0]
+        mask = _loss_valid(batch) * batch.get('c_eligible', 1)
+        nll = -jnp.where(mask > 0, logp, 0.).sum() / jnp.maximum(mask.sum(), 1)
+        return nll, {'nll_bundle': nll}
+    valid = _loss_valid(batch)[..., None]
     y = batch["events"]
     logit = out["event_logits"]
     ll = y * jax.nn.log_sigmoid(logit) + (1 - y) * jax.nn.log_sigmoid(-logit)

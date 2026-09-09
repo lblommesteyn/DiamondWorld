@@ -1,24 +1,26 @@
-"""PA-level causal transformer for the outcome model.
+"""PA-level sequence models for the outcome model.
 
-Adapts the pitchformer's causal-attention architecture (CausalBlock + causal_mask)
-to operate over the PA sequence within a game, rather than over individual pitches.
+Two architectures share the same (B, T, C) -> (B, T, d_model) contract:
 
-Unlike the pitchformer Trunk, this module does NOT embed players or parks itself.
-It receives the pre-computed context vector from pa_model (game_state, pitcher_z,
-batter_z, park_emb already concatenated) and runs causal self-attention over the T
-PA positions so each PA can attend to all previous PAs in the same game.
+  PATransformer  — causal self-attention, used via ``--pitchformer``
+  PAGRU          — gated recurrent unit, used via ``--pitchformer --pa-arch gru``
 
-The pretrained pitchformer weights do not transfer (different granularity, different
-embedding scheme), but the architecture — projection → positional embedding → causal
-transformer blocks → layer norm — is reused.
+Both receive the pre-computed context vector from pa_model (game_state, pitcher_z,
+batter_z, park_emb already concatenated).  Neither embeds players or parks itself.
 
-Used via the ``--pitchformer`` flag in train_pa / pa_model.
+PAGRU additionally exposes a ``step`` classmethod for compiled scan rollout: it
+advances one timestep given a hidden-state carry, avoiding the O(T^2) recompute
+that the transformer requires at simulation time.
 """
 from __future__ import annotations
 
+from functools import partial
+
+import jax
 import jax.numpy as jnp
 import flax.linen as nn
 from numpyro.contrib.module import flax_module
+import numpyro
 
 from .pitchformer import CausalBlock, causal_mask
 
@@ -46,6 +48,7 @@ class PATransformer(nn.Module):
     n_layers: int = 2
     n_heads: int = 4
     dropout: float = 0.0
+    position_encoding: str = "learned"
 
     @nn.compact
     def __call__(
@@ -62,7 +65,16 @@ class PATransformer(nn.Module):
 
         # Learned positional embedding (PA index within a game)
         T = x.shape[1]
-        pos = nn.Embed(512, self.d_model, name="pos_emb")(jnp.arange(T))
+        if self.position_encoding == "sinusoidal":
+            frequency = jnp.exp(-jnp.log(10000.0) * jnp.arange(0, self.d_model, 2) / self.d_model)
+            angle = jnp.arange(T)[:, None] * frequency[None, :]
+            pos = jnp.stack([jnp.sin(angle), jnp.cos(angle)], -1).reshape(T, -1)[:, :self.d_model]
+        elif self.position_encoding == "learned":
+            if T > 512:
+                raise ValueError("Legacy learned PA positions support at most 512 timesteps")
+            pos = nn.Embed(512, self.d_model, name="pos_emb")(jnp.arange(T))
+        else:
+            raise ValueError("Unknown PA positional encoding")
         x = x + pos[None]
 
         # Causal self-attention: position t attends to positions < t only.
@@ -89,6 +101,8 @@ def pa_transformer_numpyro(
     n_heads: int = 4,
     dropout: float = 0.0,
     name: str = "pa_transformer",
+    position_encoding: str = "learned",
+    train: bool = False,
 ) -> jnp.ndarray:
     """Register PATransformer as a flax_module site and return (B, T, d_model).
 
@@ -105,6 +119,9 @@ def pa_transformer_numpyro(
 
     B, T = valid_mask.shape
     C = context_raw.shape[-1]
+    if position_encoding == "auto":
+        existing = numpyro.param(name + "$params")
+        position_encoding = "sinusoidal" if existing is not None and "pos_emb" not in existing else "learned"
 
     transformer = flax_module(
         name,
@@ -113,9 +130,179 @@ def pa_transformer_numpyro(
             n_layers=n_layers,
             n_heads=n_heads,
             dropout=dropout,
+            position_encoding=position_encoding,
         ),
         jnp.ones((B, T, C)),           # context_raw dummy
         jnp.ones((B, T), dtype=bool),   # valid_mask dummy
     )
 
-    return transformer(context_raw, valid_mask, train=False)
+    rngs = {"dropout": numpyro.prng_key()} if train and dropout else {}
+    return transformer(context_raw, valid_mask, train=train, rngs=rngs)
+
+
+# ---------------------------------------------------------------------------
+# GRU variant
+# ---------------------------------------------------------------------------
+
+class _GRUStack(nn.Module):
+    """N stacked GRU layers with LayerNorm between them."""
+    d_model: int
+    n_layers: int
+
+    @nn.compact
+    def __call__(self, x: jnp.ndarray, valid_mask: jnp.ndarray) -> jnp.ndarray:
+        B, T, _ = x.shape
+        mask = valid_mask.astype(x.dtype)[..., None]  # (B, T, 1)
+        for i in range(self.n_layers):
+            cell = nn.GRUCell(features=self.d_model, name=f"gru_{i}")
+            h = jnp.zeros((B, self.d_model), dtype=x.dtype)
+            outputs = []
+            for t in range(T):
+                h_new, _ = cell(h, x[:, t, :])
+                h = jnp.where(mask[:, t, :], h_new, h)
+                outputs.append(h)
+            x = jnp.stack(outputs, axis=1)
+            if i < self.n_layers - 1:
+                x = nn.LayerNorm(name=f"ln_{i}")(x)
+        return x
+
+
+class PAGRU(nn.Module):
+    """GRU over PA sequences within a game.
+
+    Same contract as PATransformer: (B, T, C) context + (B, T) valid -> (B, T, d_model).
+    No positional embedding — the recurrence carries position implicitly.
+    """
+    d_model: int = 128
+    n_layers: int = 2
+
+    @nn.compact
+    def __call__(
+        self,
+        context_raw: jnp.ndarray,
+        valid_mask: jnp.ndarray,
+        *,
+        train: bool = False,
+    ) -> jnp.ndarray:
+        x = nn.Dense(self.d_model, name="input_proj")(context_raw)
+        x = nn.LayerNorm(name="input_ln")(x)
+        x = _GRUStack(self.d_model, self.n_layers, name="gru_stack")(x, valid_mask)
+        return nn.LayerNorm(name="out_norm")(x)
+
+
+def pa_gru_numpyro(
+    context_raw: jnp.ndarray,
+    valid_mask: jnp.ndarray,
+    d_model: int = 128,
+    n_layers: int = 2,
+    name: str = "pa_gru",
+) -> jnp.ndarray:
+    """Register PAGRU as a flax_module site and return (B, T, d_model)."""
+    if d_model <= 0 or n_layers <= 0:
+        raise ValueError("gru dim and layers must be positive")
+
+    B, T = valid_mask.shape
+    C = context_raw.shape[-1]
+
+    gru = flax_module(
+        name,
+        PAGRU(d_model=d_model, n_layers=n_layers),
+        jnp.ones((B, T, C)),
+        jnp.ones((B, T), dtype=bool),
+    )
+
+    return gru(context_raw, valid_mask, train=False)
+
+
+# ---------------------------------------------------------------------------
+# Scan-compatible step functions for fast rollout
+# ---------------------------------------------------------------------------
+
+def gru_step_fn(gru_module: PAGRU, params: dict):
+    """Return a pure function ``(carry, context_t) -> (carry, output_t)``.
+
+    ``carry`` is a tuple of per-layer hidden states, each (B, d_model).
+    ``context_t`` is a single timestep's raw context (B, C).
+    ``output_t`` is the GRU output (B, d_model).
+
+    The returned function is suitable for ``jax.lax.scan``.
+    """
+    p = params
+
+    def step(carry, context_t):
+        x = nn.Dense(gru_module.d_model, name="input_proj").apply(
+            {"params": p["input_proj"]}, context_t)
+        x = nn.LayerNorm(name="input_ln").apply(
+            {"params": p["input_ln"]}, x)
+
+        new_carry = []
+        for i in range(gru_module.n_layers):
+            cell = nn.GRUCell(features=gru_module.d_model, name=f"gru_{i}")
+            h_prev = carry[i]
+            h_new, _ = cell.apply(
+                {"params": p["gru_stack"][f"gru_{i}"]}, h_prev, x)
+            new_carry.append(h_new)
+            x = h_new
+            if i < gru_module.n_layers - 1:
+                x = nn.LayerNorm(name=f"ln_{i}").apply(
+                    {"params": p["gru_stack"][f"ln_{i}"]}, x)
+
+        out = nn.LayerNorm(name="out_norm").apply(
+            {"params": p["out_norm"]}, x)
+        return tuple(new_carry), out
+
+    return step
+
+
+def gru_init_carry(n_layers: int, batch_size: int, d_model: int):
+    """Return the initial carry (all-zeros hidden states) for gru_step_fn."""
+    return tuple(
+        jnp.zeros((batch_size, d_model)) for _ in range(n_layers)
+    )
+
+
+# ---------------------------------------------------------------------------
+# Transformer: history-buffer step for fast rollout
+# ---------------------------------------------------------------------------
+
+def transformer_step_fn(transformer_module: PATransformer, params: dict,
+                        max_seq_len: int):
+    """Return ``(carry, context_t) -> (carry, output_t)`` for PATransformer.
+
+    Uses a pre-allocated history buffer rather than Flax decode-mode caching.
+    Each step writes the new context into the buffer and runs a full forward
+    pass, taking only the output at the current position.  This is O(t) per
+    step / O(T^2) total, but T~70 with d_model=128 and 2 layers is trivially
+    fast once NumPyro overhead is removed.
+
+    carry = (history_buf, valid_buf, step_idx)
+
+    ``step_idx`` is per-game (B,) so games at different PA counts work
+    correctly in the simulator (where the active set shrinks as games end).
+    """
+
+    def step(carry, context_t):
+        history_buf, valid_buf, step_idx = carry
+        B = context_t.shape[0]
+        rows = jnp.arange(B)
+        history_buf = history_buf.at[rows, step_idx, :].set(context_t)
+        valid_buf = valid_buf.at[rows, step_idx].set(True)
+
+        out = transformer_module.apply(
+            {"params": params}, history_buf, valid_buf, train=False,
+        )
+        output_t = out[rows, step_idx, :]
+
+        return (history_buf, valid_buf, step_idx + 1), output_t
+
+    return step
+
+
+def transformer_init_carry(batch_size: int, max_seq_len: int,
+                           context_dim: int):
+    """Initial carry for transformer_step_fn."""
+    return (
+        jnp.zeros((batch_size, max_seq_len, context_dim)),
+        jnp.zeros((batch_size, max_seq_len), dtype=jnp.bool_),
+        jnp.zeros(batch_size, dtype=jnp.int32),
+    )

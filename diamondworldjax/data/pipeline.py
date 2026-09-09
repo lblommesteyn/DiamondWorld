@@ -66,6 +66,13 @@ def load_season(season: int, data_root: Path = _DATA_ROOT) -> pl.DataFrame:
             ).alias("pa_outcome_idx")
         ])
 
+    # Pre-PA fatigue must be computed before filtering to terminal rows.
+    if "pitch_count_game" in df.columns:
+        df = df.with_columns(
+            (pl.col("pitch_count_game").min().over(["game_pk", "at_bat_number", "pitcher_id"]) - 1)
+            .clip(lower_bound=0).alias("pitch_count_before_pa")
+        )
+
     # Derived fields
     if "inning" in df.columns:
         df = df.with_columns([

@@ -92,19 +92,19 @@ fi
 
 if (( ! SKIP_TEST )); then
   run_logged test python -m diamondworldjax.scripts.eval_pa \
-    --ckpt "$CKPT" --batch "$BATCH" --samples "$SAMPLES" --seed "$SEED" \
+    --ckpt "$CKPT" --train-end "$TRAIN_END" --use-park --batch "$BATCH" --samples "$SAMPLES" --seed "$SEED" \
     --out "$RUN_DIR/test.json" "${MODEL_ARGS[@]}" "${EVAL_EXTRA[@]}"
 fi
 
 if (( ! SKIP_EVAL )); then
   run_logged evaluate_players python -m diamondworldjax.scripts.eval_players \
-    --ckpt "$CKPT" --batch "$BATCH" --samples "$SAMPLES" --seed "$SEED" \
+    --ckpt "$CKPT" --train-end "$TRAIN_END" --use-park --batch "$BATCH" --samples "$SAMPLES" --seed "$SEED" \
     "${MODEL_ARGS[@]}" "${EVAL_EXTRA[@]}"
 fi
 
 if (( ! SKIP_SIMS )); then
   run_logged simulate python -m diamondworldjax.scripts.simulate_games \
-    --ckpt "$CKPT" --limit-games "$SIM_GAMES" --seed "$SEED" \
+    --ckpt "$CKPT" --train-end "$TRAIN_END" --use-park --limit-games "$SIM_GAMES" --seed "$SEED" \
     --dump-runs "$RUN_DIR/sim_runs.npy" "${MODEL_ARGS[@]}" "${SIM_EXTRA[@]}"
 fi
 

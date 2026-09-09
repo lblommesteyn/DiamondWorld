@@ -171,7 +171,8 @@ LAUNCH_SCALE = np.array([14.0, 25.0], dtype=np.float32)
 
 def make_sequences(df: pl.DataFrame, maps: dict, max_len: int = 160,
                    geometry_table=None, events: pl.DataFrame | None = None,
-                   game_ctx: pl.DataFrame | None = None):
+                   game_ctx: pl.DataFrame | None = None,
+                   context_len: int = 0, history_reset: str = "batting_side"):
     """(game, half) sequences -> padded arrays for the A/B/C transformers.
 
     `events` is the table from data/extract_events.py. It is LEFT-joined, so a
@@ -192,7 +193,10 @@ def make_sequences(df: pl.DataFrame, maps: dict, max_len: int = 160,
         keep = ["game_pk"] + [c for c in ENV_COLS if c in game_ctx.columns]
         df = df.join(game_ctx.select(keep), on="game_pk", how="left")
 
-    df = df.sort(["game_pk", "half", "at_bat_number", "pitch_number"])
+    if history_reset not in ('game', 'half_inning', 'batting_side'):
+        raise ValueError('Unknown history reset policy')
+    order = ['game_pk'] + (['half'] if history_reset == 'batting_side' else []) + ['at_bat_number', 'pitch_number']
+    df = df.sort(order)
     ctx_all = np.concatenate([_ctx(df), _env(df)], axis=-1)
 
     pit = np.array([maps["pitcher"].get(v, UNKNOWN)
@@ -216,8 +220,8 @@ def make_sequences(df: pl.DataFrame, maps: dict, max_len: int = 160,
 
     stuff = np.stack([df[c].to_numpy().astype(np.float32) for c in STUFF_COLS], -1)
     stuff_valid = np.isfinite(stuff).all(-1).astype(np.float32)
-    stuff = np.nan_to_num(stuff)
-    stuff = (stuff - STUFF_CENTRE) / STUFF_SCALE
+    stuff_observed = np.isfinite(stuff)
+    stuff = np.where(stuff_observed, (stuff - STUFF_CENTRE) / STUFF_SCALE, 0.0)
 
     if all(f in df.columns for f in EVENT_FLAGS):
         ev_all = np.stack([df[f].to_numpy().astype(np.float32)
@@ -236,8 +240,9 @@ def make_sequences(df: pl.DataFrame, maps: dict, max_len: int = 160,
     ls = df["launch_speed"].to_numpy().astype(np.float32)
     la = df["launch_angle"].to_numpy().astype(np.float32)
     launch_valid = (in_play > 0) & np.isfinite(ls) & np.isfinite(la)
-    launch = np.stack([np.nan_to_num(ls), np.nan_to_num(la)], -1)
-    launch = (launch - LAUNCH_CENTRE) / LAUNCH_SCALE
+    launch = np.stack([ls, la], -1)
+    launch_observed = np.isfinite(launch) & (in_play > 0)[:, None]
+    launch = np.where(launch_observed, (launch - LAUNCH_CENTRE) / LAUNCH_SCALE, 0.0)
     oc = df["pa_outcome"].to_list()
     batted_out = np.array([BATTED_OUTCOMES.get(o, -1) if o is not None else -1
                            for o in oc], dtype=np.int32)
@@ -257,19 +262,33 @@ def make_sequences(df: pl.DataFrame, maps: dict, max_len: int = 160,
     ab = df["at_bat_number"].to_numpy()
     newseg = np.empty(len(gp), dtype=bool)
     newseg[0] = True
-    newseg[1:] = (gp[1:] != gp[:-1]) | (hf[1:] != hf[:-1])
+    newseg[1:] = gp[1:] != gp[:-1]
+    if history_reset in ('batting_side', 'half_inning'):
+        newseg[1:] |= hf[1:] != hf[:-1]
+    if history_reset == 'half_inning':
+        innings = df['inning'].to_numpy()
+        newseg[1:] |= innings[1:] != innings[:-1]
     starts = np.flatnonzero(newseg)
     ends = np.append(starts[1:], len(gp))
 
-    # A long half is split into consecutive windows rather than truncated, so no
-    # pitches are silently discarded from training.
+    # A long half is split into windows. With context_len > 0, windows overlap so
+    # each target range has context_len tokens of left context for the model.
     spans = []
+    if not 0 <= context_len < max_len:
+        raise ValueError("context_len must be in [0, max_len)")
+    target_len = max_len - context_len
     for s, e in zip(starts, ends):
-        for a in range(s, e, max_len):
-            spans.append((a, min(a + max_len, e)))
+        for a in range(s, e, target_len):
+            win_start = max(a - context_len, s)
+            win_end = min(a + target_len, e)
+            ctx_tokens = a - win_start
+            spans.append((win_start, win_end, ctx_tokens))
 
     n = len(spans)
     out = {
+        "pa_outcome": np.full((n, max_len), -1, np.int32),
+        "pa_terminal": np.zeros((n, max_len), bool),
+        "season": np.zeros((n, max_len), np.int32),
         "pitcher_idx": np.zeros((n, max_len), np.int32),
         "batter_idx": np.zeros((n, max_len), np.int32),
         "park_idx": np.zeros((n, max_len), np.int32),
@@ -292,8 +311,17 @@ def make_sequences(df: pl.DataFrame, maps: dict, max_len: int = 160,
     }
     if ev_all is not None:
         out["events"] = np.zeros((n, max_len, len(EVENT_FLAGS)), np.float32)
-    for i, (a, b) in enumerate(spans):
+    out["stuff_observed"] = np.zeros((n, max_len, 5), bool)
+    out["launch_observed"] = np.zeros((n, max_len, 2), bool)
+    out["c_eligible"] = np.zeros((n, max_len), bool)
+    if context_len > 0:
+        out["loss_mask"] = np.zeros((n, max_len), np.float32)
+    for i, (a, b, ctx_tok) in enumerate(spans):
         L = b - a
+        outcome_map = {name: j for j, name in enumerate(("K", "BB", "HBP", "1B", "2B", "3B", "HR", "out", "E"))}
+        out["pa_outcome"][i, :L] = [outcome_map.get(v, -1) for v in oc[a:b]]
+        out["pa_terminal"][i, :L] = df["pa_terminal"].to_numpy()[a:b]
+        out["season"][i, :L] = df["season"].to_numpy()[a:b] if "season" in df.columns else 2015
         out["pitcher_idx"][i, :L] = pit[a:b]
         out["batter_idx"][i, :L] = bat[a:b]
         out["park_idx"][i, :L] = prk[a:b]
@@ -302,6 +330,9 @@ def make_sequences(df: pl.DataFrame, maps: dict, max_len: int = 160,
         out["pitch_type"][i, :L] = ptype[a:b]
         out["type_valid"][i, :L] = type_valid[a:b]
         out["stuff"][i, :L] = stuff[a:b]
+        out["stuff_observed"][i, :L] = stuff_observed[a:b]
+        out["launch_observed"][i, :L] = launch_observed[a:b]
+        out["c_eligible"][i, :L] = ~out["pa_terminal"][i, :L]
         out["stuff_valid"][i, :L] = stuff_valid[a:b]
         out["swing"][i, :L] = swing[a:b]
         out["contact"][i, :L] = contact[a:b]
@@ -315,8 +346,10 @@ def make_sequences(df: pl.DataFrame, maps: dict, max_len: int = 160,
         out["batted_valid"][i, :L] = batted_valid[a:b]
         if ev_all is not None:
             out["events"][i, :L] = ev_all[a:b]
+        if context_len > 0:
+            out["loss_mask"][i, ctx_tok:L] = 1.0
     return out
 
 
 def load_seasons(seasons, path="data/processed/pitches_{}.parquet"):
-    return [pl.read_parquet(path.format(s)) for s in seasons]
+    return [pl.read_parquet(path.format(s)).with_columns(pl.lit(s).alias("season")) for s in seasons]

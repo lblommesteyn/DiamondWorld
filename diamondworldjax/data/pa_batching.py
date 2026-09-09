@@ -12,7 +12,7 @@ import polars as pl
 MAX_PA: int = 90  # covers extra-inning games comfortably
 
 
-def build_pa_batch(pa_df: pl.DataFrame, max_pa: int = MAX_PA) -> dict:
+def build_pa_batch(pa_df: pl.DataFrame, max_pa: int | None = None) -> dict:
     """
     Convert PA-terminal rows into a padded JAX batch.
 
@@ -27,6 +27,11 @@ def build_pa_batch(pa_df: pl.DataFrame, max_pa: int = MAX_PA) -> dict:
     game_ids_arr = pa_df["game_pk"].to_numpy()
     unique_games = np.unique(game_ids_arr)
     B = len(unique_games)
+    longest = int(pa_df.group_by("game_pk").len()["len"].max() or 0) if B else 0
+    if max_pa is None:
+        max_pa = max(MAX_PA, ((longest + 15) // 16) * 16)
+    elif max_pa < longest:
+        raise ValueError(f"max_pa={max_pa} would truncate a {longest}-PA game")
 
     def _f():  return np.zeros((B, max_pa), dtype=np.float32)
     def _i(v=0): return np.full((B, max_pa), v, dtype=np.int32)
@@ -70,7 +75,11 @@ def build_pa_batch(pa_df: pl.DataFrame, max_pa: int = MAX_PA) -> dict:
     raw_pao      = _col("pa_outcome_idx", -1.0)
     raw_runs     = _col("runs_scored", 0.0)
     raw_bsa      = _col("base_state_after", 0.0)
-    raw_pc_game  = _col("pitch_count_game", 0.0)
+    raw_pc_game = _col("pitch_count_before_pa", 0.0)
+    if "pitch_count_before_pa" not in pa_df.columns and "pitch_count_game" in pa_df.columns:
+        if "pitch_count_pa" not in pa_df.columns:
+            raise ValueError("PA fatigue requires pitch_count_before_pa or pitch_count_pa; load full pitches first")
+        raw_pc_game = np.maximum(_col("pitch_count_game") - _col("pitch_count_pa"), 0)
     raw_at_bat   = _col("at_bat_number", 0.0)
 
     def _hand_col(*names):

@@ -15,7 +15,8 @@ from diamondworldjax.model.transformer_c import EVENT_FLAGS
 
 
 class CTransitionEngine:
-    def __init__(self) -> None:
+    def __init__(self, event_mode="legacy") -> None:
+        self.event_mode = event_mode
         self._base: dict[tuple[int, int, int], np.ndarray] = {}
         self._outs: dict[tuple[int, int, int], np.ndarray] = {}
         self._runs: dict[tuple[int, int, int], np.ndarray] = {}
@@ -51,14 +52,22 @@ class CTransitionEngine:
         # Terminal PA rows conflate that event with ordinary PA advancement.
         d = d.filter(~pl.col("pa_terminal").cast(pl.Boolean)
                      & pl.col("next_base").is_not_null() & pl.col("next_outs").is_not_null())
-        for event_idx, flag in enumerate(EVENT_FLAGS):
-            if flag not in d.columns:
+        if self.event_mode == 'bundles':
+            d = d.with_columns(sum(pl.col(f).fill_null(0).cast(pl.Int32) * (1 << i)
+                                  for i, f in enumerate(EVENT_FLAGS) if f in d.columns).alias('_bundle'))
+            event_columns = [(int(k)-1, int(k)) for k in d['_bundle'].unique().to_list() if k]
+        else:
+            event_columns = list(enumerate(EVENT_FLAGS))
+        for event_idx, flag in event_columns:
+            if self.event_mode != "bundles" and flag not in d.columns:
                 continue
-            e = d.filter(pl.col(flag) > 0)
+            e = d.filter(pl.col("_bundle") == flag) if self.event_mode == "bundles" else d.filter(pl.col(flag) > 0)
             if not e.height:
                 continue
             for row in e.select(["base_state", "outs", "next_base", "next_outs", "next_runs"]).iter_rows():
                 base, outs, nxt_base, nxt_outs, runs = map(int, row)
+                if nxt_outs < outs:
+                    nxt_outs, nxt_base = 3, 0
                 key = (event_idx, int(np.clip(base, 0, 7)), int(np.clip(outs, 0, 2)))
                 self._base.setdefault(key, []).append(int(np.clip(nxt_base, 0, 7)))
                 self._outs.setdefault(key, []).append(int(np.clip(nxt_outs, 0, 3)))
@@ -67,6 +76,14 @@ class CTransitionEngine:
             for key, values in table.items():
                 table[key] = np.asarray(values, dtype=np.int32)
         return self
+
+    def support(self):
+        """Explicit model support: none plus bundles with a fitted transition."""
+        result = np.zeros((256, 24), bool)
+        result[0] = True
+        for event, base, outs in self._base:
+            result[event + 1, base * 3 + outs] = True
+        return tuple(result.ravel().tolist())
 
     def sample(self, event: np.ndarray, base_state: np.ndarray, outs: np.ndarray,
                rng: np.random.Generator) -> dict[str, np.ndarray]:

@@ -31,7 +31,7 @@ class Sim:
     def __init__(self, ckpt=V15, recal=RECAL, recency_hl=2.0, scale=0.18,
                  skill_mode="mean", recal_key="b_heur", train_end=2023, hook_model=False,
                  contact_quality=False, per_stat_shrink=False, skill_prior="iso",
-                 pitchformer=False, apply_recal=True):
+                 pitchformer=False, pa_arch="transformer", apply_recal=True):
         # v15 (default) is trained through 2023, so its player embeddings are index-locked
         # to a 2015-2023 table; train_end must match the checkpoint (2022 for v13).
         # contact_quality must match the checkpoint too (True for v16, else the model
@@ -65,6 +65,7 @@ class Sim:
             _mkw.update(season_base=train_seasons[0], n_seasons=len(train_seasons))
         if pitchformer:
             _mkw["pitchformer"] = True
+            _mkw["pa_arch"] = pa_arch
         self.model_fn = partial(pa_model, **_mkw)
         self.pitchformer = pitchformer
         self.skill_prior = skill_prior
