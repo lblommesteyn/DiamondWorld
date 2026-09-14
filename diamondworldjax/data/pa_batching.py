@@ -29,7 +29,9 @@ def build_pa_batch(pa_df: pl.DataFrame, max_pa: int | None = None) -> dict:
     B = len(unique_games)
     longest = int(pa_df.group_by("game_pk").len()["len"].max() or 0) if B else 0
     if max_pa is None:
-        max_pa = max(MAX_PA, ((longest + 15) // 16) * 16)
+        from diamondworldjax.train.runtime import length_bucket
+        max_pa = next((size for size in (96, 128, 192, 256, 384, 512)
+                       if size >= longest), length_bucket(longest))
     elif max_pa < longest:
         raise ValueError(f"max_pa={max_pa} would truncate a {longest}-PA game")
 

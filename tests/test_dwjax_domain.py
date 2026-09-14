@@ -79,3 +79,36 @@ def test_home_run_can_end_game_mid_bottom_ninth():
     )
     assert stepped.game_over.item()
     assert stepped.state.home_score.item() == 4
+
+
+def test_hbp_ends_pa_and_advances_batter():
+    stepped = apply_pitch_result(
+        _state(balls=1, strikes=1),
+        _pitch(pa_outcome=int(PAOutcome.HIT_BY_PITCH)),
+    )
+    assert stepped.pa_terminal.item()
+    assert stepped.outcome.item() == int(PAOutcome.HIT_BY_PITCH)
+    assert stepped.state.base_state.item() == 1
+    assert stepped.state.balls.item() == 0
+    assert stepped.state.strikes.item() == 0
+
+
+def test_hbp_bases_loaded_scores_run():
+    stepped = apply_pitch_result(
+        _state(base_state=7),
+        _pitch(pa_outcome=int(PAOutcome.HIT_BY_PITCH)),
+    )
+    assert stepped.pa_terminal.item()
+    assert stepped.outcome.item() == int(PAOutcome.HIT_BY_PITCH)
+    assert stepped.state.base_state.item() == 7
+    assert stepped.state.away_score.item() == 1
+
+
+def test_hbp_does_not_increment_ball_count():
+    stepped = apply_pitch_result(
+        _state(balls=3),
+        _pitch(pa_outcome=int(PAOutcome.HIT_BY_PITCH)),
+    )
+    assert stepped.pa_terminal.item()
+    assert stepped.outcome.item() == int(PAOutcome.HIT_BY_PITCH)
+    assert stepped.state.balls.item() == 0

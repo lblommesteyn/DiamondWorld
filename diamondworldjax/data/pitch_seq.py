@@ -172,7 +172,8 @@ LAUNCH_SCALE = np.array([14.0, 25.0], dtype=np.float32)
 def make_sequences(df: pl.DataFrame, maps: dict, max_len: int = 160,
                    geometry_table=None, events: pl.DataFrame | None = None,
                    game_ctx: pl.DataFrame | None = None,
-                   context_len: int = 0, history_reset: str = "batting_side"):
+                   context_len: int = 0, history_reset: str = "batting_side",
+                   include_game_pk: bool = False):
     """(game, half) sequences -> padded arrays for the A/B/C transformers.
 
     `events` is the table from data/extract_events.py. It is LEFT-joined, so a
@@ -309,6 +310,11 @@ def make_sequences(df: pl.DataFrame, maps: dict, max_len: int = 160,
         "batted_out": np.zeros((n, max_len), np.int32),
         "batted_valid": np.zeros((n, max_len), np.float32),
     }
+    # Paired PA/ABCD training needs sequence provenance to choose the exact
+    # same complete games.  Keep ordinary ABCD batches byte-for-byte equivalent
+    # by only materialising this non-model field when explicitly requested.
+    if include_game_pk:
+        out["game_pk"] = np.zeros((n, max_len), np.int64)
     if ev_all is not None:
         out["events"] = np.zeros((n, max_len, len(EVENT_FLAGS)), np.float32)
     out["stuff_observed"] = np.zeros((n, max_len, 5), bool)
@@ -319,6 +325,8 @@ def make_sequences(df: pl.DataFrame, maps: dict, max_len: int = 160,
     for i, (a, b, ctx_tok) in enumerate(spans):
         L = b - a
         outcome_map = {name: j for j, name in enumerate(("K", "BB", "HBP", "1B", "2B", "3B", "HR", "out", "E"))}
+        if include_game_pk:
+            out["game_pk"][i, :L] = gp[a:b]
         out["pa_outcome"][i, :L] = [outcome_map.get(v, -1) for v in oc[a:b]]
         out["pa_terminal"][i, :L] = df["pa_terminal"].to_numpy()[a:b]
         out["season"][i, :L] = df["season"].to_numpy()[a:b] if "season" in df.columns else 2015

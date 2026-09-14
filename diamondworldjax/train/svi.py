@@ -8,11 +8,12 @@ unobserved; they are sampled in the ELBO estimate and contribute their
 log-probability but do not affect downstream computations.
 
 Guide: empty (no continuous latent variables to approximate).
-Loss:  Trace_ELBO — sums log-likelihoods of observed sites.
+Loss:  Trace_ELBO â€” sums log-likelihoods of observed sites.
 Optimizer: Adam.
 """
 from __future__ import annotations
 
+import math
 import json
 import pickle
 import time
@@ -165,11 +166,11 @@ def _guide_iso(P: int, skill_dim: int = SKILL_DIM, kl_scale: float = 1.0):
     """Return a variational guide for the per-player latent skill vectors.
 
     Parameterises q(player_skills) = Normal(mu, sigma) with hard constraints:
-      mu    ∈ [-5, 5]      — prevents posterior mean from drifting far off-prior
-      sigma ∈ [0.05, 2.0]  — hard floor/ceiling; gradient flows through a smooth
+      mu    âˆˆ [-5, 5]      â€” prevents posterior mean from drifting far off-prior
+      sigma âˆˆ [0.05, 2.0]  â€” hard floor/ceiling; gradient flows through a smooth
                              sigmoid transform, so it can never overflow
 
-    This is more stable than the rho→softplus approach: if rho drifts very
+    This is more stable than the rhoâ†’softplus approach: if rho drifts very
     negative the floor doesn't help because the checkpoint bakes in the bad
     value. A constrained sigma param has no such failure mode.
     """
@@ -227,8 +228,11 @@ def _eval_metrics(
     # Multi-task batches nest the two independently padded sequence types. Use
     # the pitch batch for the compact diagnostic below; its sample sites are
     # scoped by multitask_model.
-    is_multitask = "pitch" in batch and "pa" in batch
-    metric_batch = batch["pitch"] if is_multitask else batch
+    # ``abcd`` is the current Pitchformer likelihood.  It joins PA in the
+    # production joint trainer just as the older ``pitch`` likelihood does in
+    # train_shared_skills; diagnostic selection must understand both layouts.
+    is_multitask = "pa" in batch and ("pitch" in batch or "abcd" in batch)
+    metric_batch = batch["pitch"] if "pitch" in batch else (batch["pa"] if is_multitask else batch)
     valid = jnp.asarray(metric_batch.get("pitch_valid", metric_batch.get("pa_valid")))
     n      = float(jnp.sum(valid))
     if n == 0:
@@ -240,7 +244,7 @@ def _eval_metrics(
                 model(batch, player_table, teacher_force=True)
 
     out: dict[str, float] = {}
-    site_prefix = "pitch/" if is_multitask else ""
+    site_prefix = "pitch/" if "pitch" in batch else ""
     for site_name in ("pitch_type", "swing", "contact"):
         site = tr.get(site_prefix + site_name)
         if site is None:
@@ -332,7 +336,7 @@ def _apply_game_scheduled_sampling(
     import numpy as np
 
     params = svi.get_params(svi_state)
-    is_multitask = "pa" in batch and "pitch" in batch
+    is_multitask = "pa" in batch and ("pitch" in batch or "abcd" in batch)
     pa_batch = batch["pa"] if is_multitask else batch
     guide_key, model_key, game_key = jax.random.split(rng_key, 3)
     # Variational parameter names are not model sample-site names. Draw the
@@ -420,7 +424,7 @@ def train(
     cosine_decay: bool    = False,
     cosine_alpha: float   = 0.0,   # LR floor as fraction of init_lr (0 = decay to 0)
     ss_max_rate: float    = 0.0,   # scheduled sampling: max mixing probability
-    ss_warmup_steps: int  = 25_000, # steps to ramp ss_rate from 0 → ss_max_rate
+    ss_warmup_steps: int  = 25_000, # steps to ramp ss_rate from 0 â†’ ss_max_rate
     ss_start_step: int    = 5_000,  # don't apply SS until model has learned basics
     engine_ss: bool       = False,  # retained for CLI compatibility; all SS is game-level
     kl_scale: float       = 1.0,    # scale for the global player_skills KL (= batch/total_games)
@@ -430,6 +434,10 @@ def train(
     n_seasons: int        = 1,      # season axis, only used by skill_prior="walk"
     shared_task_skills: bool = False,
     checkpoint_metadata: dict | None = None,
+    update_chunk_size: int = 16,
+    prefetch_depth: int = 2,
+    start_step: int = 0,
+    metrics_fn: Callable[[Callable, SVI, Any, dict, dict], dict[str, float]] | None = None,
 ) -> tuple[Any, Any, list[float]]:
     """
     Run SVI training.
@@ -438,12 +446,16 @@ def train(
     ----------
     model       : NumPyro model function (batch, player_table, teacher_force=True)
     batch_iter  : infinite iterator; each call to next() returns (batch, player_table)
-    n_steps     : total SVI update steps
+    n_steps     : total SVI update steps.  With ``start_step``, training runs
+                  from that restored global step through this target.
     lr          : Adam learning rate
     seed        : JAX PRNG seed
     ckpt_dir    : if given, save params checkpoint every CKPT_INTERVAL steps
     log_path    : if given, write ELBO log as JSON
     resume_path : if given, load params from this checkpoint before training
+    start_step  : global step represented by ``resume_path``.  This makes a
+                  resumed run preserve checkpoint numbering and schedules.
+    metrics_fn  : optional model-specific, read-only diagnostics for log lines
 
     Returns
     -------
@@ -453,6 +465,13 @@ def train(
     """
     optimizer = make_optimizer(lr, n_steps=n_steps, cosine_decay=cosine_decay, cosine_alpha=cosine_alpha)
 
+    if not 0 <= start_step <= n_steps:
+        raise ValueError("start_step must be non-negative and no greater than n_steps")
+
+    from .runtime import prefetch, shape_signature, stack_batches, safe_update
+    if update_chunk_size < 1:
+        raise ValueError("update_chunk_size must be positive")
+    batch_iter = prefetch(batch_iter, prefetch_depth)
     first_batch, first_player_table = next(batch_iter)
     P = first_player_table["stats"].shape[0]
     guide = (
@@ -494,49 +513,72 @@ def train(
         ckpt_dir = Path(ckpt_dir)
         ckpt_dir.mkdir(parents=True, exist_ok=True)
 
-    for step in range(n_steps):
-        batch, player_table = next(batch_iter)
-        rng_key, step_key = jax.random.split(rng_key)
+    @jax.jit
+    def update_chunk(state, key, batches, table):
+        def advance(carry, batch):
+            state, key = carry
+            key, _ = jax.random.split(key)
+            state, loss = safe_update(svi.update, state, batch, table, teacher_force=True)
+            return (state, key), loss
+        return jax.lax.scan(advance, (state, key), batches)
 
-        # Scheduled sampling selects entire games and rolls every selected game
-        # through a legal state transition; no individual-event field mixing.
-        if ss_max_rate > 0.0 and step >= ss_start_step:
-            progress  = min(1.0, (step - ss_start_step) / max(ss_warmup_steps, 1))
-            ss_rate   = ss_max_rate * progress
-            rng_key, ss_key = jax.random.split(rng_key)
-            batch = _apply_game_scheduled_sampling(
-                model, svi, svi_state, batch, player_table, ss_rate, ss_key
-            )
+    step = start_step
+    pending = None
+    try:
+        while step < n_steps:
+            batch, player_table = next(batch_iter) if pending is None else pending
+            pending = None
+            count = min(update_chunk_size, n_steps - step,
+                        LOG_INTERVAL - ((step - 1) % LOG_INTERVAL),
+                        CKPT_INTERVAL - ((step - 1) % CKPT_INTERVAL))
+            if ss_max_rate > 0.0:
+                count = min(count, max(1, ss_start_step - step))
+            selected = [batch]
+            # Only combine equal shapes and a shared immutable player table.
+            for _ in range(count - 1):
+                candidate, table = next(batch_iter)
+                if table is not player_table or shape_signature(candidate) != shape_signature(batch):
+                    pending = candidate, table
+                    break
+                selected.append(candidate)
+            if ss_max_rate > 0.0 and step >= ss_start_step:
+                progress = min(1.0, (step - ss_start_step) / max(ss_warmup_steps, 1))
+                rng_key, _ = jax.random.split(rng_key)
+                rng_key, ss_key = jax.random.split(rng_key)
+                batch = _apply_game_scheduled_sampling(
+                    model, svi, svi_state, batch, player_table, ss_max_rate * progress, ss_key)
+                svi_state, loss = safe_update(svi.update, svi_state, batch, player_table, teacher_force=True)
+                chunk_losses = [float(loss)]
+            else:
+                (svi_state, rng_key), values = update_chunk(
+                    svi_state, rng_key, stack_batches(selected), player_table)
+                chunk_losses = jax.device_get(values).tolist()
+                batch = selected[-1]
+            losses.extend(chunk_losses)
+            nan_skips += sum(not math.isfinite(value) for value in chunk_losses)
+            step += len(selected) - 1
+            loss_f = chunk_losses[-1]
 
-        # Snapshot state before update so we can revert if loss/state goes NaN.
-        # SVIState is a namedtuple, so this just keeps a reference to the
-        # immutable arrays — cheap (no copy).
-        prev_state = svi_state
-        svi_state, loss = svi.update(
-            svi_state, batch, player_table, teacher_force=True
-        )
-        loss_f = float(loss)
-        if not jnp.isfinite(loss):
-            # Roll back — keeps Adam's momentum buffers clean of any NaN.
-            svi_state = prev_state
-            nan_skips += 1
-            loss_f = float("nan")
-        losses.append(loss_f)
+            if step % LOG_INTERVAL == 0:
+                elapsed = time.time() - t0
+                metrics = _eval_metrics(model, svi, svi_state, batch, player_table)
+                if metrics_fn is not None:
+                    metrics.update(metrics_fn(model, svi, svi_state, batch, player_table))
+                m_str = "  ".join(
+                    f"{k} = {v:.4f}" for k, v in metrics.items()
+                )
+                print(
+                    f"  step {step:6d}  ELBO = {-loss_f:10.2f}  {m_str}  "
+                    f"elapsed = {elapsed:.0f}s  nan_skips = {nan_skips}",
+                    flush=True,
+                )
 
-        if step % LOG_INTERVAL == 0:
-            elapsed = time.time() - t0
-            metrics = _eval_metrics(model, svi, svi_state, batch, player_table)
-            m_str = "  ".join(
-                f"{k} = {v:.4f}" for k, v in metrics.items()
-            )
-            print(
-                f"  step {step:6d}  ELBO = {-loss_f:10.2f}  {m_str}  "
-                f"elapsed = {elapsed:.0f}s  nan_skips = {nan_skips}",
-                flush=True,
-            )
+            if ckpt_dir is not None and step > 0 and step % CKPT_INTERVAL == 0:
+                _save_checkpoint(svi, svi_state, ckpt_dir, step, checkpoint_metadata)
 
-        if ckpt_dir is not None and step > 0 and step % CKPT_INTERVAL == 0:
-            _save_checkpoint(svi, svi_state, ckpt_dir, step, checkpoint_metadata)
+            step += 1
+    finally:
+        batch_iter.close()
 
     if ckpt_dir is not None:
         _save_checkpoint(svi, svi_state, ckpt_dir, n_steps, checkpoint_metadata)
@@ -554,7 +596,7 @@ def _save_checkpoint(svi: SVI, state, ckpt_dir: Path, step: int, metadata=None) 
     path   = ckpt_dir / f"dwjax_step_{step:07d}.pkl"
     with open(path, "wb") as f:
         pickle.dump({"step": step, "params": params, **(metadata or {})}, f)
-    print(f"  Checkpoint saved → {path}", flush=True)
+    print(f"  Checkpoint saved â†’ {path}", flush=True)
 
 
 def load_checkpoint(path: Path) -> dict:

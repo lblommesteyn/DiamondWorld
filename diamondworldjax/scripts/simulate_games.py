@@ -279,6 +279,7 @@ def simulate(
     seq_carry = None
     if pitchformer and seq_inference is not None:
         seq_carry = seq_inference.init_carry(G)
+        seq_positions = np.zeros(G, dtype=np.int32)
     if pitchformer and seq_inference is None:
         pa_hist = {
             "inning":           np.zeros((G, MAX_PAS), np.float32),
@@ -407,20 +408,27 @@ def simulate(
                 # Grow transformer history only for games that need it. Most games
                 # retain the small buffer; no observations are dropped at its boundary.
                 if seq_inference.pa_arch == "transformer":
-                    history, valid_history, positions = seq_carry
-                    capacity = history.shape[1]
-                    if np.any(np.asarray(positions)[idx] >= capacity):
+                    kv_layers, valid_history, positions = seq_carry
+                    capacity = valid_history.shape[1]
+                    if np.any(seq_positions[idx] >= capacity):
                         new_capacity = min(capacity * 2, 512)
                         if new_capacity <= capacity:
                             raise ValueError("PA transformer history capacity exceeded")
-                        seq_carry = (jnp.pad(history, ((0, 0), (0, new_capacity-capacity), (0, 0))),
-                                     jnp.pad(valid_history, ((0, 0), (0, new_capacity-capacity))), positions)
+                        grown = jax.tree.map(
+                            lambda x: jnp.pad(x, ((0, 0), (0, new_capacity-capacity), (0, 0), (0, 0))),
+                            kv_layers)
+                        seq_carry = (grown, jnp.pad(valid_history,
+                                     ((0, 0), (0, new_capacity-capacity))), positions)
                 # Slice active games' carry, padded to bucket size.
                 idx_pad = np.zeros(M, dtype=np.int64)
                 idx_pad[:B] = idx
                 active_carry = jax.tree.map(lambda x: x[idx_pad], seq_carry)
 
-                active_carry, logits_j = seq_inference.step(
+                if not recal:
+                    rng_key, sample_key = jax.random.split(rng_key)
+                infer_step = (seq_inference.step if recal else
+                              lambda carry, **kw: seq_inference.sample_step(carry, sample_key, **kw))
+                active_carry, prediction = infer_step(
                     active_carry,
                     inning=np.full(M, _inn_val, np.float32),
                     half=np.full(M, float(half), np.float32),
@@ -443,18 +451,16 @@ def simulate(
                     lambda full, upd: full.at[idx].set(upd[:B]),
                     seq_carry, active_carry,
                 )
+                seq_positions[idx] += 1
 
-                logits = np.asarray(logits_j)[:B]
                 if recal:
+                    logits = np.asarray(prediction)[:B]
                     logits = (logits + recal_scale * recal_vec) / recal_temp
                     gum = (np.stack([out_rng[g].gumbel(size=logits.shape[1]) for g in idx])
                            if crn else rng_np.gumbel(size=logits.shape))
                     oc = np.argmax(logits + gum, axis=-1).astype(np.int64)
                 else:
-                    rng_key, k = jax.random.split(rng_key)
-                    oc = np.asarray(jax.random.categorical(
-                        k, jnp.asarray(logits), axis=-1,
-                    )).astype(np.int64)
+                    oc = np.asarray(prediction)[:B].astype(np.int64)
 
             elif pitchformer:
                 # Legacy NumPyro fallback for pitchformer (no fast adapter).
@@ -548,7 +554,11 @@ def simulate(
                         out[:B] = values
                         return out
 
-                    logits = np.asarray(inference.logits(
+                    if not recal:
+                        rng_key, sample_key = jax.random.split(rng_key)
+                    infer = (inference.logits if recal else
+                             lambda **kw: inference.sample(sample_key, **kw))
+                    prediction = infer(
                         inning=np.full(M, _inn_val, np.float32),
                         half=np.full(M, float(half), np.float32),
                         outs=_pad(_outs_val, np.float32),
@@ -563,15 +573,15 @@ def simulate(
                         park_ids=_pad(park[idx], np.int32),
                         bat_side=_pad(bat_side, np.float32),
                         pit_hand=_pad(pit_side, np.float32),
-                    ))[:B]
+                    )
                     if recal:
+                        logits = np.asarray(prediction)[:B]
                         logits = (logits + recal_scale * recal_vec) / recal_temp
                         gum = (np.stack([out_rng[g].gumbel(size=logits.shape[1]) for g in idx])
                                if crn else rng_np.gumbel(size=logits.shape))
                         oc = np.argmax(logits + gum, axis=-1).astype(np.int64)
                     else:
-                        rng_key, k = jax.random.split(rng_key)
-                        oc = np.asarray(jax.random.categorical(k, jnp.asarray(logits), axis=-1)).astype(np.int64)
+                        oc = np.asarray(prediction)[:B].astype(np.int64)
                 else:
                     # Legacy fallback for custom models and unsupported checkpoint
                     # variants.  Keeping it intact makes the optimization

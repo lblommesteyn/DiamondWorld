@@ -25,7 +25,15 @@ class BayesianNetwork(nn.Module):
     dropout: float = 0.1
 
     @nn.compact
-    def __call__(self, batch, features, skills, role_indices, *, train=False):
+    def __call__(self, batch, features, skills, role_indices, *, train=False,
+                 hidden_override=None, encode_only=False, selected_heads=None):
+        if hidden_override is not None:
+            outputs = {}
+            for head in (selected_heads or self.heads):
+                cls = dict(a=TransformerA, b=TransformerB, c=TransformerC, d=TransformerD)[head]
+                outputs[head] = cls(**self.options, dropout=self.dropout, name='head_' + head)(
+                    batch, train=train, hidden_override=hidden_override[head])
+            return outputs, {}
         # The same encoder/fusion architecture and latent width used by PA.
         stats, league, hand = features
         encoded = PlayerSeasonEncoder(self.f_player, name="encoder")(stats, league, hand)
@@ -53,7 +61,7 @@ class BayesianNetwork(nn.Module):
                            batch['ctx'], batch['geom'], player_vectors=vectors)
             cls = dict(a=TransformerA, b=TransformerB, c=TransformerC, d=TransformerD)[head]
             outputs[head] = cls(**self.options, dropout=self.dropout, name='head_' + head)(
-                batch, train=train, ss_override=ss)
+                batch, train=train, ss_override=ss, encode_only=encode_only)
         return outputs, tables
 
 
@@ -147,6 +155,16 @@ def pa_skill_features(pitches, registry, args):
     return stats, league, hand
 
 
+def bayesian_marginal_prepare(model, params, features, skills, roles, *, train=False, key=None):
+    from .marginal_pitch_likelihood import prepare_hidden
+    def call(data, **kwargs):
+        rngs = {'dropout': jax.random.fold_in(key, 892)} if train else None
+        return model.apply({'params': params}, data, features, skills, roles,
+                           train=train, rngs=rngs, **kwargs)[0]
+    return prepare_hidden(lambda data: call(data, encode_only=True),
+        lambda data, hidden, selected: call(data, hidden_override=hidden, selected_heads=selected))
+
+
 def run_bayesian(args, train, test, maps, seasons, feature_pitches=None):
     from .pitchformer_checkpoint import save_metadata
     if not 0 < args.skill_residual_scale < 1 or args.skill_walk_scale <= 0:
@@ -221,7 +239,9 @@ def run_bayesian(args, train, test, maps, seasons, feature_pitches=None):
         if getattr(args, 'missing_samples', 0):
             from .marginal_pitch_likelihood import marginal_log_likelihood
             apply = lambda data: model.apply({'params': p['network']}, data, features, skills, roles, train=True, rngs={'dropout': jax.random.fold_in(key, 892)})[0]
-            ll = marginal_log_likelihood(apply, batch, jax.random.fold_in(key, 891), args.missing_samples)
+            ll = marginal_log_likelihood(apply, batch, jax.random.fold_in(key, 891), args.missing_samples,
+                prepare=bayesian_marginal_prepare(model, p['network'], features, skills, roles,
+                                                 train=True, key=key))
         else:
             out, _ = model.apply({'params': p['network']}, batch, features, skills, roles, train=True, rngs={'dropout': jax.random.fold_in(key, 892)})
             ll = likelihood(out, batch)
@@ -233,16 +253,45 @@ def run_bayesian(args, train, test, maps, seasons, feature_pitches=None):
         loss, grad = jax.value_and_grad(objective)(p, batch, key)
         updates, state = optimizer.update(grad, state, p)
         return optax.apply_updates(p, updates), state, loss
+    from diamondworldjax.train.runtime import prefetch, tree_finite, bucket_batch
+    chunk_size = getattr(args, 'update_chunk_size', 16)
+    if chunk_size < 1:
+        raise ValueError('update_chunk_size must be positive')
+    @jax.jit
+    def update_chunk(params, state, key, batches):
+        def advance(carry, batch):
+            p, opt_state, rng, failed = carry
+            rng, subkey = jax.random.split(rng)
+            proposed, next_state, loss = update(p, opt_state, batch, subkey)
+            finite = jnp.isfinite(loss) & tree_finite((proposed, next_state))
+            failed = failed | ~finite
+            p, opt_state = jax.lax.cond(failed, lambda: (p, opt_state),
+                                      lambda: (proposed, next_state))
+            return (p, opt_state, rng, failed), loss
+        return jax.lax.scan(advance, (params, state, key, jnp.array(False)), batches)
+
     rng = np.random.default_rng(args.seed)
-    for step in range(args.steps):
-        indices = rng.integers(n, size=args.bs)
-        batch = {k: jnp.asarray(v[indices]) for k, v in train.items()}
-        key, subkey = jax.random.split(key)
-        params, state, loss = update(params, state, batch, subkey)
-        if not np.isfinite(float(loss)):
-            raise FloatingPointError('Non-finite Bayesian objective')
-        if step % 100 == 0:
-            print(f'Bayesian ABCD step {step}: negative ELBO/sequence={float(loss):.4f}', flush=True)
+    def training_chunks():
+        step = 0
+        while step < args.steps:
+            count = min(chunk_size, args.steps-step, 100-((step-1) % 100))
+            indices = rng.integers(n, size=(count, args.bs))
+            yield jax.device_put(bucket_batch({k: v[indices] for k, v in train.items()}))
+            step += count
+    prepared = prefetch(training_chunks(), getattr(args, 'prefetch_depth', 2))
+    step = 0
+    try:
+        for batches in prepared:
+            (params, state, key, failed), values = update_chunk(params, state, key, batches)
+            failed, values = jax.device_get((failed, values))
+            if failed:
+                raise FloatingPointError('Non-finite Bayesian objective or optimizer state')
+            step += len(values)
+            loss = values[-1]
+            if (step-1) % 100 == 0:
+                print(f'Bayesian ABCD step {step-1}: negative ELBO/sequence={float(loss):.4f}', flush=True)
+    finally:
+        prepared.close()
     checkpoint = dict(version=1, options=options, heads=args.stack, features=features,
         player_ids=ids, role_indices=roles, network=params['network'], posterior=params['posterior'],
         residual_scale=args.skill_residual_scale, prior=args.skill_prior, walk_scale=args.skill_walk_scale,
@@ -265,7 +314,8 @@ def run_bayesian(args, train, test, maps, seasons, feature_pitches=None):
         apply = lambda data: model.apply({'params': params['network']}, data, features, skills, roles)[0]
         if getattr(args, 'missing_samples', 0):
             from .marginal_pitch_likelihood import marginal_log_likelihood
-            return marginal_log_likelihood(apply, batch, key, args.missing_samples)
+            return marginal_log_likelihood(apply, batch, key, args.missing_samples,
+                prepare=bayesian_marginal_prepare(model, params['network'], features, skills, roles))
         return likelihood(apply(batch), batch)
     score = jax.jit(heldout)
     ll = sum(float(score({k: jnp.asarray(v[i:i + args.bs]) for k, v in test.items()}))
@@ -285,7 +335,7 @@ def run_bayesian(args, train, test, maps, seasons, feature_pitches=None):
             launch_components=int((valid[..., None] & test.get('launch_observed', np.broadcast_to(test['launch_valid'][..., None] > 0, test['launch'].shape))).sum()),
             outcome=int((valid & (test['batted_valid'] > 0)).sum()),
             c_eligible=int((valid & test.get('c_eligible', np.ones_like(valid))).sum()))
-    report = dict(history_missingness='mask-aware encoder; no latent-history integration', config=vars(args), heads=args.stack, heldout_log_likelihood=ll,
+    report = dict(d_interpretation="Associative launch/outcome factorization; park/environment enter both stages and outcome can bypass launch. Ablations are predictive, not causal.", history_missingness='mask-aware encoder; no latent-history integration', config=vars(args), heads=args.stack, heldout_log_likelihood=ll,
         heldout_target_counts=coverage, prediction_mode='posterior_mean_skills',
         final_negative_elbo_per_sequence=float(loss),
         statistical_covariates='provided' if args.skill_features else getattr(args, 'skill_feature_mode', 'neutral'))

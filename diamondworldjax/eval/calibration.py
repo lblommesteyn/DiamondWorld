@@ -141,9 +141,12 @@ def kl_divergence_runs(
     max_runs: int = 20,
 ) -> float:
     """KL(obs || sim) on the discrete run distribution."""
-    bins = np.arange(max_runs + 2)
-    obs_hist, _ = np.histogram(obs_runs, bins=bins, density=True)
-    sim_hist, _ = np.histogram(sim_runs, bins=bins, density=True)
+    # Preserve all tail mass in an explicit max_runs+ overflow bucket.
+    bins = np.r_[np.arange(max_runs + 1), np.inf]
+    obs_hist, _ = np.histogram(obs_runs, bins=bins)
+    sim_hist, _ = np.histogram(sim_runs, bins=bins)
+    obs_hist = obs_hist / max(obs_hist.sum(), 1)
+    sim_hist = sim_hist / max(sim_hist.sum(), 1)
 
     eps = 1e-8
     obs_hist = obs_hist + eps

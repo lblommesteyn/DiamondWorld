@@ -103,16 +103,16 @@ def _free_rollout_sample(pa_model, params, batch, pt, rng_key, n_samples):
             if not valid[:, t].any():
                 break
 
-            # Single-PA batch slice with model's predicted base_state
+            # Replay the generated context prefix so sequence history is retained.
             t_batch = {}
             for k, v in batch.items():
                 if isinstance(v, (np.ndarray,)) or hasattr(v, "ndim"):
                     arr = np.array(v)
                     if arr.ndim == 2:
-                        t_batch[k] = jnp.array(arr[:, t:t+1])
+                        t_batch[k] = jnp.array(arr[:, :t+1])
                     else:
                         t_batch[k] = jnp.array(arr)
-            t_batch["base_state"] = jnp.array(current_bs[:, t:t+1])
+            t_batch["base_state"] = jnp.array(current_bs[:, :t+1])
 
             rng_key, step_key = jax.random.split(rng_key)
             with nh.seed(rng_seed=step_key):
@@ -120,15 +120,18 @@ def _free_rollout_sample(pa_model, params, batch, pt, rng_key, n_samples):
                     with nh.trace() as tr:
                         pa_model(t_batch, pt, teacher_force=False)
 
-            runs_t    = np.array(tr["runs_scored"]["value"])[:, 0]       # (B,)
-            bs_after_t = np.array(tr["base_state_after"]["value"])[:, 0] # (B,) int 0-7
+            runs_t    = np.array(tr["runs_scored"]["value"])[:, -1]       # (B,)
+            bs_after_t = np.array(tr["base_state_after"]["value"])[:, -1] # (B,) int 0-7
 
             sample_runs += runs_t * valid[:, t]
 
             if t + 1 < T:
                 # Feed model's base_state_after back, normalised to 0-1
                 current_bs[:, t+1] = np.where(
-                    valid[:, t], bs_after_t / 7.0, current_bs[:, t+1]
+                    valid[:, t] & valid[:, t+1]
+                    & (np.asarray(batch["inning"])[:, t] == np.asarray(batch["inning"])[:, t+1])
+                    & (np.asarray(batch["half"])[:, t] == np.asarray(batch["half"])[:, t+1]),
+                    bs_after_t / 7.0, current_bs[:, t+1]
                 )
 
         draws.append(sample_runs)

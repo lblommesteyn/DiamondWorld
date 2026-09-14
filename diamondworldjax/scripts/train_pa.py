@@ -274,7 +274,7 @@ def _map_player_ids(batch: dict, id_to_idx: dict, unknown_index: int | None = No
     return batch
 
 
-def _make_pa_batch(pa_df, game_id_chunk, id_to_idx, player_table_np):
+def _make_pa_batch(pa_df, game_id_chunk, id_to_idx, player_table_np, cached_table=None):
     import polars as pl
     import jax.numpy as jnp
     from diamondworldjax.data.pa_batching import build_pa_batch
@@ -286,7 +286,7 @@ def _make_pa_batch(pa_df, game_id_chunk, id_to_idx, player_table_np):
     batch = build_pa_batch(chunk_df)
     batch = _map_player_ids(batch, id_to_idx)
 
-    pt = {
+    pt = cached_table if cached_table is not None else {
         "stats":  jnp.array(player_table_np["stats"]),
         "league": jnp.array(player_table_np["league"]),
         "hand":   jnp.array(player_table_np["hand"]),
@@ -295,14 +295,18 @@ def _make_pa_batch(pa_df, game_id_chunk, id_to_idx, player_table_np):
 
 
 def _infinite_batch_iter(pa_df, chunks, id_to_idx, player_table_np):
+    import jax
+    table = jax.device_put({k: player_table_np[k] for k in ("stats", "league", "hand")})
     for chunk in itertools.cycle(chunks):
-        result = _make_pa_batch(pa_df, chunk, id_to_idx, player_table_np)
+        result = _make_pa_batch(pa_df, chunk, id_to_idx, player_table_np, cached_table=table)
         if result[0] is not None:
             yield result
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
+    parser.add_argument("--update-chunk-size", type=int, default=16)
+    parser.add_argument("--prefetch-depth", type=int, default=2)
     parser.add_argument("--steps",  type=int,   default=50_000)
     parser.add_argument("--lr",     type=float, default=3e-4)
     parser.add_argument("--seed",   type=int,   default=0)
@@ -488,6 +492,7 @@ def main() -> None:
         checkpoint_metadata = metadata,
         model            = model_fn,
         batch_iter       = batch_iter,
+        update_chunk_size=args.update_chunk_size, prefetch_depth=args.prefetch_depth,
         n_steps          = args.steps,
         lr               = args.lr,
         seed             = args.seed,

@@ -119,6 +119,8 @@ class PAInference:
         # fixed.  Only the PA-shaped inputs are dynamic, so a bucket size compiles
         # once and is reused for every matching half-inning batch.
         self._logits_jit = jax.jit(self._logits)
+        self._sample_jit = jax.jit(lambda key, inputs: jax.random.categorical(
+            key, self._logits(**inputs), axis=-1))
 
     @staticmethod
     def _resolve_skills(
@@ -190,6 +192,10 @@ class PAInference:
                 {"params": self._bilinear_params}, batter_z, pitcher_z
             )
         return logits
+
+    def sample(self, key, **inputs: Any):
+        """Fuse logits and categorical sampling; transfer only outcome indices."""
+        return self._sample_jit(key, {k: jnp.asarray(v) for k, v in inputs.items()})
 
     def logits(self, **inputs: Any) -> jax.Array:
         """Return outcome logits for one fixed-size, one-PA-per-row batch."""
@@ -341,12 +347,17 @@ class PASequenceInference:
             self._seq_step = transformer_step_fn(module, seq_params,
                                                   self.MAX_SEQ_LEN)
             self._init_carry_fn = lambda bs: transformer_init_carry(
-                bs, self.MAX_SEQ_LEN, cdim,
+                bs, self.MAX_SEQ_LEN, cdim, n_layers=n_layers,
+                d_model=d_model, n_heads=n_heads,
             )
         else:
             raise ValueError(f"unknown pa_arch: {pa_arch!r}")
 
         self._step_jit = jax.jit(self._step)
+        def sample_step(carry, key, inputs):
+            carry, logits = self._step(carry, **inputs)
+            return carry, jax.random.categorical(key, logits, axis=-1)
+        self._sample_step_jit = jax.jit(sample_step)
 
     def _lookup_players(self, ids: jax.Array) -> jax.Array:
         n_players = self.player_z.shape[0]
@@ -421,6 +432,9 @@ class PASequenceInference:
                 {"params": self._bilinear_params}, batter_z, pitcher_z,
             )
         return new_carry, logits
+
+    def sample_step(self, carry, key, **inputs):
+        return self._sample_step_jit(carry, key, {k: jnp.asarray(v) for k, v in inputs.items()})
 
     def init_carry(self, batch_size: int) -> Any:
         """Return the initial sequence carry for a batch of games."""

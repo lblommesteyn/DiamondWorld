@@ -231,7 +231,7 @@ def test_pa_sequence_step_matches_full_sequence(architecture):
     else:
         model = PATransformer(d_model=12, n_layers=2, n_heads=3, position_encoding="sinusoidal")
         params = model.init(jax.random.PRNGKey(2), x, mask)
-        step, carry = transformer_step_fn(model, params["params"], 8), transformer_init_carry(2, 8, 7)
+        step, carry = transformer_step_fn(model, params["params"], 8), transformer_init_carry(2, 8, 7, n_layers=model.n_layers, d_model=model.d_model, n_heads=model.n_heads)
     expected = model.apply(params, x, mask)
     out = []
     for t in range(5):

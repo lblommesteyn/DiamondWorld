@@ -344,6 +344,7 @@ def _run_one_rep(
     heads, engine, c_engine, test, games, game_row, maps, gctx, args,
     seed: int, n_batters: int,
     lineup_info: tuple | None = None,
+    terminal_outcome_sampler=None,
 ) -> dict:
     """Run one complete game evaluation pass. Returns per-rep metrics."""
     G = len(games)
@@ -419,7 +420,8 @@ def _run_one_rep(
                     rolled = rollout_batch(heads, batch, seed=batch_seed, engine=engine,
                                            c_engine=c_engine, initial_state=initial, initial_cache=prior_cache,
                                            stop_when_decided=True,
-                                           decode_len=_decode_bucket(batch, args.max_len))
+                                           decode_len=_decode_bucket(batch, args.max_len),
+                                           terminal_outcome_sampler=terminal_outcome_sampler)
                     histories.put(rows_batch, history_inning, half, rolled.get("final_cache"))
                     event_counts += rolled["event"].sum(axis=(0, 1))
                     scheduled_pas += int(batch["pa_start"].sum())
@@ -437,7 +439,7 @@ def _run_one_rep(
                     np.add.at(pcounts, (flat_bidx[known], flat_oc[known]), 1.0)
 
                     # PIT: collect B/D probabilities at terminal pitches
-                    if "swing_prob" in rolled:
+                    if terminal_outcome_sampler is None and "swing_prob" in rolled:
                         pit_swing_prob.append(rolled["swing_prob"][terminal])
                         pit_contact_prob.append(rolled["contact_prob"][terminal])
                         pit_foul_prob.append(rolled["foul_prob"][terminal])
@@ -541,7 +543,8 @@ def _run_one_rep(
                     rolled = rollout_batch(heads, batch, seed=batch_seed, engine=engine,
                                            c_engine=c_engine, initial_state=initial, initial_cache=prior_cache,
                                            stop_when_decided=True,
-                                           decode_len=_decode_bucket(batch, args.max_len))
+                                           decode_len=_decode_bucket(batch, args.max_len),
+                                           terminal_outcome_sampler=terminal_outcome_sampler)
                     histories.put(rows_batch, history_inning, half, rolled.get("final_cache"))
                     event_counts += rolled["event"].sum(axis=(0, 1))
                     terminal = rolled["pa_terminal"]
@@ -678,6 +681,10 @@ def main() -> None:
     ap.add_argument("--out", default=None)
     ap.add_argument('--skill-mode', choices=['auto', 'mean', 'sample'], default='auto',
                     help='auto samples native Bayesian skills once per rep; keeps exported worlds and ordinary checkpoints fixed')
+    ap.add_argument("--hybrid-pa-ckpt", type=Path, default=None,
+                    help="Model 7 PA export: use it for generated in-play outcomes while ABCD drives pitches")
+    ap.add_argument("--hybrid-pa-skill-mode", choices=["mean", "sample"], default="mean",
+                    help="Posterior policy for the hybrid PA head (default: mean)")
     args = ap.parse_args()
     if args.reps < 1:
         ap.error('--reps must be positive')
@@ -708,6 +715,15 @@ def main() -> None:
     from diamondworldjax.eval.pitchformer_worlds import PitchformerWorlds
     worlds = PitchformerWorlds(heads_obj, args.params_dir, args.tag, metadata,
                               args.skill_mode, args.seed)
+    terminal_outcome_sampler = None
+    if args.hybrid_pa_ckpt is not None:
+        from diamondworldjax.simulate.pa_abcd_hybrid import PAInPlayOutcomeSampler
+        terminal_outcome_sampler = PAInPlayOutcomeSampler.from_paths(
+            args.hybrid_pa_ckpt, metadata, season=args.season,
+            skill_mode=args.hybrid_pa_skill_mode, seed=args.seed,
+        )
+        print("Hybrid rollout: A/B/C/D generate pitches; the Model 7 PA head resolves in-play outcomes.",
+              flush=True)
     engine = EmpiricalEngine().fit(pl.concat(train).filter(pl.col("pa_terminal")))
     c_engine = None
     if args.c_events:
@@ -856,7 +872,7 @@ def main() -> None:
         res = _run_one_rep(
             heads_obj, engine, c_engine, test, games, game_row, maps, gctx, args,
             seed=rep_seed, n_batters=n_batters,
-            lineup_info=li,
+            lineup_info=li, terminal_outcome_sampler=terminal_outcome_sampler,
         )
         rep_results.append(res)
     elapsed = time.time() - t0
@@ -949,7 +965,8 @@ def main() -> None:
           + f"  | {sim_frac[5:].sum()*100:.1f}%", flush=True)
 
     # --- Main summary ---
-    print(f"\n=== ABCD PITCHFORMER GAME EVAL ({G} games, {n_reps} rep{'s' if n_reps > 1 else ''}, "
+    eval_label = "PA + ABCD HYBRID GAME EVAL" if terminal_outcome_sampler is not None else "ABCD PITCHFORMER GAME EVAL"
+    print(f"\n=== {eval_label} ({G} games, {n_reps} rep{'s' if n_reps > 1 else ''}, "
           f"{elapsed:.0f}s) ===", flush=True)
     if not np.isnan(real_total):
         print(f"  runs/game   real {real_total:.2f}   sim {_fmt_ci(totals)}", flush=True)
@@ -1110,8 +1127,14 @@ def main() -> None:
         "heldout_pitch_calibration": heldout_calibration,
         "skill_policy": worlds.report(args.reps),
         "completion_diagnostics": completion_report(rep_results, game_row),
-        "note": "Generated game state on observed lineup/staff schedule; not pre-game roster selection.",
+        "note": ("Generated game state on observed lineup/staff schedule; not pre-game roster selection. "
+                 "Hybrid mode keeps A/B/C/D pitch generation and samples only in-play PA outcomes from the Model 7 PA head."
+                 if terminal_outcome_sampler is not None else
+                 "Generated game state on observed lineup/staff schedule; not pre-game roster selection."),
     }
+    if args.hybrid_pa_ckpt is not None:
+        result["hybrid_pa_checkpoint"] = str(args.hybrid_pa_ckpt)
+        result["hybrid_pa_skill_mode"] = args.hybrid_pa_skill_mode
     if player_result:
         result["player_stats"] = player_result
 

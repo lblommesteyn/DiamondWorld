@@ -9,8 +9,8 @@ Both receive the pre-computed context vector from pa_model (game_state, pitcher_
 batter_z, park_emb already concatenated).  Neither embeds players or parks itself.
 
 PAGRU additionally exposes a ``step`` classmethod for compiled scan rollout: it
-advances one timestep given a hidden-state carry, avoiding the O(T^2) recompute
-that the transformer requires at simulation time.
+advances one timestep given a hidden-state carry. Transformer rollout uses
+projected key/value caches.
 """
 from __future__ import annotations
 
@@ -156,12 +156,16 @@ class _GRUStack(nn.Module):
         for i in range(self.n_layers):
             cell = nn.GRUCell(features=self.d_model, name=f"gru_{i}")
             h = jnp.zeros((B, self.d_model), dtype=x.dtype)
-            outputs = []
-            for t in range(T):
-                h_new, _ = cell(h, x[:, t, :])
-                h = jnp.where(mask[:, t, :], h_new, h)
-                outputs.append(h)
-            x = jnp.stack(outputs, axis=1)
+            def advance(module, carry, inputs):
+                value, active = inputs
+                proposed, _ = module(carry, value)
+                carry = jnp.where(active, proposed, carry)
+                return carry, carry
+
+            # Lift the recurrence without changing the GRUCell parameter tree.
+            _, x = nn.scan(advance, variable_broadcast="params",
+                           split_rngs={"params": False}, in_axes=1, out_axes=1)(
+                               cell, h, (x, mask))
             if i < self.n_layers - 1:
                 x = nn.LayerNorm(name=f"ln_{i}")(x)
         return x
@@ -262,47 +266,74 @@ def gru_init_carry(n_layers: int, batch_size: int, d_model: int):
 
 
 # ---------------------------------------------------------------------------
-# Transformer: history-buffer step for fast rollout
+# Transformer: incremental K/V cache for fast rollout
 # ---------------------------------------------------------------------------
+
 
 def transformer_step_fn(transformer_module: PATransformer, params: dict,
                         max_seq_len: int):
-    """Return ``(carry, context_t) -> (carry, output_t)`` for PATransformer.
+    """Decode one PA using the existing full-sequence checkpoint weights.
 
-    Uses a pre-allocated history buffer rather than Flax decode-mode caching.
-    Each step writes the new context into the buffer and runs a full forward
-    pass, taking only the output at the current position.  This is O(t) per
-    step / O(T^2) total, but T~70 with d_model=128 and 2 layers is trivially
-    fast once NumPyro overhead is removed.
-
-    carry = (history_buf, valid_buf, step_idx)
-
-    ``step_idx`` is per-game (B,) so games at different PA counts work
-    correctly in the simulator (where the active set shrinks as games end).
+    Each layer stores projected keys/values. Per-game positions allow active-game
+    bucketing. The simulator grows cache capacity before a position overflows.
+    Attention is strictly past-only, matching CausalBlock (including t=0).
     """
+    p = params
+    heads = transformer_module.n_heads
+    width = transformer_module.d_model
+    depth = width // heads
+
+    def dense(name, x, subtree=p):
+        return nn.Dense(subtree[name]["bias"].shape[0]).apply(
+            {"params": subtree[name]}, x)
+
+    def norm(name, x, subtree=p):
+        return nn.LayerNorm().apply({"params": subtree[name]}, x)
 
     def step(carry, context_t):
-        history_buf, valid_buf, step_idx = carry
-        B = context_t.shape[0]
-        rows = jnp.arange(B)
-        history_buf = history_buf.at[rows, step_idx, :].set(context_t)
-        valid_buf = valid_buf.at[rows, step_idx].set(True)
-
-        out = transformer_module.apply(
-            {"params": params}, history_buf, valid_buf, train=False,
-        )
-        output_t = out[rows, step_idx, :]
-
-        return (history_buf, valid_buf, step_idx + 1), output_t
+        layers, valid, positions = carry
+        rows = jnp.arange(context_t.shape[0])
+        x = norm("input_ln", dense("input_proj", context_t))
+        if transformer_module.position_encoding == "learned":
+            x = x + p["pos_emb"]["embedding"][positions]
+        else:
+            frequency = jnp.exp(-jnp.log(10000.0) * jnp.arange(0, width, 2) / width)
+            angle = positions[:, None] * frequency[None, :]
+            x = x + jnp.stack([jnp.sin(angle), jnp.cos(angle)], -1).reshape(x.shape[0], -1)[:, :width]
+        mask = valid & (jnp.arange(valid.shape[1])[None, :] < positions[:, None])
+        next_layers = []
+        for i, (keys, values) in enumerate(layers):
+            block = p[f"block_{i}"]
+            h = norm("LayerNorm_0", x, block)
+            attention = block["MultiHeadDotProductAttention_0"]
+            def project(name):
+                return nn.DenseGeneral(features=(heads, depth)).apply(
+                    {"params": attention[name]}, h)
+            query, key, value = project("query"), project("key"), project("value")
+            keys = keys.at[rows, positions].set(key)
+            values = values.at[rows, positions].set(value)
+            weights = nn.dot_product_attention_weights(
+                query[:, None], keys, mask=mask[:, None, None, :], deterministic=True)
+            attended = jnp.einsum("bhqk,bkhd->bqhd", weights, values)[:, 0]
+            attended = nn.DenseGeneral(features=width, axis=(-2, -1)).apply(
+                {"params": attention["out"]}, attended)
+            x = x + attended * mask.any(-1)[:, None]
+            h = norm("LayerNorm_1", x, block)
+            x = x + dense("Dense_1", nn.gelu(dense("Dense_0", h, block)), block)
+            next_layers.append((keys, values))
+        valid = valid.at[rows, positions].set(True)
+        return (tuple(next_layers), valid, positions + 1), norm("out_norm", x)
 
     return step
 
 
 def transformer_init_carry(batch_size: int, max_seq_len: int,
-                           context_dim: int):
-    """Initial carry for transformer_step_fn."""
+                           context_dim: int | None = None, *, n_layers: int = 2,
+                           d_model: int = 128, n_heads: int = 4):
+    """Allocate projected K/V caches; context_dim is retained for API compatibility."""
+    shape = (batch_size, max_seq_len, n_heads, d_model // n_heads)
     return (
-        jnp.zeros((batch_size, max_seq_len, context_dim)),
+        tuple((jnp.zeros(shape), jnp.zeros(shape)) for _ in range(n_layers)),
         jnp.zeros((batch_size, max_seq_len), dtype=jnp.bool_),
         jnp.zeros(batch_size, dtype=jnp.int32),
     )

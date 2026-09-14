@@ -70,14 +70,18 @@ class TransformerC(nn.Module):
 
     @nn.compact
     def __call__(self, batch, *, train: bool, decode: bool = False,
-                 ss_override=None):
-        h, _ = Trunk(self.n_pitchers, self.n_batters, self.n_parks, self.d_model,
-                     self.n_layers, self.n_heads, self.dropout,
-                     player_mode=self.player_mode, skill_seasons=self.skill_seasons,
-                     residual_dim=self.residual_dim, pitch_history=self.pitch_history,
-                     position_encoding=self.position_encoding, window_size=self.window_size,
-                     observation_masks=self.observation_masks, c_event_mode=self.c_event_mode, name="trunk")(
-            batch, train=train, decode=decode, ss_override=ss_override)
+                 ss_override=None, hidden_override=None, encode_only=False):
+        h = hidden_override
+        if h is None:
+            h, _ = Trunk(self.n_pitchers, self.n_batters, self.n_parks, self.d_model,
+                         self.n_layers, self.n_heads, self.dropout,
+                         player_mode=self.player_mode, skill_seasons=self.skill_seasons,
+                         residual_dim=self.residual_dim, pitch_history=self.pitch_history,
+                         position_encoding=self.position_encoding, window_size=self.window_size,
+                         observation_masks=self.observation_masks, c_event_mode=self.c_event_mode, name="trunk")(
+                batch, train=train, decode=decode, ss_override=ss_override)
+        if encode_only:
+            return {"hidden": h}
 
         obs = jnp.concatenate([
             jax.nn.one_hot(batch["pitch_type"], 8),

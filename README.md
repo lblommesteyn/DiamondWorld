@@ -278,3 +278,25 @@ guide that omits a latent site does not raise: the site is drawn from its prior 
 and never learned, producing a run that trains cleanly and reports a plausible number
 answering a different question. That bug invalidated two experiments here before it was
 caught.
+
+
+### Training and rollout runtime
+
+PA training and native Bayesian ABCD training default to 16 optimizer updates per
+compiled chunk and two prefetched batches/chunks. Use `--update-chunk-size 1`
+and `--prefetch-depth 0` to diagnose the unchunked, synchronous path. Chunking
+preserves update order, logging/checkpoint boundaries, and per-update nonfinite
+checks; PA scheduled sampling continues one update at a time. Custom PA iterators
+must reuse the same immutable player-table object to combine updates.
+
+ABCD marginal likelihood reuses differentiable per-head history representations
+across integration draws and directly scores fully observed batches. It retains
+the same missing-data objective, observation masks, and dropout realization.
+Training batches use a bounded preparation queue and a small set of sequence
+lengths; only trailing padding is removed, never targets or warm-up context.
+
+Standard PA inference and categorical sampling are fused on device, returning
+only sampled outcomes. Recalibration/common-random-number paths retain their
+existing sampling behavior; the empirical game-state engine remains on the host.
+Bucketed sampling is reproducible, but its fixed-seed draws need not match older
+rollout implementations. These changes do not alter checkpoint parameter trees.

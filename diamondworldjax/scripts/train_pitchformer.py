@@ -55,9 +55,12 @@ def batches(arrs, bs, rng=None, shuffle=True):
     idx = np.arange(n)
     if shuffle:
         rng.shuffle(idx)
-    for i in range(0, n if not shuffle else n - bs + 1, bs):
-        j = idx[i:i + bs]
-        yield {k: jnp.asarray(v[j]) for k, v in arrs.items()}
+    from diamondworldjax.train.runtime import prefetch, bucket_batch
+    def prepare():
+        for i in range(0, n if not shuffle else n - bs + 1, bs):
+            j = idx[i:i + bs]
+            yield jax.device_put(bucket_batch({k: v[j] for k, v in arrs.items()}))
+    yield from prefetch(prepare(), 2)
 
 
 def aggregate_evaluation(rows):
@@ -85,12 +88,60 @@ def aggregate_evaluation(rows):
     return result
 
 
+def target_valid(arrays):
+    """Exclude overlapping warm-up tokens from fitting and scoring baselines."""
+    return np.asarray(arrays["valid"]) * np.asarray(arrays.get("loss_mask", 1))
+
+
+def c_baselines(train, test, event_mode):
+    if event_mode == "bundles":
+        def labels(a):
+            return (a["events"].astype(np.int32) * (1 << np.arange(8))).sum(-1)
+        tr = (target_valid(train) * train.get("c_eligible", 1)) > 0
+        te = (target_valid(test) * test.get("c_eligible", 1)) > 0
+        # A smoothed empirical categorical baseline, on the same eligible targets.
+        counts = np.bincount(labels(train)[tr], minlength=256).astype(float) + 1e-7
+        probs = counts / counts.sum()
+        return {"bundle": float(-np.log(probs[labels(test)[te]]).mean()) if te.any() else 0.0}
+    result = {}
+    tr, te = target_valid(train) > 0, target_valid(test) > 0
+    for i, flag in enumerate(EVENT_FLAGS):
+        rate = float(np.clip(train["events"][..., i][tr].mean(), 1e-7, 1 - 1e-7))
+        y = test["events"][..., i][te]
+        result[flag] = float(-(y * np.log(rate) + (1-y) * np.log(1-rate)).mean())
+        result[flag + "_rate"] = rate
+    return result
+
+
+def d_baselines(train, test):
+    vtr = (target_valid(train) * train["batted_valid"]) > 0
+    vte = (target_valid(test) * test["batted_valid"]) > 0
+    p_out = np.bincount(train["batted_out"][vtr], minlength=N_BATTED).astype(np.float64)
+    p_out /= p_out.sum()
+    nll_out_b = float(-np.log(np.clip(p_out[test["batted_out"][vte]], 1e-12, 1.0)).mean())
+    p_hr = float(np.clip(p_out[4], 1e-6, 1 - 1e-6))
+    y = (test["batted_out"][vte] == 4).astype(np.float64)
+    nll_hr_b = float(-(y * np.log(p_hr) + (1 - y) * np.log(1 - p_hr)).mean())
+    ltr = (target_valid(train) * train["launch_valid"]) > 0
+    lte = (target_valid(test) * test["launch_valid"]) > 0
+    mu_l = train["launch"][ltr].mean(0); sd_l = train["launch"][ltr].std(0) + 1e-6
+    zz = (test["launch"][lte] - mu_l) / sd_l
+    nll_launch_b = float((0.5 * zz ** 2 + np.log(sd_l) + 0.5 * np.log(2 * np.pi)).sum(-1).mean())
+    return {"outcome": nll_out_b, "hr": nll_hr_b,
+                             "launch": nll_launch_b, "p_outcome": p_out.tolist()}
+
+
+def c_improvements(baseline, result):
+    return {name: value - result["nll_" + name]
+            for name, value in baseline.items() if "nll_" + name in result}
+
+
 def baselines(train, test):
     """Marginal / count-conditional baselines the heads must beat."""
     def flat(a, m):
         return a[m > 0]
 
-    v = train["valid"] * train["type_valid"]
+    v = target_valid(train) * train["type_valid"]
     tt = flat(train["pitch_type"], v)
     p_type = np.bincount(tt, minlength=N_PITCH_TYPES).astype(np.float64)
     p_type /= p_type.sum()
@@ -99,7 +150,7 @@ def baselines(train, test):
     # strikes/2, so they invert exactly.
     b = np.rint(train["ctx"][..., 0] * 3).astype(int)
     s = np.rint(train["ctx"][..., 1] * 2).astype(int)
-    vt = train["valid"] > 0
+    vt = target_valid(train) > 0
     sw_tab = np.zeros((4, 3))
     for bb in range(4):
         for ss in range(3):
@@ -111,7 +162,7 @@ def baselines(train, test):
     fl = train["foul"][vt * (train["swing"] > 0) * (train["contact"] > 0)]
 
     # Score the baselines on TEST.
-    vte = test["valid"] > 0
+    vte = target_valid(test) > 0
     vty = vte & (test["type_valid"] > 0)
     nll_type = -np.log(np.clip(p_type[test["pitch_type"][vty]], 1e-12, None)).mean()
 
@@ -261,7 +312,10 @@ class SharedPitchformer(nn.Module):
                                       self.d_residual, self.d_model, self.player_mode)
             self.head_d = TransformerD(**kw)
 
-    def __call__(self, batch, head: str, *, train: bool, decode: bool = False):
+    def __call__(self, batch, head: str, *, train: bool, decode: bool = False,
+                 hidden_override=None, encode_only=False):
+        if hidden_override is not None:
+            return getattr(self, "head_" + head)(batch, train=train, hidden_override=hidden_override)
         ss = self.shared_ss(
             batch["pitcher_idx"], batch["batter_idx"], batch["park_idx"],
             batch["ctx"], batch["geom"], batch.get("skill_season"))
@@ -276,7 +330,7 @@ class SharedPitchformer(nn.Module):
                     "d": getattr(self, "head_d", None)}
 
         ss_h = ss + res_map[head](batch["pitcher_idx"], batch["batter_idx"], ss)
-        return head_map[head](batch, train=train, decode=decode, ss_override=ss_h)
+        return head_map[head](batch, train=train, decode=decode, ss_override=ss_h, encode_only=encode_only)
 
 
 def _deep_merge(base, override):
@@ -306,6 +360,16 @@ def _init_shared(model, key, init_batch, heads):
         else:
             merged = _deep_merge(merged, p)
     return flax.core.freeze(merged)
+
+
+def shared_marginal_prepare(model, params, heads, *, train=False, key=None):
+    from diamondworldjax.model.marginal_pitch_likelihood import prepare_hidden
+    def call(data, head, **kwargs):
+        rngs = {'dropout': jax.random.fold_in(key, ord(head))} if train else None
+        return model.apply(params, data, head=head, train=train, rngs=rngs, **kwargs)
+    return prepare_hidden(
+        lambda data: {h: call(data, h, encode_only=True) for h in heads},
+        lambda data, hidden, selected: {h: call(data, h, hidden_override=hidden[h]) for h in selected})
 
 
 def run_shared(model, train, test, *, steps, bs, lr, seed, out_dir, tag,
@@ -346,7 +410,8 @@ def run_shared(model, train, test, *, steps, bs, lr, seed, out_dir, tag,
                         rngs={'dropout': jax.random.fold_in(key, ord(h))}) for h in heads}
                 # Sum likelihood rather than independent mean losses; one
                 # complete probability model for all representation variants.
-                return -marginal_log_likelihood(apply, batch, key, missing_samples) / batch['valid'].shape[0]
+                return -marginal_log_likelihood(apply, batch, key, missing_samples,
+                    prepare=shared_marginal_prepare(model, p, heads, train=True, key=key)) / batch['valid'].shape[0]
             keys = jax.random.split(key, len(heads))
             losses = []
             for head, head_key in zip(heads, keys):
@@ -378,7 +443,8 @@ def run_shared(model, train, test, *, steps, bs, lr, seed, out_dir, tag,
         @jax.jit
         def score_marginal(batch):
             apply = lambda data: {h: model.apply(params, data, head=h, train=False) for h in heads}
-            return marginal_log_likelihood(apply, batch, key, missing_samples)
+            return marginal_log_likelihood(apply, batch, key, missing_samples,
+                prepare=shared_marginal_prepare(model, params, heads))
         results['joint_marginal'] = {'log_likelihood': sum(float(score_marginal(b))
             for b in batches(test, bs, shuffle=False)), 'samples': missing_samples}
 
@@ -448,6 +514,8 @@ def main():
     ap.add_argument("--c-event-mode", choices=["bundles", "legacy"], default="bundles")
     ap.add_argument("--history-reset", choices=["game", "half_inning", "batting_side"], default="game")
     ap.add_argument("--dropout", type=float, default=0.1)
+    ap.add_argument("--update-chunk-size", type=int, default=16, help="Bayesian optimizer updates per compiled chunk")
+    ap.add_argument("--prefetch-depth", type=int, default=2, help="Bayesian batches prepared ahead")
     ap.add_argument("--missing-samples", type=int, default=2)
     ap.add_argument("--position-encoding", choices=["learned", "sinusoidal"], default="sinusoidal")
     ap.add_argument("--window-size", type=int, default=32, help="Number of prior completed tokens in the strict window (0=legacy unlimited)")
@@ -576,37 +644,16 @@ def main():
     save_metadata(args.out, args.tag, metadata)
     report = {"likelihood_note": "joint_marginal is the primary score when enabled; per-head scores are complete-case/plug-in diagnostics", "baselines": base, "config": vars(args), "improvement_nats": {}}
 
+    report["d_interpretation"] = "Associative launch/outcome factorization; park/environment enter both stages, and outcome can bypass launch. Ablations measure predictive value, not causal effects."
+
     # Pre-compute C and D baselines when those heads are in the stack (needed
     # by both the shared-emb and independent training paths).
     if "c" in args.stack:
-        cb = {}
-        for i, f in enumerate(EVENT_FLAGS):
-            vtr = train["valid"] > 0
-            rate = float(np.clip(train["events"][..., i][vtr].mean(), 1e-7, 1 - 1e-7))
-            vte = test["valid"] > 0
-            y = test["events"][..., i][vte]
-            cb[f] = float(-(y * np.log(rate) + (1 - y) * np.log(1 - rate)).mean())
-            cb[f"{f}_rate"] = rate
-        report["baselines_c"] = cb
+        report["baselines_c"] = c_baselines(train, test, args.c_event_mode)
 
     if "d" in args.stack:
-        vtr = (train["valid"] * train["batted_valid"]) > 0
-        vte = (test["valid"] * test["batted_valid"]) > 0
-        p_out = np.bincount(train["batted_out"][vtr], minlength=N_BATTED).astype(np.float64)
-        p_out /= p_out.sum()
-        nll_out_b = float(-np.log(p_out[test["batted_out"][vte]]).mean())
-        p_hr = float(np.clip(p_out[4], 1e-6, 1 - 1e-6))
-        y = (test["batted_out"][vte] == 4).astype(np.float64)
-        nll_hr_b = float(-(y * np.log(p_hr) + (1 - y) * np.log(1 - p_hr)).mean())
-        ltr = (train["valid"] * train["launch_valid"]) > 0
-        lte = (test["valid"] * test["launch_valid"]) > 0
-        mu_l = train["launch"][ltr].mean(0); sd_l = train["launch"][ltr].std(0) + 1e-6
-        zz = (test["launch"][lte] - mu_l) / sd_l
-        nll_launch_b = float((0.5 * zz ** 2 + np.log(sd_l) + 0.5 * np.log(2 * np.pi)).sum(-1).mean())
-        report["baselines_d"] = {"outcome": nll_out_b, "hr": nll_hr_b,
-                                 "launch": nll_launch_b, "p_outcome": p_out.tolist()}
-        print(f"D baselines: outcome {nll_out_b:.4f}  hr {nll_hr_b:.4f}  launch {nll_launch_b:.4f}",
-              flush=True)
+        report["baselines_d"] = d_baselines(train, test)
+        print(f"D baselines: {report['baselines_d']}", flush=True)
 
     # ----- Shared-embedding joint path -----
     if args.shared_emb:
@@ -633,10 +680,7 @@ def main():
                 for bk, rk in _head_metric_map[h]:
                     report["improvement_nats"][bk] = base[bk] - res[rk]
             if h == "c":
-                for f in EVENT_FLAGS:
-                    if f in report.get("baselines_c", {}) and f"nll_{f}" in res:
-                        report["improvement_nats"][f] = (
-                            report["baselines_c"][f] - res.get(f"nll_{f}", float("nan")))
+                report["improvement_nats"].update(c_improvements(report["baselines_c"], res))
             if h == "d":
                 bd = report.get("baselines_d", {})
                 if bd:
@@ -680,8 +724,7 @@ def main():
                     bs=args.bs, lr=args.lr, seed=args.seed, name=f"C_{args.tag}",
                     out_dir=args.out, player_tables=player_tables)
         report["C"] = res_c
-        for f in EVENT_FLAGS:
-            report["improvement_nats"][f] = cb[f] - res_c[f"nll_{f}"]
+        report["improvement_nats"].update(c_improvements(cb, res_c))
 
     if "d" in args.stack:
         bd = report["baselines_d"]

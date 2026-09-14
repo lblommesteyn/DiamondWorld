@@ -2,7 +2,7 @@
 
 Compares wall-clock time for a simulated game loop (~70 PAs) using:
 
-  A) PASequenceInference with pa_arch="transformer" (history-buffer, no NumPyro)
+  A) PASequenceInference with pa_arch="transformer" (K/V cache, no NumPyro)
   B) PASequenceInference with pa_arch="gru" (O(1) step, no NumPyro)
   C) Baseline: full NumPyro model call per PA (current pitchformer path)
 
@@ -252,7 +252,7 @@ def main():
         pa_arch="transformer", d_model=args.d_model, n_layers=args.n_layers,
         outcome_only=True, fatigue=True,
     )
-    xfm_time = _bench_sequence(xfm_adapter, batch, args.pas, "Transformer (history buf)")
+    xfm_time = _bench_sequence(xfm_adapter, batch, args.pas, "Transformer (KV cache)")
 
     if not args.skip_numpyro:
         npy_time = _bench_numpyro(params, table, batch, args.pas)

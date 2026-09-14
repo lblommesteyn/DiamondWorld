@@ -100,15 +100,16 @@ def apply_pitch_result(state: ArrayGameState, result: PitchResult) -> StateStep:
     foul = result.foul.astype(bool)
     called_strike = result.called_strike.astype(bool)
 
+    hbp = result.pa_outcome.astype(jnp.int32) == int(PAOutcome.HIT_BY_PITCH)
     in_play = swing & contact & ~foul
     ordinary_strike = (swing & ~contact) | (~swing & called_strike)
     next_strikes = state.strikes + ordinary_strike.astype(jnp.int32)
     next_strikes = jnp.where(foul, jnp.minimum(state.strikes + 1, 2), next_strikes)
-    next_balls = state.balls + ((~swing) & (~called_strike)).astype(jnp.int32)
+    next_balls = state.balls + ((~swing) & (~called_strike) & (~hbp)).astype(jnp.int32)
 
     strikeout = next_strikes >= 3
     walk = next_balls >= 4
-    terminal = strikeout | walk | in_play
+    terminal = strikeout | walk | in_play | hbp
     learned_outs = jnp.where(in_play, result.outs_added, 0).astype(jnp.int32)
     outs_added = jnp.where(strikeout, jnp.maximum(1, result.outs_added), learned_outs)
     total_outs = state.outs + outs_added
@@ -118,11 +119,11 @@ def apply_pitch_result(state: ArrayGameState, result: PitchResult) -> StateStep:
     walk_base = walk_base_table[jnp.clip(state.base_state, 0, 7)]
     walk_runs = (state.base_state == 7).astype(jnp.int32)
     runs = jnp.where(in_play, result.runs_scored, 0).astype(jnp.int32)
-    runs = jnp.where(walk, walk_runs, runs)
+    runs = jnp.where(walk | hbp, walk_runs, runs)
     home_score = state.home_score + jnp.where(state.half == 1, runs, 0)
     away_score = state.away_score + jnp.where(state.half == 0, runs, 0)
     base_after = jnp.where(in_play, result.base_state_after, state.base_state).astype(jnp.int32)
-    base_after = jnp.where(walk, walk_base, base_after)
+    base_after = jnp.where(walk | hbp, walk_base, base_after)
     base_after = jnp.where(inning_over, 0, base_after)
 
     next_state = ArrayGameState(
@@ -143,6 +144,7 @@ def apply_pitch_result(state: ArrayGameState, result: PitchResult) -> StateStep:
     outcome = jnp.full_like(state.outs, -1, dtype=jnp.int32)
     outcome = jnp.where(strikeout, int(PAOutcome.STRIKEOUT), outcome)
     outcome = jnp.where(walk, int(PAOutcome.WALK), outcome)
+    outcome = jnp.where(hbp, int(PAOutcome.HIT_BY_PITCH), outcome)
     sampled_outcome = result.pa_outcome.astype(jnp.int32)
     valid_in_play_outcome = (sampled_outcome >= int(PAOutcome.SINGLE)) & (
         sampled_outcome <= int(PAOutcome.ERROR)

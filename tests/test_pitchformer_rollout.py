@@ -97,6 +97,28 @@ def test_rollout_composes_abcd_and_uses_generated_terminal_outcome():
     assert np.all(got["event"].sum(axis=-1) == 1)
 
 
+def test_rollout_hybrid_replaces_only_generated_in_play_outcomes():
+    calls = []
+
+    def pa_in_play(state, source, in_play, original, _key):
+        calls.append((state["outs"].copy(), source.copy(), in_play.copy(), original["ctx"].shape))
+        return np.full(len(source), int(PAOutcome.SINGLE), np.int32)
+
+    # A/B make every pitch a ball in play and D selects HR.  The hybrid callback
+    # must replace just that D-derived PA class, while retaining normal rollout
+    # scheduling and state advancement.
+    heads = PitchformerHeads(_A(), _B(), _C(), _D(), None, None, {}, {})
+    got = rollout_batch(
+        heads, _batch(b=1, t=2), seed=0, engine=EmpiricalEngine(),
+        terminal_outcome_sampler=pa_in_play,
+    )
+
+    assert len(calls) == 2
+    assert calls[0][1].tolist() == [0]
+    assert calls[0][2].tolist() == [True]
+    assert np.all(got["pa_outcome"] == int(PAOutcome.SINGLE))
+
+
 def test_rollout_advances_observed_pa_schedule_after_generated_terminal():
     batch = _batch(b=1, t=3)
     batch["pa_start"] = np.array([[True, False, True]])

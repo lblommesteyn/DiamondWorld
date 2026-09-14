@@ -1,42 +1,14 @@
-"""Transformer D: what happens to a ball once it is in play.
+"""Associative two-stage model of launch and batted-ball outcomes.
 
-WHY THIS HEAD EXISTS
+D1 predicts launch given the pitch and a trunk that includes players, park,
+geometry, environment, and history. D2 predicts the outcome given those same
+covariates plus realized launch (observed in training, sampled in rollout).
 
-Park geometry was wired into the super-state and produced a null. Weather, wind and
-altitude were wired in and produced a null. Both times the explanation given was the
-same: A predicts which pitch is thrown and where it crosses the plate, B predicts
-whether the batter offers, and neither of those depends on how far away the wall is or
-which way the wind blows. Those variables act AFTER the bat meets the ball, and nothing
-in the stack modelled that.
-
-D is that model, which makes it two things at once. It completes the stack so a plate
-appearance can end in something other than a strikeout or a walk, and it is the test of
-the explanation above. If geometry and environment do not help D either, the
-explanation was wrong and should be withdrawn.
-
-TWO HEADS, IN PHYSICAL ORDER
-
-  D1  launch: exit velocity and launch angle, as Gaussians, from the super-state and
-      the pitch. This is what the bat does to the ball. It should NOT depend on the
-      park or the wind, and if it does that is a leak to investigate, not a win.
-
-  D2  outcome: out / single / double / triple / home run / reached on error, from the super-state, the
-      pitch, AND the launch, plus geometry and environment. This is what the park and
-      the air do to the ball once it is in flight. The launch is teacher-forced during
-      training and sampled from D1 at simulation time.
-
-Splitting them is not decoration. A single head from context to outcome could learn
-"this batter hits home runs" without ever representing that a home run is a hard, high
-ball that clears a wall. The split forces the park to act through the trajectory,
-which is the physics, and it means the two claims "geometry matters" and "launch is
-predictable" are scored separately rather than blurred together.
-
-CLASS BALANCE
-
-Outs are 68% of balls in play and triples are 0.6%. The outcome head is scored against
-the empirical marginal, so a head that only learned the base rates gets exactly zero
-lift, and the home-run column is reported on its own because that is where geometry
-and air density have to show up if they show up anywhere.
+This factorization does not enforce physical or causal separation: D1 can use
+park/environment associations, and D2 can bypass launch via its context inputs.
+Geometry ablations measure predictive value, not a causal ball-flight effect.
+Enforcing that separation requires a new architecture and retraining; existing
+checkpoints deliberately retain their original parameterization.
 """
 from __future__ import annotations
 
@@ -70,14 +42,18 @@ class TransformerD(nn.Module):
 
     @nn.compact
     def __call__(self, batch, *, train: bool, decode: bool = False,
-                 output_heads: bool = True, ss_override=None):
-        h, _ = Trunk(self.n_pitchers, self.n_batters, self.n_parks, self.d_model,
-                     self.n_layers, self.n_heads, self.dropout,
-                     player_mode=self.player_mode, skill_seasons=self.skill_seasons,
-                     residual_dim=self.residual_dim, pitch_history=self.pitch_history,
-                     position_encoding=self.position_encoding, window_size=self.window_size,
-                     observation_masks=self.observation_masks, c_event_mode=self.c_event_mode, name="trunk")(
-            batch, train=train, decode=decode, ss_override=ss_override)
+                 output_heads: bool = True, ss_override=None, hidden_override=None, encode_only=False):
+        h = hidden_override
+        if h is None:
+            h, _ = Trunk(self.n_pitchers, self.n_batters, self.n_parks, self.d_model,
+                         self.n_layers, self.n_heads, self.dropout,
+                         player_mode=self.player_mode, skill_seasons=self.skill_seasons,
+                         residual_dim=self.residual_dim, pitch_history=self.pitch_history,
+                         position_encoding=self.position_encoding, window_size=self.window_size,
+                         observation_masks=self.observation_masks, c_event_mode=self.c_event_mode, name="trunk")(
+                batch, train=train, decode=decode, ss_override=ss_override)
+        if encode_only:
+            return {"hidden": h}
 
         # Decode must advance D's independently-trained causal trunk on every
         # pitch.  Its launch/outcome heads are needed only for balls in play,
@@ -94,14 +70,13 @@ class TransformerD(nn.Module):
         z = nn.gelu(nn.Dense(self.d_model, name="merge")(
             jnp.concatenate([h, pitch], axis=-1)))
 
-        # D1: launch, from context and pitch only.
+        # D1: launch, including park/environment associations in the trunk.
         l_mu = nn.Dense(LAUNCH_DIM, name="launch_mu")(z)
         l_ls = jnp.clip(nn.Dense(LAUNCH_DIM, name="launch_logsigma")(z), -4.0, 2.0)
 
         # D2: outcome, from context, pitch, the REALISED launch, and the park and
         # air the trunk already carries through the super-state. Launch enters
-        # here explicitly rather than only through z so the outcome head cannot
-        # bypass it.
+        # here explicitly; the direct z path can also predict outcomes independently.
         launch_in = nn.gelu(nn.Dense(64, name="launch_proj")(batch["launch"]))
         y = nn.gelu(nn.Dense(self.d_model, name="outcome_merge")(
             jnp.concatenate([z, launch_in, batch["geom"], batch["ctx"]], axis=-1)))
