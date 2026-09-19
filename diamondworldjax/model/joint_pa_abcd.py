@@ -54,6 +54,7 @@ class JointABCDNetwork(nn.Module):
     observation_masks: bool = True
     c_event_mode: str = "bundles"
     c_support: tuple | None = None
+    learned_called_strike: bool = False
 
     def setup(self):
         # player_mode="none" ensures no private player-ID embeddings are
@@ -73,6 +74,7 @@ class JointABCDNetwork(nn.Module):
             window_size=self.window_size,
             observation_masks=self.observation_masks,
             c_event_mode=self.c_event_mode, c_support=self.c_support,
+            learned_called_strike=self.learned_called_strike,
         )
         classes = dict(a=TransformerA, b=TransformerB, c=TransformerC, d=TransformerD)
         for head in self.heads:
@@ -136,6 +138,7 @@ def joint_pa_abcd_model(
     skill_prior: str = "walk",
     n_seasons: int = 1,
     missing_samples: int = 2,
+    d_hr_weight: float = 0.0,
 ) -> None:
     """Score matched PA and ABCD batches with a shared posterior hierarchy.
 
@@ -148,6 +151,8 @@ def joint_pa_abcd_model(
         raise ValueError("joint PA/ABCD training requires 'pa' and 'abcd' batches")
     if not pa_weight > 0 or not abcd_weight > 0:
         raise ValueError("joint task weights must be positive")
+    if d_hr_weight < 0:
+        raise ValueError("d_hr_weight must be nonnegative")
 
     pa_batch, abcd_batch = batch["pa"], batch["abcd"]
     n_players = player_table["stats"].shape[0]
@@ -209,9 +214,11 @@ def joint_pa_abcd_model(
         ll = marginal_log_likelihood(
             apply, abcd_batch, numpyro.prng_key(), missing_samples,
             prepare=_joint_marginal_prepare(apply),
+            d_hr_weight=d_hr_weight,
         )
     else:
-        ll = abcd_log_likelihood(apply(abcd_batch), abcd_batch)
+        ll = abcd_log_likelihood(apply(abcd_batch), abcd_batch,
+                                 d_hr_weight=d_hr_weight)
 
     pa_count = jnp.maximum(jnp.sum(pa_batch["pa_valid"]), 1)
     pitch_count = jnp.maximum(

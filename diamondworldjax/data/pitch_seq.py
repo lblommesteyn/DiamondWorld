@@ -83,8 +83,20 @@ def _ctx(df: pl.DataFrame) -> np.ndarray:
     # half is the string "top"/"bot". Bottom means the home team is batting.
     half = (df["half"].to_numpy() == "bot").astype(np.float32)
     tto = df["tto"].to_numpy().astype(np.float32)
-    stand = (df["stand"].to_numpy() == "R").astype(np.float32)
-    throws = (df["p_throws"].to_numpy() == "R").astype(np.float32)
+    # Processed data uses the canonical schema names, while a few older
+    # artifacts retain Statcast's raw ``stand`` / ``p_throws`` names.  Both
+    # represent the same pre-pitch inputs. Unknown handedness stays neutral
+    # instead of being silently treated as left-handed.
+    def hand(*names: str) -> np.ndarray:
+        for name in names:
+            if name in df.columns:
+                value = df[name].to_numpy()
+                return np.where(value == "R", 1.0,
+                                np.where(value == "L", 0.0, 0.5)).astype(np.float32)
+        return np.full(len(df), 0.5, np.float32)
+
+    stand = hand("batter_hand", "stand")
+    throws = hand("pitcher_hand", "p_throws")
 
     on1 = (bs & 1 > 0).astype(np.float32)
     on2 = (bs & 2 > 0).astype(np.float32)
@@ -254,13 +266,30 @@ def make_sequences(df: pl.DataFrame, maps: dict, max_len: int = 160,
     swing = df["swing"].to_numpy().astype(np.float32)
     contact = df["contact"].to_numpy().astype(np.float32)
     foul = df["foul"].to_numpy().astype(np.float32)
-    hbp = ((df["pa_terminal"].to_numpy().astype(bool))
-           & (np.asarray(oc, dtype=object) == "HBP")).astype(np.float32)
-
-    # Segment boundaries without a Python-level group_by over millions of rows.
     gp = df["game_pk"].to_numpy()
     hf = df["half"].to_numpy()
     ab = df["at_bat_number"].to_numpy()
+    hbp = ((df["pa_terminal"].to_numpy().astype(bool))
+           & (np.asarray(oc, dtype=object) == "HBP")).astype(np.float32)
+
+    # The processed pitch export has no explicit called-strike field. Infer it
+    # from the next pitch's pre-pitch count within the same PA; a terminal
+    # no-swing strikeout is the remaining called-strike case. This is robust to
+    # two-strike fouls because those have ``swing=1`` and are masked from this
+    # target below.
+    next_same_pa = np.zeros(len(df), dtype=bool)
+    next_strikes = np.zeros(len(df), dtype=np.int16)
+    if len(df) > 1:
+        same = (gp[:-1] == gp[1:]) & (ab[:-1] == ab[1:])
+        next_same_pa[:-1] = same
+        next_strikes[:-1] = df["strikes"].to_numpy()[1:]
+    take = (swing == 0) & (hbp == 0)
+    terminal_k = (df["pa_terminal"].to_numpy().astype(bool)
+                  & (np.asarray(oc, dtype=object) == "K"))
+    called_strike = (take & ((next_same_pa & (next_strikes > df["strikes"].to_numpy()))
+                             | terminal_k)).astype(np.float32)
+
+    # Segment boundaries without a Python-level group_by over millions of rows.
     newseg = np.empty(len(gp), dtype=bool)
     newseg[0] = True
     newseg[1:] = gp[1:] != gp[:-1]
@@ -303,6 +332,7 @@ def make_sequences(df: pl.DataFrame, maps: dict, max_len: int = 160,
         "contact": np.zeros((n, max_len), np.float32),
         "foul": np.zeros((n, max_len), np.float32),
         "hbp": np.zeros((n, max_len), np.float32),
+        "called_strike": np.zeros((n, max_len), np.float32),
         "valid": np.zeros((n, max_len), np.float32),
         "pa_start": np.zeros((n, max_len), bool),
         "launch": np.zeros((n, max_len, 2), np.float32),
@@ -346,6 +376,7 @@ def make_sequences(df: pl.DataFrame, maps: dict, max_len: int = 160,
         out["contact"][i, :L] = contact[a:b]
         out["foul"][i, :L] = foul[a:b]
         out["hbp"][i, :L] = hbp[a:b]
+        out["called_strike"][i, :L] = called_strike[a:b]
         out["valid"][i, :L] = 1.0
         out["pa_start"][i, :L] = np.r_[True, ab[a + 1:b] != ab[a:b - 1]] if L else False
         out["launch"][i, :L] = launch[a:b]

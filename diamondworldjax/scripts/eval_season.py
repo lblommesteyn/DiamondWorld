@@ -68,7 +68,7 @@ def main() -> None:
     parser.add_argument("--pitchformer-heads", type=int, default=4)
     parser.add_argument("--pitchformer-dropout", type=float, default=0.0)
     parser.add_argument("--pa-arch", type=str, default="transformer",
-                        choices=["transformer", "gru"],
+                        choices=["transformer", "gru", "gru_skip"],
                         help="PA sequence model architecture (requires --pitchformer).")
     parser.add_argument("--use-park", action="store_true")
     parser.add_argument("--seed", type=int, default=0)

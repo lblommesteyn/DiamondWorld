@@ -1,0 +1,23 @@
+Hook dists: starter median 23 PA, reliever median 4 PA
+Extracting lineups for 2429 games...
+  2429 games usable
+
+=== runs-by-inning fraction (fatigue shape test) ===
+  inning   1    2    3    4    5    6    7    8    9   | late(6-9)
+  real  11.7 10.8 11.7 11.8 11.9 11.8 11.0 11.0  8.2  | 42.0%
+  sim   12.0 10.6 12.0 11.9 11.6 12.0 10.7 11.0  8.2  | 41.8%
+
+=== TRUE SIMULATION v2 (2429 games, 45s, park) ===
+  runs/game   real 8.63   sim 8.67
+  occupancy   real 43.2%   sim 44.0%
+  home runs/g 4.32   away 4.35   home-win 52.7%  (ties 0)
+  extras      real 8.9%   sim 15.7%   walk-offs 9.7%   extra-inning runs 0.28/g
+  saved per-game scores -> data/runs/joint_v26b_pa_abcd_s97/pa_scores_6.npz
+
+=== Player-level via TRUE SIM (382 batters >= 150 PA) ===
+  stat      real      sim      MAE    corr
+  AVG     0.2390   0.2402   0.0319   0.198
+  OBP     0.3097   0.3141   0.0332   0.374
+  SLG     0.3905   0.3993   0.0675   0.302
+  K%      0.2260   0.2301   0.0340   0.731
+  HR%     0.0292   0.0311   0.0120   0.473

@@ -1,0 +1,14 @@
+model: checkpoints/pa_abcd/pa_v27b_pa_abcd_s97.pkl  contact_quality=True  per_stat_shrink=True  skill_prior=iso  pitchformer=False  recal=off
+checkpoint config resolved: train_end=2023 recency_halflife=2.0 contact_quality=True per_stat_shrink=True skill_prior=walk pitchformer=False
+pre-game sim over 2429 games x R=100 (hook model, crn off, staff=pregame)
+  250/2429
+  500/2429
+  750/2429
+  1000/2429
+  1250/2429
+  1500/2429
+  1750/2429
+  2000/2429
+  2250/2429
+  2429/2429
+saved -> data/eval2/calib_v27b_pa_abcd_s97_pa-pregame-leakfree_arrays.npz  (sim mean total 9.20, real 8.63)

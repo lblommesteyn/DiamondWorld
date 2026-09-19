@@ -9,7 +9,6 @@ from __future__ import annotations
 import argparse
 import copy
 import json
-import itertools
 import pickle
 from functools import partial
 from pathlib import Path
@@ -175,6 +174,7 @@ def _export_artifacts(checkpoint_path: Path, out: Path, tag: str, *,
         "c_support": abcd_options["c_support"],
         "position_encoding": abcd_options["position_encoding"],
         "window_size": abcd_options["window_size"],
+        "learned_called_strike": abcd_options.get("learned_called_strike", False),
         "residual_dim": d_residual,
     }
     save_metadata(out, tag, {
@@ -197,12 +197,62 @@ def _export_artifacts(checkpoint_path: Path, out: Path, tag: str, *,
     (out / f"joint_{tag}_report.json").write_text(json.dumps(report, indent=2))
 
 
+def _export_checkpoint_snapshot(checkpoint_path: Path, out: Path, tag: str) -> None:
+    """Export ordinary PA/ABCD artifacts from a saved joint training snapshot.
+
+    Periodic Model 7 checkpoints contain the learned parameters plus the PA
+    table and joint architecture metadata.  Rebuild only the lightweight role
+    maps needed by the ABCD evaluator, then export the exact requested step
+    without taking another optimizer update.
+    """
+    if not checkpoint_path.is_file():
+        raise FileNotFoundError(f"Joint checkpoint not found: {checkpoint_path}")
+    with checkpoint_path.open("rb") as f:
+        checkpoint = pickle.load(f)
+    metadata = checkpoint.get("joint_metadata")
+    pa_metadata = checkpoint.get("pa_metadata")
+    if not metadata or not pa_metadata:
+        raise ValueError("--export-checkpoint requires a Model 7 joint checkpoint")
+    required = {"train_seasons", "config", "abcd_options", "role_global_indices"}
+    missing = required - set(metadata)
+    if missing:
+        raise ValueError(f"Joint checkpoint is missing metadata fields: {sorted(missing)}")
+
+    seasons = list(metadata["train_seasons"])
+    maps = build_id_maps([load_seasons(seasons)])
+    options = metadata["abcd_options"]
+    if any(maps[f"n_{role}"] != options[f"n_{role}s"] for role in ("pitcher", "batter")):
+        raise ValueError("Current training data role maps do not match the joint checkpoint")
+    if maps["n_park"] != options["n_parks"]:
+        raise ValueError("Current training data park map does not match the joint checkpoint")
+
+    config = metadata["config"]
+    _export_artifacts(
+        checkpoint_path, out, tag,
+        player_table=pa_metadata["player_table"], maps=maps,
+        role_global_indices=metadata["role_global_indices"],
+        train_seasons=seasons, pa_metadata=pa_metadata,
+        abcd_options=options, d_residual=options["d_residual"],
+        skill_prior=config["skill_prior"], args_dict=config,
+    )
+    print(f"Exported snapshot step {checkpoint['step']:,} as {tag}", flush=True)
+
+
 class _PaAbcdBatches:
-    """Infinite, shape-stable matched-game batch iterator for SVI."""
+    """Infinite, shape-stable matched-game batches with epoch-level shuffling.
+
+    A batch always contains both views of exactly the same complete games: PA
+    terminals in chronological game order and all corresponding ABCD pitch
+    windows. Every full pass visits every training game once. When the game
+    count is not divisible by ``game_batch``, the final static-shape batch is
+    padded with a small, freshly shuffled subset of repeated games. This avoids
+    silently excluding a fixed tail while preserving chronological game tokens.
+    """
 
     def __init__(self, pa_rows, abcd_arrays: dict, game_ids: np.ndarray, *,
                  game_batch: int, max_pa: int, id_to_idx: dict,
-                 player_table_np: dict, seed: int):
+                 player_table_np: dict, seed: int,
+                 abcd_sequences_per_game: int | None = None):
         import polars as pl
 
         self._pl = pl
@@ -212,6 +262,8 @@ class _PaAbcdBatches:
         self.game_batch = game_batch
         self.max_pa = max_pa
         self.id_to_idx = id_to_idx
+        self.seed = seed
+        self.abcd_sequences_per_game = abcd_sequences_per_game
         self.player_table = jax.device_put({
             name: player_table_np[name] for name in ("stats", "league", "hand")
         })
@@ -227,32 +279,64 @@ class _PaAbcdBatches:
             rows = lookup[int(gid)]
             self.sequence_rows[i, :len(rows)] = rows
             self.sequence_valid[i, :len(rows)] = True
-        order = np.arange(len(self.game_ids))
-        np.random.default_rng(seed).shuffle(order)
-        self.chunks = [order[i:i + game_batch]
-                       for i in range(0, len(order), game_batch)
-                       if len(order[i:i + game_batch]) == game_batch]
-        if not self.chunks:
+        self.sequence_counts = self.sequence_valid.sum(axis=1).astype(np.int32)
+        # A per-game shuffled cycle lets a fixed small ABCD batch cover every
+        # window over successive visits without allowing the longest games to
+        # multiply a PA-sized joint update into thousands of pitch windows.
+        rng = np.random.default_rng(seed)
+        self.sequence_order = np.zeros_like(self.sequence_rows)
+        for i, count in enumerate(self.sequence_counts):
+            self.sequence_order[i, :count] = rng.permutation(count)
+        self.sequence_cursor = np.zeros(len(self.game_ids), np.int32)
+        if game_batch > len(self.game_ids):
             raise ValueError("Joint batch exceeds the number of training games")
+        if abcd_sequences_per_game is not None and abcd_sequences_per_game < 1:
+            raise ValueError("abcd_sequences_per_game must be positive or None")
+        self.n_chunks = int(np.ceil(len(self.game_ids) / game_batch))
+        self.n_padding = self.n_chunks * game_batch - len(self.game_ids)
 
     def __iter__(self):
-        for chunk in itertools.cycle(self.chunks):
-            games = self.game_ids[chunk]
-            pa_chunk = self.pa_rows.filter(self._pl.col("game_pk").is_in(games.tolist()))
-            pa_batch = build_pa_batch(pa_chunk, max_pa=self.max_pa)
-            pa_batch = _map_player_ids(pa_batch, self.id_to_idx)
+        # Each epoch uses a fresh game permutation. The final fixed-size chunk
+        # is filled from the start of that permutation, so every game appears
+        # at least once and the small repeated subset rotates between passes.
+        rng = np.random.default_rng(self.seed)
+        while True:
+            order = rng.permutation(len(self.game_ids))
+            if self.n_padding:
+                order = np.concatenate([order, order[:self.n_padding]])
+            for start in range(0, len(order), self.game_batch):
+                chunk = order[start:start + self.game_batch]
+                games = self.game_ids[chunk]
+                pa_chunk = self.pa_rows.filter(self._pl.col("game_pk").is_in(games.tolist()))
+                pa_batch = build_pa_batch(pa_chunk, max_pa=self.max_pa)
+                pa_batch = _map_player_ids(pa_batch, self.id_to_idx)
 
-            rows = self.sequence_rows[chunk].reshape(-1)
-            active = self.sequence_valid[chunk].reshape(-1)
-            abcd_batch = {}
-            for name, value in self.arrays.items():
-                selected = np.asarray(value)[rows].copy()
-                selected *= active.reshape((len(active),) + (1,) * (selected.ndim - 1))
-                abcd_batch[name] = selected
-            yield {
-                "pa": pa_batch,
-                "abcd": jax.device_put(abcd_batch),
-            }, self.player_table
+                if self.abcd_sequences_per_game is None:
+                    rows = self.sequence_rows[chunk].reshape(-1)
+                    active = self.sequence_valid[chunk].reshape(-1)
+                else:
+                    k = self.abcd_sequences_per_game
+                    slots = np.zeros((len(chunk), k), np.int32)
+                    active_2d = np.zeros((len(chunk), k), bool)
+                    for out_i, game_i in enumerate(chunk):
+                        count = int(self.sequence_counts[game_i])
+                        take = min(k, count)
+                        start_i = int(self.sequence_cursor[game_i])
+                        positions = (start_i + np.arange(take)) % count
+                        slots[out_i, :take] = self.sequence_order[game_i, positions]
+                        active_2d[out_i, :take] = True
+                        self.sequence_cursor[game_i] = (start_i + take) % count
+                    rows = self.sequence_rows[chunk[:, None], slots].reshape(-1)
+                    active = active_2d.reshape(-1)
+                abcd_batch = {}
+                for name, value in self.arrays.items():
+                    selected = np.asarray(value)[rows].copy()
+                    selected *= active.reshape((len(active),) + (1,) * (selected.ndim - 1))
+                    abcd_batch[name] = selected
+                yield {
+                    "pa": pa_batch,
+                    "abcd": jax.device_put(abcd_batch),
+                }, self.player_table
 
 
 def _build_role_global_indices(maps: dict, id_to_idx: dict) -> dict[str, np.ndarray]:
@@ -280,13 +364,15 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--test-season", type=int, default=2024)
     parser.add_argument("--steps", type=int, default=50_000)
     parser.add_argument("--batch", type=int, default=32, help="Complete games per joint update")
-    parser.add_argument("--max-pa", type=int, default=128, help="Fixed PA padding length for joint compilation")
+    parser.add_argument("--max-pa", type=int, default=192, help="Fixed PA padding length for joint compilation")
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--tag", default="pa_abcd")
     parser.add_argument("--out", type=Path, default=checkpoints_root() / "pa_abcd")
     parser.add_argument("--resume", type=Path, default=None,
                         help="Model 7 checkpoint to resume; --steps remains the total target update count")
+    parser.add_argument("--export-checkpoint", type=Path, default=None,
+                        help="Export ordinary PA/ABCD artifacts from this saved Model 7 snapshot and exit")
     parser.add_argument("--update-chunk-size", type=int, default=1,
                         help="Keep joint batches distinct; one paired game chunk per compiled update")
     parser.add_argument("--prefetch-depth", type=int, default=2)
@@ -297,6 +383,10 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--pa-ss-rate", type=float, default=0.0)
     parser.add_argument("--pa-ss-warmup", type=int, default=20_000)
     parser.add_argument("--missing-samples", type=int, default=2)
+    parser.add_argument("--abcd-sequences-per-game", type=int, default=None,
+                        help="ABCD windows cycled from each matched game per update; default scores all windows")
+    parser.add_argument("--d-hr-weight", type=float, default=0.0,
+                        help="Optional auxiliary binary-HR loss weight for ABCD D (0 preserves baseline).")
 
     # PA likelihood configuration. Defaults reproduce the production PA member
     # of the six-model runner rather than its optional sequence variants.
@@ -306,7 +396,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--player-agg-weight", type=float, default=0.0)
     parser.add_argument("--player-agg-shrink", type=float, default=20.0)
     parser.add_argument("--pa-pitchformer", action="store_true")
-    parser.add_argument("--pa-arch", choices=["transformer", "gru"], default="transformer")
+    parser.add_argument("--pa-arch", choices=["transformer", "gru", "gru_skip"], default="transformer")
     parser.add_argument("--pa-pitchformer-dim", type=int, default=128)
     parser.add_argument("--pa-pitchformer-layers", type=int, default=2)
     parser.add_argument("--pa-pitchformer-heads", type=int, default=4)
@@ -323,6 +413,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--heads", type=int, default=6)
     parser.add_argument("--d-residual", type=int, default=16)
     parser.add_argument("--pitch-history", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--learned-called-strike", action=argparse.BooleanOptionalAction, default=True,
+                        help="Train B's called-strike head from inferred taken-pitch calls.")
     parser.add_argument("--c-event-mode", choices=["bundles", "legacy"], default="bundles")
     parser.add_argument("--history-reset", choices=["game", "half_inning", "batting_side"], default="game")
     parser.add_argument("--dropout", type=float, default=0.1)
@@ -339,6 +431,9 @@ def _parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = _parse_args()
+    if args.export_checkpoint is not None:
+        _export_checkpoint_snapshot(args.export_checkpoint, args.out, args.tag)
+        return
     seasons = [int(s) for s in args.train_seasons.split(",")]
     if (args.test_season in seasons or len(set(seasons)) != len(seasons)
             or not seasons or max(seasons) != 2023):
@@ -346,8 +441,10 @@ def main() -> None:
     if (args.steps < 2 or args.batch < 1 or args.max_pa < 1
             or not 0 < args.residual_scale < 1
             or args.pa_weight <= 0 or args.abcd_weight <= 0
+            or args.d_hr_weight < 0
             or not 0 <= args.pa_ss_rate <= 1
             or args.missing_samples < 0
+            or (args.abcd_sequences_per_game is not None and args.abcd_sequences_per_game < 1)
             or not args.stack or set(args.stack) - set("abcd")
             or len(set(args.stack)) != len(args.stack)):
         raise ValueError("Invalid joint training dimensions, weights, schedule, or ABCD head stack")
@@ -429,6 +526,7 @@ def main() -> None:
         "position_encoding": args.position_encoding,
         "window_size": args.window_size, "observation_masks": True,
         "c_event_mode": args.c_event_mode, "c_support": c_support,
+        "learned_called_strike": args.learned_called_strike,
     }
     pa_kwargs = {
         "outcome_only": args.outcome_only,
@@ -481,7 +579,7 @@ def main() -> None:
     iterator = _PaAbcdBatches(
         pa_rows, train_arrays, game_ids, game_batch=args.batch, max_pa=args.max_pa,
         id_to_idx=player_table["id_to_idx"], player_table_np=player_table,
-        seed=args.seed,
+        seed=args.seed, abcd_sequences_per_game=args.abcd_sequences_per_game,
     )
     kl_scale = args.batch / max(len(game_ids), 1)
     model = partial(
@@ -490,12 +588,15 @@ def main() -> None:
         pa_model_kwargs=pa_kwargs, pa_weight=args.pa_weight,
         abcd_weight=args.abcd_weight, residual_scale=args.residual_scale,
         kl_scale=kl_scale, skill_prior=args.skill_prior, n_seasons=skill_seasons,
-        missing_samples=args.missing_samples,
+        missing_samples=args.missing_samples, d_hr_weight=args.d_hr_weight,
     )
     checkpoint_dir = args.out / f"joint_{args.tag}"
     log_path = results_root() / f"dwjax_joint_{args.tag}_elbo.json"
     print(
         f"Joint PA+ABCD: {len(game_ids):,} games, batch={args.batch}, "
+        f"{iterator.n_chunks:,} batches/pass, "
+        f"planned passes={args.steps / iterator.n_chunks:.1f}, "
+        f"ABCD windows/game={args.abcd_sequences_per_game or 'all'}, "
         f"KL scale={kl_scale:.6g}, PA:ABCD={args.pa_weight}:{args.abcd_weight}",
         flush=True,
     )

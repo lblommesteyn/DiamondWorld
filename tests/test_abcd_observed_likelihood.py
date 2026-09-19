@@ -1,6 +1,7 @@
 import jax
 import jax.numpy as jnp
 import numpy as np
+import polars as pl
 from test_model_review_fixes import batch, KW
 from diamondworldjax.model.pitchformer import TransformerA
 from diamondworldjax.model.marginal_pitch_likelihood import marginal_log_likelihood
@@ -102,6 +103,62 @@ def test_completion_report_does_not_filter_headlines():
     assert result['per_rep'][0]['reasons']['regulation_truncated'] == [456]
     assert result['per_rep'][0]['mean_total_all'] == 8.5
     np.testing.assert_array_equal(rep['total'],[5,12])
+
+
+def test_extra_rate_counts_regulation_ties_not_final_inning_counter():
+    from diamondworldjax.scripts.eval_pitchformer_games import _entered_extra_mask
+    # Normal games advance their internal state past the ninth after the final
+    # bottom-half transition.  Only the tied game actually enters extras.
+    state = {
+        'inning': np.array([10, 10, 9]),
+        'home_score': np.array([5, 4, 3]),
+        'away_score': np.array([4, 4, 3]),
+    }
+    np.testing.assert_array_equal(
+        _entered_extra_mask(state, np.array([False, False, True])),
+        np.array([False, True, False]),
+    )
+
+
+def test_observed_schedule_continues_an_incomplete_half(monkeypatch):
+    """A short observed segment must not be treated as the inning boundary."""
+    from types import SimpleNamespace
+    from diamondworldjax.scripts import eval_pitchformer_games as game_eval
+
+    calls = []
+    def fake_rollout(heads, batch, *, initial_state, **kwargs):
+        del heads, kwargs
+        calls.append(initial_state["pa_slot"].copy())
+        final = {name: value.copy() for name, value in initial_state.items()}
+        # First decode supplies only one of three outs; the continuation ends it.
+        final["pa_slot"] += 1
+        final["outs"] = np.where(initial_state["pa_slot"] == 0, 1, 3)
+        final["ended"] = initial_state["pa_slot"] > 0
+        b, t = batch["valid"].shape
+        terminal = np.ones((b, t), bool)
+        return {
+            "event": np.zeros((b, t, 8), np.int32),
+            "pa_terminal": terminal,
+            "pa_outcome": np.zeros((b, t), np.int32),
+            "batter_idx": np.zeros((b, t), np.int32),
+            "scheduled_pa": terminal,
+            "final_state": final,
+            "final_cache": None,
+        }
+
+    monkeypatch.setattr(game_eval, "rollout_batch", fake_rollout)
+    seq = {"valid": np.ones((1, 1), bool), "pa_start": np.ones((1, 1), bool)}
+    args = SimpleNamespace(batch_games=1, max_len=1, max_half_continuations=2,
+                           history_reset="legacy")
+    result = game_eval._run_one_rep(
+        None, None, None, pl.DataFrame({"game_pk": [1], "inning": [1]}), [{}],
+        {1: 0}, {}, None, args, seed=0, n_batters=1,
+        phase_schedules={(1, 0): [(0, seq)]},
+    )
+    assert len(calls) == 2
+    assert result["truncations"] == 0
+    assert not result["completion_faults"]["regulation_truncated"][0]
+    assert result["generated_pas"] == 2
 
 
 def test_pa_statistical_features_match_and_unknown_stays_zero():

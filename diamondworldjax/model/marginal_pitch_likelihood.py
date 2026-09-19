@@ -32,7 +32,8 @@ def prepare_hidden(encode, decode):
     return prepare
 
 
-def marginal_log_likelihood(apply, batch, key, samples=2, *, prepare=None):
+def marginal_log_likelihood(apply, batch, key, samples=2, *, prepare=None,
+                            d_hr_weight: float = 0.0):
     """Sum per-target log marginals; no extra loss for warm-up history.
 
     `apply(batch)` returns a dict keyed by the selected ABCD heads, including A.
@@ -41,6 +42,8 @@ def marginal_log_likelihood(apply, batch, key, samples=2, *, prepare=None):
     """
     if samples < 1:
         raise ValueError('Marginal likelihood requires samples >= 1')
+    if d_hr_weight < 0:
+        raise ValueError('d_hr_weight must be nonnegative')
     b = dict(batch)
     sm = b.get('stuff_observed', jnp.broadcast_to(b['stuff_valid'][..., None] > 0, b['stuff'].shape))
     lm = b.get('launch_observed', jnp.broadcast_to(b['launch_valid'][..., None] > 0, b['launch'].shape))
@@ -75,6 +78,11 @@ def marginal_log_likelihood(apply, batch, key, samples=2, *, prepare=None):
                     ('foul', (b['swing'] > 0) & (b['contact'] > 0)), ('hbp', b['swing'] == 0)]:
                 lp = -optax.sigmoid_binary_cross_entropy(out['b'][label + '_logit'], b[label])
                 downstream += jnp.where(eligible, lp, 0.)
+            if 'called_strike_logit' in out['b']:
+                call_lp = -optax.sigmoid_binary_cross_entropy(
+                    out['b']['called_strike_logit'], b['called_strike'])
+                call_eligible = (b['swing'] == 0) & (b['hbp'] == 0)
+                downstream += jnp.where(call_eligible, call_lp, 0.)
         if 'c' in out:
             logits = out['c']['event_logits']
             if logits.shape[-1] == 256:
@@ -93,6 +101,13 @@ def marginal_log_likelihood(apply, batch, key, samples=2, *, prepare=None):
             launch = jnp.where(lm, b['launch'], latent_launch)
             outcome = outcome_apply({**current, 'launch': launch})
             downstream += jnp.where(b['batted_valid'] > 0, _categorical(outcome, b['batted_out']), 0.)
+            if d_hr_weight:
+                logp = jax.nn.log_softmax(outcome)
+                p_hr = jnp.exp(logp[..., 4])
+                y_hr = (b['batted_out'] == 4).astype(p_hr.dtype)
+                hr_log_prob = (y_hr * jnp.log(p_hr + 1e-6)
+                               + (1 - y_hr) * jnp.log(1 - p_hr + 1e-6))
+                downstream += d_hr_weight * jnp.where(b['batted_valid'] > 0, hr_log_prob, 0.)
         return downstream
 
     def draw(index):

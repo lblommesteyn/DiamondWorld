@@ -1,0 +1,1 @@
+v24b_pa_transformer_s97 (SVI, conditioned+recal, skill=mean, train<= 2023, test 2024, mle=False) | corr K 0.782 BB 0.649 Hit 0.430 HR 0.574 AVG 0.609 (np=382, rookies_injected=0, rookies_kept=0)

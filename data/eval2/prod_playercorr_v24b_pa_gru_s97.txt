@@ -1,0 +1,1 @@
+v24b_pa_gru_s97 (SVI, conditioned+recal, skill=mean, train<= 2023, test 2024, mle=False) | corr K 0.793 BB 0.662 Hit 0.394 HR 0.592 AVG 0.610 (np=382, rookies_injected=0, rookies_kept=0)

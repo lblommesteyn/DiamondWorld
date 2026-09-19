@@ -39,6 +39,8 @@ class TransformerD(nn.Module):
     observation_masks: bool = False
     c_event_mode: str = "legacy"
     c_support: tuple | None = None
+    # Accepted for shared/joint configuration compatibility; only B uses it.
+    learned_called_strike: bool = False
 
     @nn.compact
     def __call__(self, batch, *, train: bool, decode: bool = False,
@@ -91,7 +93,15 @@ def _masked_mean(x, m):
     return (x * m).sum() / jnp.maximum(m.sum(), 1.0)
 
 
-def loss_d(out, batch):
+def loss_d(out, batch, hr_weight: float = 0.0):
+    """D loss with an optional auxiliary binary HR term.
+
+    The multiclass batted-ball likelihood remains the primary objective.  The
+    auxiliary repeats the HR-vs-not-HR discrimination only when explicitly
+    enabled, so historical checkpoints retain their exact objective.
+    """
+    if hr_weight < 0:
+        raise ValueError("hr_weight must be nonnegative")
     valid = _loss_valid(batch)
 
     # D1 scored only where a launch was actually measured.
@@ -114,6 +124,6 @@ def loss_d(out, batch):
     ll_hr = y_hr * jnp.log(p_hr + eps) + (1 - y_hr) * jnp.log(1 - p_hr + eps)
     nll_hr = -_masked_mean(ll_hr, m_out)
 
-    total = nll_launch + nll_out
+    total = nll_launch + nll_out + hr_weight * nll_hr
     return total, {"nll_launch": nll_launch, "nll_outcome": nll_out,
                    "nll_hr": nll_hr}

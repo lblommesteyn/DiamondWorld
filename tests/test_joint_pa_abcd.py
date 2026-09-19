@@ -6,6 +6,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import numpyro
+import polars as pl
 from numpyro.infer import SVI, Trace_ELBO
 
 from diamondworldjax.model.joint_pa_abcd import joint_pa_abcd_model
@@ -55,6 +56,76 @@ def _inputs():
         "hand": jnp.zeros(2, jnp.int32),
     }
     return {"pa": pa, "abcd": abcd}, table
+
+
+def test_matched_joint_batches_cover_every_complete_game_each_pass():
+    from diamondworldjax.scripts.train_pa_abcd import _PaAbcdBatches
+    game_ids = np.arange(1, 7, dtype=np.int64)
+    iterator = _PaAbcdBatches(
+        pl.DataFrame({"game_pk": game_ids, "at_bat_number": np.ones(len(game_ids))}),
+        {"game_pk": game_ids[:, None], "valid": np.ones((len(game_ids), 1), np.float32)},
+        game_ids, game_batch=2, max_pa=2, id_to_idx={},
+        player_table_np={"stats": np.zeros((1, 2), np.float32),
+                         "league": np.zeros(1, np.int32), "hand": np.zeros(1, np.int32)},
+        seed=17,
+    )
+    assert iterator.n_chunks == 3
+    stream = iter(iterator)
+    batches = [next(stream) for _ in range(6)]
+    for start in (0, 3):
+        pa_seen, abcd_seen = [], []
+        for batch, _ in batches[start:start + 3]:
+            pa_seen.extend(np.asarray(batch["pa"]["game_ids"]).tolist())
+            abcd_seen.extend(np.asarray(batch["abcd"]["game_pk"])[:, 0].tolist())
+        assert sorted(pa_seen) == sorted(abcd_seen) == game_ids.tolist()
+
+
+def test_matched_joint_batches_include_the_nondivisible_tail_each_pass():
+    from diamondworldjax.scripts.train_pa_abcd import _PaAbcdBatches
+    game_ids = np.arange(1, 8, dtype=np.int64)
+    iterator = _PaAbcdBatches(
+        pl.DataFrame({"game_pk": game_ids, "at_bat_number": np.ones(len(game_ids))}),
+        {"game_pk": game_ids[:, None], "valid": np.ones((len(game_ids), 1), np.float32)},
+        game_ids, game_batch=2, max_pa=2, id_to_idx={},
+        player_table_np={"stats": np.zeros((1, 2), np.float32),
+                         "league": np.zeros(1, np.int32), "hand": np.zeros(1, np.int32)},
+        seed=17,
+    )
+    assert iterator.n_chunks == 4
+    stream = iter(iterator)
+    batches = [next(stream) for _ in range(iterator.n_chunks)]
+    pa_seen, abcd_seen = [], []
+    for batch, _ in batches:
+        pa_seen.extend(np.asarray(batch["pa"]["game_ids"]).tolist())
+        abcd_seen.extend(np.asarray(batch["abcd"]["game_pk"])[:, 0].tolist())
+    assert sorted(pa_seen) == sorted(abcd_seen)
+    assert set(pa_seen) == set(game_ids)
+    assert len(pa_seen) == len(game_ids) + 1
+
+
+def test_matched_joint_batches_cycle_a_bounded_number_of_abcd_windows_per_game():
+    from diamondworldjax.scripts.train_pa_abcd import _PaAbcdBatches
+    game_ids = np.array([1, 2], dtype=np.int64)
+    abcd_games = np.repeat(game_ids, 3)
+    iterator = _PaAbcdBatches(
+        pl.DataFrame({"game_pk": game_ids, "at_bat_number": np.ones(len(game_ids))}),
+        {"game_pk": abcd_games[:, None], "valid": np.ones((len(abcd_games), 1), np.float32),
+         "token": np.arange(len(abcd_games), dtype=np.int32)[:, None]},
+        game_ids, game_batch=2, max_pa=2, id_to_idx={},
+        player_table_np={"stats": np.zeros((1, 2), np.float32),
+                         "league": np.zeros(1, np.int32), "hand": np.zeros(1, np.int32)},
+        seed=17, abcd_sequences_per_game=1,
+    )
+    stream = iter(iterator)
+    observed = {1: [], 2: []}
+    for _ in range(3):
+        batch, _ = next(stream)
+        assert batch["abcd"]["game_pk"].shape[0] == 2
+        for game, token in zip(np.asarray(batch["abcd"]["game_pk"])[:, 0],
+                               np.asarray(batch["abcd"]["token"])[:, 0]):
+            observed[int(game)].append(int(token))
+    assert sorted(observed[1]) == [0, 1, 2]
+    assert sorted(observed[2]) == [3, 4, 5]
 
 
 def test_joint_svi_step_updates_one_shared_hierarchy(tmp_path):

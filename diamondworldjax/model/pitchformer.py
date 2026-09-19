@@ -317,6 +317,9 @@ class TransformerA(nn.Module):
     observation_masks: bool = False
     c_event_mode: str = "legacy"
     c_support: tuple | None = None
+    # Shared/joint constructors carry this B-only rollout option for all heads.
+    # A intentionally ignores it, keeping their options structurally compatible.
+    learned_called_strike: bool = False
 
     @nn.compact
     def __call__(self, batch, *, train: bool, decode: bool = False,
@@ -371,6 +374,7 @@ class TransformerB(nn.Module):
     observation_masks: bool = False
     c_event_mode: str = "legacy"
     c_support: tuple | None = None
+    learned_called_strike: bool = False
 
     @nn.compact
     def __call__(self, batch, *, train: bool, decode: bool = False,
@@ -395,7 +399,7 @@ class TransformerB(nn.Module):
         z = jnp.concatenate([h, pitch], axis=-1)
         z = nn.gelu(nn.Dense(self.d_model, name="merge")(z))
 
-        return {
+        result = {
             "swing_logit":   nn.Dense(1, name="swing")(z)[..., 0],
             "contact_logit": nn.Dense(1, name="contact")(z)[..., 0],
             "foul_logit":    nn.Dense(1, name="foul")(z)[..., 0],
@@ -403,6 +407,12 @@ class TransformerB(nn.Module):
             # is evaluated only after a ball is put in play.
             "hbp_logit":     nn.Dense(1, name="hbp")(z)[..., 0],
         }
+        # Older checkpoints used a hard rectangular strike zone in rollout.
+        # Keep their parameter tree loadable; new training learns the call
+        # conditional on a taken, non-HBP pitch instead.
+        if self.learned_called_strike:
+            result["called_strike_logit"] = nn.Dense(1, name="called_strike")(z)[..., 0]
+        return result
 
 
 # ---------------------------------------------------------------------------
@@ -460,6 +470,14 @@ def loss_b(out, batch):
     l_contact = _bce(out["contact_logit"], contact, valid * swing)
     l_foul = _bce(out["foul_logit"], batch["foul"], valid * swing * contact)
     l_hbp = _bce(out["hbp_logit"], batch["hbp"], valid * (1 - swing))
-    total = l_swing + l_contact + l_foul + l_hbp
+    if "called_strike_logit" in out:
+        # HBP is resolved before the call in rollout, so it is not a valid
+        # called-strike target despite also being a no-swing pitch.
+        l_called_strike = _bce(out["called_strike_logit"], batch["called_strike"],
+                               valid * (1 - swing) * (1 - batch["hbp"]))
+    else:
+        l_called_strike = jnp.array(0.0)
+    total = l_swing + l_contact + l_foul + l_hbp + l_called_strike
     return total, {"nll_swing": l_swing, "nll_contact": l_contact,
-                   "nll_foul": l_foul, "nll_hbp": l_hbp}
+                   "nll_foul": l_foul, "nll_hbp": l_hbp,
+                   "nll_called_strike": l_called_strike}

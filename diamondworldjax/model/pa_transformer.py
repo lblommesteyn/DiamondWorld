@@ -4,6 +4,7 @@ Two architectures share the same (B, T, C) -> (B, T, d_model) contract:
 
   PATransformer  — causal self-attention, used via ``--pitchformer``
   PAGRU          — gated recurrent unit, used via ``--pitchformer --pa-arch gru``
+                   and by ``gru_skip`` with a raw-context residual at the head
 
 Both receive the pre-computed context vector from pa_model (game_state, pitcher_z,
 batter_z, park_emb already concatenated).  Neither embeds players or parks itself.

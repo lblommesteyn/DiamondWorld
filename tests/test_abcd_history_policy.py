@@ -47,9 +47,21 @@ def test_training_reset_policy_and_target_coverage():
         a=make_sequences(pl.DataFrame(d),maps,max_len=8,context_len=2,history_reset=policy,geometry_table={})
         assert len(a['valid']) == count
         assert (a['valid']*a['loss_mask']).sum()==4
-    a=make_sequences(pl.DataFrame(d),maps,max_len=3,context_len=1,history_reset='game',geometry_table={})
+    a=make_sequences(pl.DataFrame(d),maps,max_len=3,context_len=1,history_reset='game',geometry_table={},include_game_pk=True)
     assert (a['valid']*a['loss_mask']).sum()==4
     np.testing.assert_array_equal(a['ctx'][0,:2,9],[0,1])
+    np.testing.assert_array_equal(a['game_pk'][0, a['valid'][0].astype(bool)], [1, 1])
+
+
+def test_context_accepts_canonical_hand_columns_without_raw_statcast_names():
+    from diamondworldjax.data.pitch_seq import _ctx
+    frame = pl.DataFrame({
+        "balls": [0], "strikes": [0], "outs": [0], "base_state": [0],
+        "score_diff": [0], "inning": [1], "half": ["top"], "tto": [1],
+        "batter_hand": ["R"], "pitcher_hand": ["L"],
+    })
+    context = _ctx(frame)
+    np.testing.assert_array_equal(context[0, 13:16], [1.0, 0.0, 0.0])
 
 
 def test_bayesian_dropout_train_only():

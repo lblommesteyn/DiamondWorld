@@ -1,0 +1,55 @@
+model: checkpoints/dwjax_pa_v24a_pa_transformer_s42/dwjax_step_0050000.pkl  contact_quality=False  per_stat_shrink=False  skill_prior=walk  pitchformer=True  recal=data/eval2/v13_cal_params.npz[b_heur] x 0.18
+pre-game sim over 2429 games x R=100 (hook model, crn off, staff=pregame)
+W0914 15:52:48.955844  409614 bfc_allocator.cc:317] Allocator (GPU_0_bfc) ran out of memory trying to allocate 2.02GiB with freed_by_count=0. The caller indicates that this is not a failure, but this may mean that there could be performance gains if more memory were available.
+E0914 15:52:48.956097  409478 autotuner.cc:494] Could not get config for HLO: %input_reduce_fusion.1 = f32[32768,128,4]{2,1,0} fusion(%input_scatter_fusion.3, %loop_multiply_fusion.4), kind=kInput, calls=
+(param_0.461: f32[32768,128,4,32], param_1.648: f32[32768,4,32]) -> f32[32768,128,4] {
+  %param_1.648 = f32[32768,4,32]{2,1,0} parameter(1)
+  %broadcast.70.3 = f32[32768,128,4,32]{3,2,1,0} broadcast(%param_1.648), dimensions={0,2,3}, metadata={op_name="jit(_step)/...qhd,...khd->...hqk/dot_general" stack_frame_id=136}
+  %param_0.461 = f32[32768,128,4,32]{3,2,1,0} parameter(0)
+  %multiply.23.3 = f32[32768,128,4,32]{3,2,1,0} multiply(%broadcast.70.3, %param_0.461), metadata={op_name="jit(_step)/...qhd,...khd->...hqk/dot_general" stack_frame_id=136}
+  %constant.130.23 = f32[] constant(0)
+  ROOT %reduce.4.1 = f32[32768,128,4]{2,1,0} reduce(%multiply.23.3, %constant.130.23), dimensions={3}, to_apply=
+  (reduce_sum.90: f32[], reduce_sum.91: f32[]) -> f32[] {
+    %reduce_sum.90 = f32[] parameter(0), metadata={op_name="reduce_sum"}
+    %reduce_sum.91 = f32[] parameter(1), metadata={op_name="reduce_sum"}
+    ROOT %reduce_sum.92.0 = f32[] add(%reduce_sum.90, %reduce_sum.91), metadata={op_name="jit(_step)/LayerNorm/reduce_sum" stack_frame_id=15}
+  }, metadata={op_name="jit(_step)/...qhd,...khd->...hqk/dot_general" stack_frame_id=136}
+}, metadata={op_name="jit(_step)/...qhd,...khd->...hqk/dot_general" deduplicated_name="input_reduce_fusion" stack_frame_id=136}. Status: RESOURCE_EXHAUSTED: Autotuning failed for HLO: %input_reduce_fusion.1 = f32[32768,128,4]{2,1,0} fusion(%input_scatter_fusion.3, %loop_multiply_fusion.4), kind=kInput, calls=%fused_reduce.1, metadata={op_name="jit(_step)/...qhd,...khd->...hqk/dot_general" deduplicated_name="input_reduce_fusion" stack_frame_id=136}. Failed to profile configs: Out of memory while trying to allocate 2.02GiB. [tf-allocator-allocation-error='']
+W0914 15:52:48.967201  409608 bfc_allocator.cc:317] Allocator (GPU_0_bfc) ran out of memory trying to allocate 2.02GiB with freed_by_count=0. The caller indicates that this is not a failure, but this may mean that there could be performance gains if more memory were available.
+E0914 15:52:48.967293  409478 autotuner.cc:494] Could not get config for HLO: %input_reduce_fusion.2 = f32[32768,4,32]{2,1,0} fusion(%input_scatter_fusion.2, %loop_divide_fusion.1), kind=kInput, calls=
+(param_0.462: f32[32768,128,4,32], param_1.649: f32[32768,128,4]) -> f32[32768,4,32] {
+  %param_0.462 = f32[32768,128,4,32]{3,2,1,0} parameter(0)
+  %param_1.649 = f32[32768,128,4]{2,1,0} parameter(1)
+  %broadcast.125.3 = f32[32768,128,4,32]{3,2,1,0} broadcast(%param_1.649), dimensions={0,1,2}, metadata={op_name="jit(_step)/bhqk,bkhd->bqhd/dot_general" stack_frame_id=140}
+  %multiply.38.3 = f32[32768,128,4,32]{3,2,1,0} multiply(%param_0.462, %broadcast.125.3), metadata={op_name="jit(_step)/bhqk,bkhd->bqhd/dot_general" stack_frame_id=140}
+  %constant.130.24 = f32[] constant(0)
+  ROOT %reduce.1.1 = f32[32768,4,32]{2,1,0} reduce(%multiply.38.3, %constant.130.24), dimensions={1}, to_apply=
+  (reduce_sum.78: f32[], reduce_sum.79: f32[]) -> f32[] {
+    %reduce_sum.78 = f32[] parameter(0), metadata={op_name="reduce_sum"}
+    %reduce_sum.79 = f32[] parameter(1), metadata={op_name="reduce_sum"}
+    ROOT %reduce_sum.83.0 = f32[] add(%reduce_sum.78, %reduce_sum.79), metadata={op_name="jit(_step)/LayerNorm/reduce_sum" stack_frame_id=15}
+  }, metadata={op_name="jit(_step)/bhqk,bkhd->bqhd/dot_general" stack_frame_id=140}
+}, metadata={op_name="jit(_step)/bhqk,bkhd->bqhd/dot_general" deduplicated_name="input_reduce_fusion.2" stack_frame_id=140}. Status: RESOURCE_EXHAUSTED: Autotuning failed for HLO: %input_reduce_fusion.2 = f32[32768,4,32]{2,1,0} fusion(%input_scatter_fusion.2, %loop_divide_fusion.1), kind=kInput, calls=%fused_reduce.2, metadata={op_name="jit(_step)/bhqk,bkhd->bqhd/dot_general" deduplicated_name="input_reduce_fusion.2" stack_frame_id=140}. Failed to profile configs: Out of memory while trying to allocate 2.02GiB. [tf-allocator-allocation-error='']
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/home/jaden/Documents/Baseball/diamondworldjax/scripts/run_pregame_sim.py", line 187, in <module>
+    main()
+  File "/home/jaden/Documents/Baseball/diamondworldjax/scripts/run_pregame_sim.py", line 159, in main
+    H, A = s.run(games[i:i + args.chunk], R=args.r, seed=0, skill_mode="mean", crn=False)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jaden/Documents/Baseball/diamondworldjax/scripts/scenario_sim.py", line 139, in run
+    res = simulate(self.model_fn, self.params, self.pt, games,
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jaden/Documents/Baseball/diamondworldjax/scripts/simulate_games.py", line 681, in simulate
+    play_half(inning, 0, playing)
+  File "/home/jaden/Documents/Baseball/diamondworldjax/scripts/simulate_games.py", line 435, in play_half
+    active_carry, prediction = infer_step(
+                               ^^^^^^^^^^^
+  File "/home/jaden/Documents/Baseball/diamondworldjax/model/pa_inference.py", line 449, in step
+    return self._step_jit(carry, **arrays)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+jax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Failed to get configs for: 2 out of 9 instructions. See logs for all failures. Example failure: 
+Autotuning failed for HLO: %input_reduce_fusion.1 = f32[32768,128,4]{2,1,0} fusion(%input_scatter_fusion.3, %loop_multiply_fusion.4), kind=kInput, calls=%fused_reduce.1, metadata={op_name="jit(_step)/...qhd,...khd->...hqk/dot_general" deduplicated_name="input_reduce_fusion" stack_frame_id=136}. Failed to profile configs: Out of memory while trying to allocate 2.02GiB. [tf-allocator-allocation-error='']
+--------------------
+For simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.

@@ -5,6 +5,7 @@ import pytest
 import jax
 import jax.numpy as jnp
 import numpy as np
+import polars as pl
 from test_model_review_fixes import batch
 from diamondworldjax.model.bayesian_pitchformer import (
     BayesianNetwork, draw_skills, skill_kl, likelihood, export_world, run_bayesian)
@@ -41,7 +42,8 @@ def test_native_training_residuals_export_and_worlds(tmp_path, monkeypatch):
         actual = models[head](**c['options'], dropout=0.).apply(variables, c['example'], train=False)
         for key in actual:
             np.testing.assert_allclose(actual[key], expected[head][key], atol=2e-6)
-        assert np.all(np.asarray(tables[head][0]) == 0)
+        for role in ('pitcher', 'batter'):
+            assert np.all(np.asarray(tables[head][role][0]) == 0)
     w1, w2, w3 = export_world(c, 3, True), export_world(c, 3, True), export_world(c, 4, True)
     for h in 'abcd':
         p1 = w1[h]['player_data']['trunk']['super_state']['pitcher']
@@ -101,3 +103,43 @@ def test_feature_leakage_is_rejected(tmp_path):
     maps = dict(pitcher={10: 1}, batter={20: 1}, n_pitcher=2, n_batter=2)
     with pytest.raises(ValueError, match='held-out'):
         run_bayesian(args, {}, {}, maps, [2020])
+
+
+def test_pa_role_features_give_pitchers_their_own_opponent_outcomes():
+    from diamondworldjax.model.bayesian_pitchformer import pa_role_skill_features
+    pitches = pl.DataFrame({
+        'pitcher_id': [10, 10, 11], 'batter_id': [20, 21, 20],
+        'season': [2021, 2021, 2021], 'pa_terminal': [True, True, True],
+        'pa_outcome': ['HR', 'BB', 'K'],
+    })
+    args = argparse.Namespace(recency_halflife=None, contact_quality=False,
+                              per_stat_shrink=False)
+    stats, league, hand = pa_role_skill_features(
+        pitches, {10: 1, 11: 2, 20: 3, 21: 4}, args)
+
+    # A pitcher now receives the two outcomes he allowed; before this change,
+    # player 10's rate/count vector was all zero because the table grouped only
+    # on batter_id.
+    assert stats[0, 1, 4] > 0
+    assert stats[1, 3, 4] > 0
+    assert stats[..., 4].max() <= 1.0
+    assert not stats[:, 0].any() and not league[:, 0].any() and not hand[:, 0].any()
+
+
+def test_bayesian_network_uses_distinct_role_feature_tables():
+    b = batch(1)
+    features = (
+        jnp.zeros((2, 5, 3)).at[0, 1, 0].set(1.).at[1, 1, 0].set(-1.),
+        jnp.zeros((2, 5), jnp.int32),
+        jnp.zeros((2, 5), jnp.int32),
+    )
+    options = dict(n_pitchers=3, n_batters=3, n_parks=3, d_model=6,
+                   n_layers=1, n_heads=2, player_mode='pa', skill_seasons=1)
+    model = BayesianNetwork(options, 'b', 3, dropout=0.)
+    skills = jnp.zeros((2, 5, 1, 32))
+    roles = {'pitcher': jnp.array([0, 1, 2]), 'batter': jnp.array([0, 3, 1])}
+    params = model.init(jax.random.PRNGKey(22), b, features, skills, roles)
+    _, tables = model.apply(params, b, features, skills, roles)
+
+    assert tables['b']['pitcher'].shape == tables['b']['batter'].shape == (5, 1, 64)
+    assert not np.allclose(tables['b']['pitcher'][1], tables['b']['batter'][1])

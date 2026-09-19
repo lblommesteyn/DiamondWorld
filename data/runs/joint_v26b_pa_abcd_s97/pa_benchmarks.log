@@ -1,0 +1,33 @@
+/home/jaden/Documents/Baseball/diamondworldjax/scripts/simulator_benchmarks.py:40: RuntimeWarning: divide by zero encountered in scalar divide
+  return np.where(ml > 0, 100.0 / (ml + 100.0), -ml / (-ml + 100.0))
+SIMULATOR BENCHMARKS (v26b_pa_abcd_s97_pa-pregame-leakfree) — 2429 games, 2376 decided
+
+1. WIN PROBABILITY (home), lower log-loss / Brier better, higher AUC better:
+   model                       n   logloss    brier     AUC     ECE
+   base rate (home 0.521)   2376    0.6923   0.2496       -       -
+   DiamondWorld sim         2376    0.7077   0.2550   0.562   0.070
+   Log5 (Pythagorean)       2376    0.6709   0.2391   0.617   0.019
+   Market (devig close)     2302    0.6707   0.2391   0.614   0.019
+   (common set n=2302: sim logloss 0.7060, Log5 0.6700, market 0.6707)
+
+2. RUN-TOTAL DISTRIBUTION. mean/variance and how well each covers reality:
+   real total: mean 8.63  var 18.24
+   model                        mean     var  P(>=10)  P(<=5)  logscore
+   real (empirical)             8.63   18.24    0.366   0.261         -
+   DiamondWorld sim             8.69   17.34    0.375   0.262     2.942
+   independent 2-Poisson        8.69    8.21    0.378   0.161     2.936
+   league neg-binomial          8.65   17.42    0.374   0.246     2.960
+
+   central-interval coverage (should equal the nominal level):
+   model                          50%     80%     90%
+   DiamondWorld sim             0.500   0.758   0.852
+   independent 2-Poisson        0.371   0.591   0.682
+   league neg-binomial          0.508   0.755   0.839
+
+   randomized-PIT uniformity (KS distance from Uniform, lower = better calibrated):
+   DiamondWorld sim           KS 0.0379
+   independent 2-Poisson      KS 0.1361
+   league neg-binomial        KS 0.0420
+
+   overdispersion: sim within-game total variance is 2.00x the independent-Poisson
+   value (var = mean); real is 2.11x. The summed model cannot produce this.

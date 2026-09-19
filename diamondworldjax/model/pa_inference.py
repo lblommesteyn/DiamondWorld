@@ -231,7 +231,7 @@ def build_pa_inference(
 # ============================================================================
 
 class PASequenceInference:
-    """Fast inference for PA models with a sequence backbone (GRU or transformer).
+    """Fast inference for PA models with a GRU, residual GRU, or transformer.
 
     Mirrors PAInference but adds a sequence model between the raw context
     vector and the outcome head.  Exposes a ``step`` method suitable for an
@@ -330,8 +330,9 @@ class PASequenceInference:
         self._context_dim = n_state + 2 * PLAYER_DIM + PARK_DIM
 
         # -- sequence model + step function ----------------------------------
-        if pa_arch == "gru":
-            site_name = "pa_gru"
+        self._include_raw_context = pa_arch == "gru_skip"
+        if pa_arch in ("gru", "gru_skip"):
+            site_name = "pa_gru_skip" if pa_arch == "gru_skip" else "pa_gru"
             seq_params = params[f"{site_name}$params"]
             module = PAGRU(d_model=d_model, n_layers=n_layers)
             self._seq_step = gru_step_fn(module, seq_params)
@@ -426,7 +427,9 @@ class PASequenceInference:
             pitcher_ids, batter_ids, park_ids, bat_side, pit_hand,
         )
         new_carry, seq_out = self._seq_step(carry, context_raw)
-        logits = self._head.apply({"params": self._head_params}, seq_out)
+        head_input = (jnp.concatenate([context_raw, seq_out], axis=-1)
+                      if self._include_raw_context else seq_out)
+        logits = self._head.apply({"params": self._head_params}, head_input)
         if self._bilinear is not None:
             logits = logits + self._bilinear.apply(
                 {"params": self._bilinear_params}, batter_z, pitcher_z,

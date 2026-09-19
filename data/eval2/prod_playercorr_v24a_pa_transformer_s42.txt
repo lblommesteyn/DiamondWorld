@@ -1,0 +1,1 @@
+v24a_pa_transformer_s42 (SVI, conditioned+recal, skill=mean, train<= 2023, test 2024, mle=False) | corr K 0.775 BB 0.645 Hit 0.392 HR 0.586 AVG 0.599 (np=382, rookies_injected=0, rookies_kept=0)

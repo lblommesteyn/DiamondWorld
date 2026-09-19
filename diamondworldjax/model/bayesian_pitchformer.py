@@ -36,7 +36,18 @@ class BayesianNetwork(nn.Module):
             return outputs, {}
         # The same encoder/fusion architecture and latent width used by PA.
         stats, league, hand = features
-        encoded = PlayerSeasonEncoder(self.f_player, name="encoder")(stats, league, hand)
+        # v26 and earlier stored one player table, whose outcome-rate columns
+        # described batting only. Accept those checkpoints, but new training
+        # provides separate pitcher and batter tables so a pitcher's encoder
+        # can see the results he allowed rather than an all-zero rate vector.
+        # The two role encoders share weights; role-specific inputs are enough
+        # to preserve a common skill space without conflating their evidence.
+        if stats.ndim == 2:
+            stats = jnp.broadcast_to(stats, (2, *stats.shape))
+            league = jnp.broadcast_to(league, (2, *league.shape))
+            hand = jnp.broadcast_to(hand, (2, *hand.shape))
+        encoder = PlayerSeasonEncoder(self.f_player, name="encoder")
+        encoded = [encoder(stats[i], league[i], hand[i]) for i in range(2)]
         fusion = SkillFusionLayer(name="fusion")
         ss_module = SuperState(**{k: v for k, v in self.options.items()
                                   if k in ('n_pitchers', 'n_batters', 'n_parks', 'd_model',
@@ -45,12 +56,15 @@ class BayesianNetwork(nn.Module):
         tables = {}
         for i, head in enumerate(self.heads):
             skill = skills[0] + skills[i + 1]
-            det = jnp.broadcast_to(encoded[:, None, :], (*skill.shape[:2], 64))
-            table = fusion(det, skill)
-            table = table.at[0].set(0.)  # Unknown sentinel is never a learned player.
-            tables[head] = table
+            tables[head] = {}
             vectors = []
-            for role in ('pitcher', 'batter'):
+            for role_i, role in enumerate(('pitcher', 'batter')):
+                det = jnp.broadcast_to(encoded[role_i][:, None, :],
+                                       (*skill.shape[:2], 64))
+                table = fusion(det, skill)
+                # Unknown sentinel is never a learned player.
+                table = table.at[0].set(0.)
+                tables[head][role] = table
                 ids = batch[role + '_idx']
                 mapping = role_indices[role]
                 known = (ids > 0) & (ids < len(mapping))
@@ -83,9 +97,11 @@ def skill_kl(posterior, residual_scale):
                    (sigma ** 2 + posterior['mu'] ** 2) / (2 * scales ** 2) - .5)
 
 
-def likelihood(outputs, b):
+def likelihood(outputs, b, d_hr_weight: float = 0.0):
     """Summed conditional likelihood, with missing conditioning data excluded."""
     total = 0.
+    if d_hr_weight < 0:
+        raise ValueError('d_hr_weight must be nonnegative')
     v = (b['valid'] * b.get('loss_mask', 1)).astype(bool)
     tracked = v & b['type_valid'].astype(bool) & b['stuff_valid'].astype(bool)
     def add(lp, mask):
@@ -106,6 +122,13 @@ def likelihood(outputs, b):
                                 ('foul', tracked & (b['swing'] > 0) & (b['contact'] > 0)),
                                 ('hbp', tracked & (b['swing'] == 0))]:
                 total += add(-optax.sigmoid_binary_cross_entropy(o[label + '_logit'], b[label]), mask)
+            if 'called_strike_logit' in o:
+                # The call occurs only after a taken non-HBP pitch.  Keep this
+                # separate from the old heads so pre-call-head checkpoints
+                # retain their exact objective.
+                call_mask = v & (b['swing'] == 0) & (b['hbp'] == 0)
+                total += add(-optax.sigmoid_binary_cross_entropy(
+                    o['called_strike_logit'], b['called_strike']), call_mask)
         elif h == 'c':
             if o['event_logits'].shape[-1] == 256:
                 target = jnp.sum(b['events'].astype(jnp.int32) * (1 << jnp.arange(8)), -1)
@@ -116,6 +139,11 @@ def likelihood(outputs, b):
             measured = tracked & b['launch_valid'].astype(bool)
             total += add(gaussian(b['launch'], o['launch_mu'], o['launch_logsigma']), measured)
             total += add(categorical(o['outcome_logits'], b['batted_out']), measured & b['batted_valid'].astype(bool))
+            if d_hr_weight:
+                p_hr = jax.nn.softmax(o['outcome_logits'], axis=-1)[..., 4]
+                y_hr = (b['batted_out'] == 4).astype(p_hr.dtype)
+                hr_ll = y_hr * jnp.log(p_hr + 1e-6) + (1 - y_hr) * jnp.log(1 - p_hr + 1e-6)
+                total += d_hr_weight * add(hr_ll, measured & b['batted_valid'].astype(bool))
     return total
 
 
@@ -135,7 +163,7 @@ def export_world(checkpoint, seed=0, sample=False):
         params = deepcopy(c['network']['head_' + h])
         params['trunk']['super_state'] = deepcopy(c['network']['shared_ss'])
         result[h] = {'params': params, 'player_data': {'trunk': {'super_state': {
-            role: tables[h][indices] for role, indices in c['role_indices'].items()}}}}
+            role: tables[h][role][indices] for role, indices in c['role_indices'].items()}}}}
     return result
 
 
@@ -152,6 +180,62 @@ def pa_skill_features(pitches, registry, args):
         source = table['id_to_idx'].get(pid)
         if source is not None:
             stats[target], league[target], hand[target] = table['stats'][source], table['league'][source], table['hand'][source]
+    return stats, league, hand
+
+
+def pa_role_skill_features(pitches, registry, args):
+    """Leakage-free deterministic features, separated by on-field role.
+
+    ``_build_player_table`` intentionally summarizes batting outcomes.  Applying
+    that same table to pitchers leaves their useful rate/count fields at zero.
+    Re-running it with pitcher and batter IDs exchanged gives the matching
+    opponent-outcome summary for a pitcher.  The learned encoder weights remain
+    shared, while the evidence supplied to each role is now correct.
+    """
+    import polars as pl
+    from diamondworldjax.scripts.train_pa import _build_player_table
+
+    kw = dict(
+        recency_halflife=getattr(args, "recency_halflife", None),
+        contact_quality=getattr(args, "contact_quality", False),
+        per_stat_shrink=getattr(args, "per_stat_shrink", False),
+    )
+    batter_table = _build_player_table(pitches, **kw)
+    pitcher_col = "pitcher_id" if "pitcher_id" in pitches.columns else "pitcher_idx"
+    batter_col = "batter_id" if "batter_id" in pitches.columns else "batter_idx"
+    swapped = pitches.select(
+        pl.col(pitcher_col).alias("batter_id"),
+        pl.col(batter_col).alias("pitcher_id"),
+        pl.all().exclude([pitcher_col, batter_col]),
+    )
+    pitcher_table = _build_player_table(swapped, **kw)
+
+    feature_dim = batter_table["stats"].shape[-1]
+    stats = np.zeros((2, len(registry) + 1, feature_dim), np.float32)
+    league = np.zeros((2, len(registry) + 1), np.int32)
+    hand = np.zeros((2, len(registry) + 1), np.int32)
+    for pid, target in registry.items():
+        batter_source = batter_table["id_to_idx"].get(pid)
+        pitcher_source = pitcher_table["id_to_idx"].get(pid)
+        if batter_source is not None:
+            stats[1, target] = batter_table["stats"][batter_source]
+            league[1, target] = batter_table["league"][batter_source]
+            hand[1, target] = int(batter_table["bat_hand"][batter_source] >= .5)
+        if pitcher_source is not None:
+            stats[0, target] = pitcher_table["stats"][pitcher_source]
+            league[0, target] = pitcher_table["league"][pitcher_source]
+            # Handedness is metadata, not an outcome summary: retain the
+            # original pitcher's throwing hand after the ID swap above.
+            source = batter_table["id_to_idx"].get(pid)
+            if source is not None:
+                hand[0, target] = int(batter_table["pit_hand"][source] >= .5)
+
+    # Column 4 is PA/BF exposure.  Its raw 0--2000+ scale overwhelms rate
+    # features before LayerNorm; retain its confidence signal on a bounded,
+    # monotone scale instead.
+    stats[..., 4] = np.minimum(
+        np.log1p(stats[..., 4]) / np.log1p(2500.0), 1.0
+    )
     return stats, league, hand
 
 
@@ -186,12 +270,21 @@ def run_bayesian(args, train, test, maps, seasons, feature_pitches=None):
             if int(f['through_year']) > max(seasons):
                 raise ValueError('Skill features must not include held-out years')
             source = {int(pid): i for i, pid in enumerate(f['player_ids'])}
-            stats = np.zeros((len(ids) + 1, f['stats'].shape[-1]), np.float32)
-            league, hand = features[1:]
+            role_aware = f['stats'].ndim == 3
+            stats_shape = ((2, len(ids) + 1, f['stats'].shape[-1]) if role_aware
+                           else (len(ids) + 1, f['stats'].shape[-1]))
+            stats = np.zeros(stats_shape, np.float32)
+            league = np.zeros(stats_shape[:-1], np.int32)
+            hand = np.zeros(stats_shape[:-1], np.int32)
             for pid, target in registry.items():
                 if pid in source:
                     i = source[pid]
-                    stats[target], league[target], hand[target] = f['stats'][i], f['league'][i], f['hand'][i]
+                    if role_aware:
+                        stats[:, target] = f['stats'][:, i]
+                        league[:, target] = f['league'][:, i]
+                        hand[:, target] = f['hand'][:, i]
+                    else:
+                        stats[target], league[target], hand[target] = f['stats'][i], f['league'][i], f['hand'][i]
             if not np.isfinite(stats).all() or not np.isin(league, [0, 1]).all() or not np.isin(hand, [0, 1]).all():
                 raise ValueError('Invalid skill covariates')
             features = stats, league, hand
@@ -200,7 +293,8 @@ def run_bayesian(args, train, test, maps, seasons, feature_pitches=None):
             raise ValueError('PA-compatible features require training pitches')
         if not set(feature_pitches['season'].unique().to_list()).issubset(seasons):
             raise ValueError('Feature pitches include seasons outside training')
-        features = pa_skill_features(feature_pitches, registry, args)
+        features = pa_role_skill_features(feature_pitches, registry, args)
+        print('Bayesian skills: role-aware training-only PA/BF covariates selected.', flush=True)
     else:
         print('Bayesian skills: neutral statistical covariates selected.', flush=True)
     features = tuple(jnp.asarray(x) for x in features)
@@ -213,7 +307,8 @@ def run_bayesian(args, train, test, maps, seasons, feature_pitches=None):
                    position_encoding=getattr(args, 'position_encoding', 'sinusoidal'),
                    window_size=getattr(args, 'window_size', 0),
                    observation_masks=True, c_event_mode=getattr(args, 'c_event_mode', 'legacy'),
-                   c_support=getattr(args, 'c_support', None))
+                   c_support=getattr(args, 'c_support', None),
+                   learned_called_strike=getattr(args, 'learned_called_strike', True))
     model = BayesianNetwork(options, args.stack, features[0].shape[-1], dropout=getattr(args, 'dropout', .1))
     example = {k: jnp.asarray(v[:1]) for k, v in train.items()}
     shape = (1 + len(args.stack), len(ids), s, SKILL_DIM)
@@ -241,10 +336,11 @@ def run_bayesian(args, train, test, maps, seasons, feature_pitches=None):
             apply = lambda data: model.apply({'params': p['network']}, data, features, skills, roles, train=True, rngs={'dropout': jax.random.fold_in(key, 892)})[0]
             ll = marginal_log_likelihood(apply, batch, jax.random.fold_in(key, 891), args.missing_samples,
                 prepare=bayesian_marginal_prepare(model, p['network'], features, skills, roles,
-                                                 train=True, key=key))
+                                                 train=True, key=key),
+                d_hr_weight=getattr(args, 'd_hr_weight', 0.0))
         else:
             out, _ = model.apply({'params': p['network']}, batch, features, skills, roles, train=True, rngs={'dropout': jax.random.fold_in(key, 892)})
-            ll = likelihood(out, batch)
+            ll = likelihood(out, batch, d_hr_weight=getattr(args, 'd_hr_weight', 0.0))
         # Uniform sequence sampling: sum likelihood * N/B; global KL exactly once.
         return (-ll * n / batch['valid'].shape[0] +
                 skill_kl(p['posterior'], args.skill_residual_scale)) / n
@@ -307,7 +403,8 @@ def run_bayesian(args, train, test, maps, seasons, feature_pitches=None):
         train_years=seasons, skill_season_base=min(seasons), bayesian=True,
         model_options=dict(dropout=getattr(args, 'dropout', .1), player_mode='pa', skill_seasons=s, pitch_history=args.pitch_history, residual_dim=0,
                            position_encoding=options['position_encoding'], window_size=options['window_size'],
-                           observation_masks=True, c_event_mode=options['c_event_mode'], c_support=options['c_support'])))
+                           observation_masks=True, c_event_mode=options['c_event_mode'], c_support=options['c_support'],
+                           learned_called_strike=options['learned_called_strike'])))
     # Held-out likelihood at posterior means, under exactly the training masks.
     skills = draw_skills(params['posterior'], key, args.skill_residual_scale, args.skill_prior, args.skill_walk_scale, False)
     def heldout(batch):
@@ -338,7 +435,10 @@ def run_bayesian(args, train, test, maps, seasons, feature_pitches=None):
     report = dict(d_interpretation="Associative launch/outcome factorization; park/environment enter both stages and outcome can bypass launch. Ablations are predictive, not causal.", history_missingness='mask-aware encoder; no latent-history integration', config=vars(args), heads=args.stack, heldout_log_likelihood=ll,
         heldout_target_counts=coverage, prediction_mode='posterior_mean_skills',
         final_negative_elbo_per_sequence=float(loss),
-        statistical_covariates='provided' if args.skill_features else getattr(args, 'skill_feature_mode', 'neutral'))
+        statistical_covariates=('provided_role_aware' if args.skill_features and features[0].ndim == 3
+                                else 'provided' if args.skill_features
+                                else 'pa_role_aware' if getattr(args, 'skill_feature_mode', 'neutral') == 'pa'
+                                else 'neutral'))
     with open(outdir / f'bayesian_{args.tag}_report.json', 'w') as f:
         json.dump(report, f, indent=2)
     print(f'Saved Bayesian posterior and mean head exports. Held-out summed log likelihood: {ll:.4f}', flush=True)

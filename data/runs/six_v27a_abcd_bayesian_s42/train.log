@@ -1,0 +1,69 @@
+loading train seasons [2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023], test 2024
+pitchers=2257 batters=2498 parks=31 (index 0 reserved for unknown)
+events table: 183,608 rows
+game context file absent, running without environment
+train seqs (58818, 160), pitches 7,241,262
+test  seqs (7034, 160), pitches 859,258
+C transition support coverage: {'train': {'eligible': 4467848, 'unsupported': 0}, 'test': {'eligible': 529133, 'unsupported': 7}}
+Bayesian skills: role-aware training-only PA/BF covariates selected.
+Bayesian ABCD step 0: negative ELBO/sequence=4074.8923
+Bayesian ABCD step 100: negative ELBO/sequence=1039.2517
+Bayesian ABCD step 200: negative ELBO/sequence=713.0070
+Bayesian ABCD step 300: negative ELBO/sequence=762.7209
+Bayesian ABCD step 400: negative ELBO/sequence=856.7525
+Bayesian ABCD step 500: negative ELBO/sequence=659.9072
+Bayesian ABCD step 600: negative ELBO/sequence=722.2144
+Bayesian ABCD step 700: negative ELBO/sequence=702.4967
+Bayesian ABCD step 800: negative ELBO/sequence=717.8047
+Bayesian ABCD step 900: negative ELBO/sequence=819.6611
+Bayesian ABCD step 1000: negative ELBO/sequence=835.5521
+Bayesian ABCD step 1100: negative ELBO/sequence=590.5284
+Bayesian ABCD step 1200: negative ELBO/sequence=857.8511
+Bayesian ABCD step 1300: negative ELBO/sequence=822.1586
+Bayesian ABCD step 1400: negative ELBO/sequence=664.1008
+Bayesian ABCD step 1500: negative ELBO/sequence=697.5967
+Bayesian ABCD step 1600: negative ELBO/sequence=794.7424
+Bayesian ABCD step 1700: negative ELBO/sequence=720.4545
+Bayesian ABCD step 1800: negative ELBO/sequence=628.5553
+Bayesian ABCD step 1900: negative ELBO/sequence=657.7200
+Bayesian ABCD step 2000: negative ELBO/sequence=718.9322
+Bayesian ABCD step 2100: negative ELBO/sequence=647.9253
+Bayesian ABCD step 2200: negative ELBO/sequence=675.4863
+Bayesian ABCD step 2300: negative ELBO/sequence=668.5386
+Bayesian ABCD step 2400: negative ELBO/sequence=765.6525
+Bayesian ABCD step 2500: negative ELBO/sequence=691.4655
+Bayesian ABCD step 2600: negative ELBO/sequence=523.2065
+Bayesian ABCD step 2700: negative ELBO/sequence=687.2538
+Bayesian ABCD step 2800: negative ELBO/sequence=762.2567
+Bayesian ABCD step 2900: negative ELBO/sequence=663.1147
+Bayesian ABCD step 3000: negative ELBO/sequence=658.4340
+Bayesian ABCD step 3100: negative ELBO/sequence=703.0562
+Bayesian ABCD step 3200: negative ELBO/sequence=644.6712
+Bayesian ABCD step 3300: negative ELBO/sequence=660.8017
+Bayesian ABCD step 3400: negative ELBO/sequence=609.3517
+Bayesian ABCD step 3500: negative ELBO/sequence=656.7439
+Bayesian ABCD step 3600: negative ELBO/sequence=468.9223
+Bayesian ABCD step 3700: negative ELBO/sequence=672.3873
+Bayesian ABCD step 3800: negative ELBO/sequence=492.5621
+Bayesian ABCD step 3900: negative ELBO/sequence=569.3898
+Bayesian ABCD step 4000: negative ELBO/sequence=670.6431
+Bayesian ABCD step 4100: negative ELBO/sequence=692.4682
+Bayesian ABCD step 4200: negative ELBO/sequence=600.8156
+Bayesian ABCD step 4300: negative ELBO/sequence=775.7556
+Bayesian ABCD step 4400: negative ELBO/sequence=331.6756
+Bayesian ABCD step 4500: negative ELBO/sequence=565.0275
+Bayesian ABCD step 4600: negative ELBO/sequence=653.0180
+Bayesian ABCD step 4700: negative ELBO/sequence=608.1091
+Bayesian ABCD step 4800: negative ELBO/sequence=494.4980
+Bayesian ABCD step 4900: negative ELBO/sequence=513.7932
+Bayesian ABCD step 5000: negative ELBO/sequence=653.7700
+Bayesian ABCD step 5100: negative ELBO/sequence=698.1656
+Bayesian ABCD step 5200: negative ELBO/sequence=618.8630
+Bayesian ABCD step 5300: negative ELBO/sequence=557.3295
+Bayesian ABCD step 5400: negative ELBO/sequence=619.6362
+Bayesian ABCD step 5500: negative ELBO/sequence=631.8048
+Bayesian ABCD step 5600: negative ELBO/sequence=663.9573
+Bayesian ABCD step 5700: negative ELBO/sequence=596.7798
+Bayesian ABCD step 5800: negative ELBO/sequence=554.6583
+Bayesian ABCD step 5900: negative ELBO/sequence=598.5773
+Saved Bayesian posterior and mean head exports. Held-out summed log likelihood: -4134575.6705

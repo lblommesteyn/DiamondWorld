@@ -1,0 +1,24 @@
+model: checkpoints/dwjax_pa_v25b_pa_gru_s97/dwjax_step_0050000.pkl  contact_quality=True  per_stat_shrink=True  skill_prior=walk  pitchformer=True  recal=off
+checkpoint config resolved: train_end=2023 recency_halflife=2.0 contact_quality=True per_stat_shrink=True skill_prior=walk pitchformer=True
+pre-game sim over 2429 games x R=20 (hook model, crn off, staff=pregame)
+  chunk 0 has a different game/configuration, recomputing
+  250/2429
+  chunk 250 has a different game/configuration, recomputing
+  500/2429
+  chunk 500 has a different game/configuration, recomputing
+  750/2429
+  chunk 750 has a different game/configuration, recomputing
+  1000/2429
+  chunk 1000 has a different game/configuration, recomputing
+  1250/2429
+  chunk 1250 has a different game/configuration, recomputing
+  1500/2429
+  chunk 1500 has a different game/configuration, recomputing
+  1750/2429
+  chunk 1750 has a different game/configuration, recomputing
+  2000/2429
+  chunk 2000 has a different game/configuration, recomputing
+  2250/2429
+  chunk 2250 has a different game/configuration, recomputing
+  2429/2429
+saved -> data/eval2/calib_v25b_pa_gru_s97-pregame-leakfree_arrays.npz  (sim mean total 9.37, real 8.63)

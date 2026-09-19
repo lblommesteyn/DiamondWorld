@@ -101,6 +101,7 @@ def simulate(
     fixed_nine=False, no_bullpen=False, seed=0, platoon=False, recal_temp=1.0,
     skill_mode="prior", crn_keys=None, hook_model=None, max_pa_per_half=40,
     pitchformer=False, skill_prior="iso", simulation_season=2024,
+    cached_inference=None, cached_seq_inference=None,
 ):
     """Vectorized simulation across all games with real game structure.
 
@@ -180,11 +181,14 @@ def simulate(
     # therefore be evaluated without entering NumPyro on every PA.  Build the
     # immutable player/park tables once.  Custom model functions and unsupported
     # prior families retain the legacy path below.
-    inference = None
-    seq_inference = None
+    # Scenario/pregame callers can retain an adapter across game chunks. It
+    # closes over the same immutable mean-skill parameters and player table, so
+    # this safely retains the already-compiled JAX executables.
+    inference = cached_inference
+    seq_inference = cached_seq_inference
     _fn = model_fn.func if isinstance(model_fn, partial) else model_fn
     _kw = dict(model_fn.keywords or {}) if isinstance(model_fn, partial) else {}
-    if _fn is pa_model and not _kw.get("pitchformer", False):
+    if inference is None and seq_inference is None and _fn is pa_model and not _kw.get("pitchformer", False):
         try:
             inference = build_pa_inference(
                 params, pt,
@@ -200,7 +204,7 @@ def simulate(
             )
         except (KeyError, ValueError):
             inference = None
-    elif _fn is pa_model and _kw.get("pitchformer", False):
+    elif inference is None and seq_inference is None and _fn is pa_model and _kw.get("pitchformer", False):
         from diamondworldjax.model.pa_inference import build_pa_sequence_inference
         try:
             seq_inference = build_pa_sequence_inference(
@@ -775,7 +779,7 @@ def main() -> None:
     ap.add_argument("--pitchformer-heads", type=int, default=4)
     ap.add_argument("--pitchformer-dropout", type=float, default=0.0)
     ap.add_argument("--pa-arch", type=str, default="transformer",
-                    choices=["transformer", "gru"],
+                    choices=["transformer", "gru", "gru_skip"],
                     help="PA sequence model architecture (requires --pitchformer).")
     ap.add_argument("--use-park", action="store_true",
                     help="Feed real park indices (v9+ checkpoints trained with the "

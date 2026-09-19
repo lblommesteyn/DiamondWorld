@@ -1,0 +1,1 @@
+v27a_pa_abcd_s42_pa (SVI, conditioned+raw, skill=mean, train<= 2023, test 2024, mle=False) | corr K 0.790 BB 0.694 Hit 0.459 HR 0.662 AVG 0.651 (np=382, rookies_injected=0, rookies_kept=0)

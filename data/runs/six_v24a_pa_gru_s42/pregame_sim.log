@@ -1,0 +1,13 @@
+model: checkpoints/dwjax_pa_v24a_pa_gru_s42/dwjax_step_0050000.pkl  contact_quality=False  per_stat_shrink=False  skill_prior=walk  pitchformer=True  recal=data/eval2/v13_cal_params.npz[b_heur] x 0.18
+pre-game sim over 2429 games x R=100 (hook model, crn off, staff=pregame)
+  256/2429
+  512/2429
+  768/2429
+  1024/2429
+  1280/2429
+  1536/2429
+  1792/2429
+  2048/2429
+  2304/2429
+  2429/2429
+saved -> data/eval2/calib_v24a_pa_gru_s42-pregame-leakfree_arrays.npz  (sim mean total 8.86, real 8.63)

@@ -3,15 +3,15 @@ from __future__ import annotations
 import numpy as np
 
 
-def pitch_resolution_probs(swing, contact, foul, hbp, d_probs, zone, balls, strikes):
+def pitch_resolution_probs(swing, contact, foul, hbp, d_probs, called_strike, balls, strikes):
     """Nine terminal outcomes plus continuation, conditional on a realized pitch."""
     s, c, f, h = [np.asarray(v, dtype=float) for v in (swing, contact, foul, hbp)]
-    z = np.asarray(zone, dtype=float)
+    cs = np.asarray(called_strike, dtype=float)
     out = np.zeros((*s.shape, 10), dtype=float)
     take = 1 - s
     out[..., 2] = take * h
-    out[..., 0] = (s * (1 - c) + take * (1 - h) * z) * (strikes >= 2)
-    out[..., 1] = take * (1 - h) * (1 - z) * (balls >= 3)
+    out[..., 0] = (s * (1 - c) + take * (1 - h) * cs) * (strikes >= 2)
+    out[..., 1] = take * (1 - h) * (1 - cs) * (balls >= 3)
     bip = s * c * (1 - f)
     out[..., [7, 3, 4, 5, 6, 8]] = bip[..., None] * d_probs
     out[..., 9] = np.maximum(1 - out[..., :9].sum(-1), 0)
@@ -41,18 +41,21 @@ def score_heldout(heads, arrays, batch_size=16, seed=0, launch_samples=16):
             result = heads.d.apply(heads.d_params, {**batch, "launch": launch}, train=False)
             return jax.nn.softmax(result["outcome_logits"])
         dp = jax.lax.map(sample, keys).mean(0)
-        return [jax.nn.sigmoid(b[name + "_logit"]) for name in ("swing", "contact", "foul", "hbp")], dp
+        cs = (jax.nn.sigmoid(b["called_strike_logit"])
+              if "called_strike_logit" in b else None)
+        return [jax.nn.sigmoid(b[name + "_logit"]) for name in ("swing", "contact", "foul", "hbp")], cs, dp
     n = len(arrays["valid"])
     for start in range(0, n, batch_size):
         batch = {k: jnp.asarray(v[start:start + batch_size]) for k, v in arrays.items()}
         key, subkey = jax.random.split(key)
-        bp, dp = predict(batch, subkey)
+        bp, cs, dp = predict(batch, subkey)
         stuff = np.asarray(batch["stuff"])
         px = stuff[..., 3] * STUFF_SCALE[3] + STUFF_CENTRE[3]
         pz = stuff[..., 4] * STUFF_SCALE[4] + STUFF_CENTRE[4]
         zone = (np.abs(px) <= .83) & (pz >= 1.52) & (pz <= 3.42)
         ctx = np.asarray(batch["ctx"])
-        p = pitch_resolution_probs(*map(np.asarray, bp), np.asarray(dp), zone,
+        cs = zone if cs is None else np.asarray(cs)
+        p = pitch_resolution_probs(*map(np.asarray, bp), np.asarray(dp), cs,
                                    np.rint(ctx[..., 0] * 3), np.rint(ctx[..., 1] * 2))
         observed = np.asarray(batch["pa_outcome"])
         terminal = np.asarray(batch["pa_terminal"], bool)

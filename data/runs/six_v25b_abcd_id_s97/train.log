@@ -1,0 +1,46 @@
+loading train seasons [2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023], test 2024
+pitchers=2257 batters=2498 parks=31 (index 0 reserved for unknown)
+events table: 183,608 rows
+game context file absent, running without environment
+train seqs (58818, 160), pitches 7,241,262
+test  seqs (7034, 160), pitches 859,258
+C transition support coverage: {'train': {'eligible': 4467848, 'unsupported': 0}, 'test': {'eligible': 529133, 'unsupported': 7}}
+baselines (test NLL): {'type': 1.9533794153352149, 'swing': 0.6611971050615835, 'contact': 0.5414490731373509, 'foul': 0.6920674288190509, 'hbp': 0.03379258994767147, 'swing_marginal': 0.470123827457428}
+D baselines: {'outcome': 0.9294074220728962, 'hr': 0.18019937752272222, 'launch': 3.0469807775732347, 'p_outcome': [0.6732682762857661, 0.20959105596950794, 0.06508426808922381, 0.0061777924219965875, 0.04587860723350555, 0.0]}
+[shared] 8,079,206 total parameters (256,960 shared embeddings)
+[shared] step 200/4000 all heads loss 811.0024 (214s)
+[shared] step 400/4000 all heads loss 797.2533 (395s)
+[shared] step 600/4000 all heads loss 754.0133 (576s)
+[shared] step 800/4000 all heads loss 691.6332 (758s)
+[shared] step 1000/4000 all heads loss 649.5726 (939s)
+[shared] step 1200/4000 all heads loss 621.2368 (1121s)
+[shared] step 1400/4000 all heads loss 643.6862 (1302s)
+[shared] step 1600/4000 all heads loss 653.9170 (1484s)
+[shared] step 1800/4000 all heads loss 527.6761 (1665s)
+[shared] step 2000/4000 all heads loss 674.4485 (1847s)
+[shared] step 2200/4000 all heads loss 597.1398 (2028s)
+[shared] step 2400/4000 all heads loss 626.6468 (2210s)
+[shared] step 2600/4000 all heads loss 548.3439 (2391s)
+[shared] step 2800/4000 all heads loss 603.4382 (2573s)
+[shared] step 3000/4000 all heads loss 607.0631 (2754s)
+[shared] step 3200/4000 all heads loss 567.6517 (2936s)
+[shared] step 3400/4000 all heads loss 491.1656 (3117s)
+[shared] step 3600/4000 all heads loss 587.7877 (3298s)
+[shared] step 3800/4000 all heads loss 533.0692 (3480s)
+[shared] step 4000/4000 all heads loss 499.2400 (3661s)
+[shared/a] held-out: {'nll_stuff': 2.518195665756832, 'nll_type': 1.4544654679710476, 'loss': 3.9726611337278794, 'target_counts': {'nll_stuff': 709224.0, 'nll_type': 709224.0}}
+[shared/b] held-out: {'nll_contact': 0.4316902029755249, 'nll_foul': 0.6608293825231341, 'nll_hbp': 0.014267017032331252, 'nll_swing': 0.4329041976320995, 'loss': 1.5396908001630898, 'target_counts': {'nll_contact': 340405.0, 'nll_foul': 261499.0, 'nll_hbp': 371493.0, 'nll_swing': 711898.0}}
+[shared/c] held-out: {'nll_bundle': 0.10246574067062092, 'loss': 0.10246574067062092, 'target_counts': {'nll_bundle': 529126.0}}
+[shared/d] held-out: {'nll_hr': 0.058002058195049694, 'nll_launch': 2.802298157755955, 'nll_outcome': 0.572067071810431, 'loss': 3.374365229566386, 'target_counts': {'nll_hr': 124207.0, 'nll_launch': 123830.0, 'nll_outcome': 124207.0}}
+
+=== HELD-OUT IMPROVEMENT OVER BASELINE (nats/pitch, higher better) ===
+  type      +0.4989
+  swing     +0.2283
+  contact   +0.1098
+  foul      +0.0312
+  hbp       +0.0195
+  bundle    +0.0428
+  outcome   +0.3573
+  hr        +0.1222
+  launch    +0.2447
+saved -> data/eval2/pitchformer_v25b_abcd_id_s97.json

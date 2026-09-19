@@ -1,0 +1,2 @@
+checkpoint config restored: train_end=2023 recency_halflife=2.0 contact_quality=True per_stat_shrink=True skill_prior=walk
+v25b_pa_gru_s97 (SVI, conditioned+raw, skill=mean, train<= 2023, test 2024, mle=False) | corr K 0.789 BB 0.657 Hit 0.421 HR 0.578 AVG 0.611 (np=382, rookies_injected=0, rookies_kept=0)

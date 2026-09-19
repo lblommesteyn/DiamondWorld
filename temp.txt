@@ -1,50 +1,45 @@
-set -euo pipefail
+bash scripts/run_joint_pa_abcd.sh \
+  --tag-prefix v27b \
+  --seed 97 \
+  --cuda-device 1 \
+  --joint-steps 20000 \
+  --train-batch 32 \
+  --eval-game-batch 256 \
+  --max-pa 160 \
+  --prefetch-depth 1 \
+  --pa-feature-profile ladder \
+  --abcd-window 32 \
+  --abcd-max-len 160 \
+  --abcd-sequences-per-game 1 \
+  --missing-samples 1 \
+  --abcd-dropout 0.1 \
+  --abcd-d-hr-weight 0 \
+  --abcd-half-continuations 6 \
+  --limit-games 0 \
+  --comparison-reps 5 \
+  --pregame-reps 100 \
+  --bootstrap-reps 20000 \
+  --compare-v16-hybrid \
+  --no-recal
 
-export CUDA_VISIBLE_DEVICES=0
-export XLA_PYTHON_CLIENT_PREALLOCATE=false
+    --xla-autotune-level 0 \
 
-BASE_TAG="abcd_hbp_e_s42"
-FT_TAG="${BASE_TAG}_ft15"
 
-mkdir -p data/eval2
+COMMON=(
+  --skip-train
+  --hybrid-only
+  --cuda-device 0
+  --limit-games 0
+  --abcd-sim-reps 5
+  --comparison-reps 5
+  --bootstrap-reps 20000
+)
 
-.venv/bin/python -m diamondworldjax.scripts.train_pitchformer \
-  --stack abcd \
-  --steps 6000 \
-  --bs 32 \
-  --seed 42 \
-  --tag "${BASE_TAG}" \
-  > "data/train_pitchformer_${BASE_TAG}.log" 2>&1
-
-.venv/bin/python -m diamondworldjax.scripts.finetune_pitchformer_rollout \
-  --init-tag "${BASE_TAG}" \
-  --tag "${FT_TAG}" \
-  --steps 2000 \
-  --batch 32 \
-  --lr 1e-5 \
-  --self-conditioned-fraction 0.15 \
-  --ss-warmup 500 \
-  --seed 42 \
-  > "data/finetune_pitchformer_${FT_TAG}.log" 2>&1
-
-.venv/bin/python -m diamondworldjax.scripts.eval_pitchformer_rollout \
-  --tag "${FT_TAG}" \
-  --season 2024 \
-  --reps 3 \
-  --seed 42 \
-  --batch 512 \
-  --c-events \
-  --out "data/eval2/pitchformer_${FT_TAG}_correlations.json" \
-  > "data/eval_pitchformer_${FT_TAG}_correlations.log" 2>&1
-
-.venv/bin/python -m diamondworldjax.scripts.eval_pitchformer_games \
-  --tag "${FT_TAG}" \
-  --season 2024 \
-  --seed 42 \
-  --batch-games 512 \
-  --c-events \
-  --out "data/eval2/pitchformer_${FT_TAG}_games.json" \
-  > "data/eval_pitchformer_${FT_TAG}_games.log" 2>&1
-
-  CUDA_VISIBLE_DEVICES=1 .venv/bin/python scripts/run_ladder.sh \
-  v22pf_s42 0 --pitchformer --skip-train --steps 50000 --sim-replicas 100 --sim-chunk 250
+bash scripts/run_joint_pa_abcd.sh \
+  "${COMMON[@]}" \
+  --tag-prefix v27a --seed 42 --joint-steps 15000 \
+; \
+bash scripts/run_joint_pa_abcd.sh \
+  "${COMMON[@]}" \
+  --tag-prefix v26a --seed 42 --joint-steps 15000 \
+  --pa-arch gru_skip

@@ -1,0 +1,221 @@
+{
+  "tag": "v26a_pa_abcd_s42",
+  "season": 2024,
+  "c_events": true,
+  "games": 5,
+  "reps": 1,
+  "elapsed_s": 103.61135911941528,
+  "truncated_half_innings": 0,
+  "batch_games": 5,
+  "total_mean": 7.6,
+  "total_std": null,
+  "home_mean": 2.2,
+  "away_mean": 5.4,
+  "home_win_rate": 0.0,
+  "real_total_mean": 8.4,
+  "score_dist": {
+    "sim_std": 3.32264954516723,
+    "sim_median": 7.0,
+    "sim_shutout_rate": 20.0,
+    "sim_blowout_rate": 40.0,
+    "real_std": 2.8000000000000003,
+    "real_median": 9.0,
+    "real_shutout_rate": 20.0,
+    "real_blowout_rate": 20.0
+  },
+  "pa_outcomes_sim": {
+    "K": 91.0,
+    "BB": 42.0,
+    "HBP": 2.0,
+    "1B": 52.0,
+    "2B": 9.0,
+    "3B": 0.0,
+    "HR": 12.0,
+    "out": 163.0,
+    "E": 0.0
+  },
+  "pa_outcomes_real": {
+    "K": 81.0,
+    "BB": 29.0,
+    "HBP": 3.0,
+    "1B": 63.0,
+    "2B": 4.0,
+    "3B": 3.0,
+    "HR": 8.0,
+    "out": 175.0,
+    "E": 0.0
+  },
+  "runs_by_inning_frac_sim": [
+    0.10526315789473684,
+    0.10526315789473684,
+    0.02631578947368421,
+    0.10526315789473684,
+    0.10526315789473684,
+    0.18421052631578946,
+    0.13157894736842105,
+    0.10526315789473684,
+    0.13157894736842105
+  ],
+  "runs_by_inning_frac_real": [
+    0.19047619047619047,
+    0.07142857142857142,
+    0.16666666666666666,
+    0.023809523809523808,
+    0.14285714285714285,
+    0.09523809523809523,
+    0.023809523809523808,
+    0.19047619047619047,
+    0.09523809523809523
+  ],
+  "extra_runs_per_game": 0.0,
+  "sim_extra_rate": 60.0,
+  "real_extra_rate": 0.0,
+  "walkoff_rate": 0.0,
+  "n_ties_mean": 0.0,
+  "n_extra_half_innings_mean": 0.0,
+  "n_unresolved_mean": 0.0,
+  "events": [
+    0.0,
+    0.0,
+    0.0,
+    3.0,
+    0.0,
+    12.0,
+    0.0,
+    0.0
+  ],
+  "simulation_consistency": {
+    "n": 371,
+    "histogram": [
+      33,
+      56,
+      36,
+      27,
+      32,
+      43,
+      41,
+      34,
+      35,
+      34
+    ],
+    "bin_edges": [
+      0.0,
+      0.1,
+      0.2,
+      0.30000000000000004,
+      0.4,
+      0.5,
+      0.6000000000000001,
+      0.7000000000000001,
+      0.8,
+      0.9,
+      1.0
+    ],
+    "chi2": 15.54986522911051,
+    "ks_stat": 0.05162807788239965,
+    "ks_pvalue": 0.26675913199656487,
+    "mean": 0.49009577385109987,
+    "std": 0.29122408555462836
+  },
+  "heldout_pitch_calibration": {
+    "scope": "heldout_next_pitch_resolution",
+    "n": 1416,
+    "conditioning": "observed pitch and prior history; launch marginalized; includes continuation",
+    "nll": 0.721806769302253,
+    "brier": 0.3449388288749768,
+    "pit_histogram": [
+      141,
+      157,
+      125,
+      145,
+      142,
+      140,
+      130,
+      132,
+      155,
+      149
+    ],
+    "predicted_rates": [
+      0.06589327664136412,
+      0.02032602652471518,
+      0.0027175903646263207,
+      0.033256541690948466,
+      0.008596104852509919,
+      0.0004633259692290773,
+      0.007987766566552132,
+      0.12189145299148674,
+      7.277060041641796e-10,
+      0.7388679136708622
+    ],
+    "observed_rates": [
+      0.057203389830508475,
+      0.020480225988700564,
+      0.00211864406779661,
+      0.04449152542372881,
+      0.002824858757062147,
+      0.00211864406779661,
+      0.005649717514124294,
+      0.12358757062146893,
+      0.0,
+      0.7415254237288136
+    ],
+    "launch_samples": 16
+  },
+  "skill_policy": {
+    "mode": "fixed",
+    "resample_per_rep": false,
+    "skill_seeds": [],
+    "calibration_mode": "fixed_checkpoint",
+    "source_world": null
+  },
+  "completion_diagnostics": {
+    "per_rep": [
+      {
+        "flagged_games": 0,
+        "no_detected_completion_fault": 5,
+        "flagged_fraction": 0.0,
+        "reasons": {
+          "regulation_truncated": [],
+          "extra_truncated": [],
+          "unresolved_tie": [],
+          "skipped_extra_innings": []
+        },
+        "mean_total_all": 7.6,
+        "mean_total_no_detected_fault": 7.6
+      }
+    ],
+    "simulation_changed": false,
+    "headline_metrics_include_flagged_games": true,
+    "note": "Diagnostic only. No detected fault is not certification of legal completion; observed lineup/staff policy and other modelling limitations remain. Filtered means are a sensitivity check, not an unbiased replacement benchmark."
+  },
+  "rate_export": null,
+  "arrays_export": null,
+  "note": "Generated game state on observed lineup/staff schedule; a half that outlives its observed PA sources cycles those sources until a generated third out. Continuation PAs are excluded from the paired fixed-cohort rate export; not a pre-game roster/staff simulation.",
+  "scores": [
+    [
+      744795,
+      2,
+      3
+    ],
+    [
+      744796,
+      3,
+      4
+    ],
+    [
+      744797,
+      4,
+      10
+    ],
+    [
+      744798,
+      0,
+      5
+    ],
+    [
+      744799,
+      2,
+      5
+    ]
+  ]
+}

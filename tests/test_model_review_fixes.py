@@ -11,7 +11,7 @@ import optax
 import polars as pl
 import pytest
 
-from diamondworldjax.model.pitchformer import TransformerA, TransformerB, SuperState, loss_a
+from diamondworldjax.model.pitchformer import TransformerA, TransformerB, SuperState, loss_a, loss_b
 from diamondworldjax.model.transformer_c import TransformerC
 from diamondworldjax.model.transformer_d import TransformerD
 from diamondworldjax.model.pitchformer_checkpoint import (
@@ -27,6 +27,7 @@ def batch(t=4):
                 geom=np.zeros((1, t, 10), np.float32), valid=np.ones_like(z),
                 pitch_type=np.zeros((1, t), np.int32), stuff=np.zeros((1, t, 5), np.float32),
                 swing=z.copy(), contact=z.copy(), foul=z.copy(), hbp=z.copy(),
+                called_strike=z.copy(),
                 launch=np.zeros((1, t, 2), np.float32), type_valid=np.ones_like(z),
                 stuff_valid=np.ones_like(z), launch_valid=z.copy(), batted_valid=z.copy(),
                 batted_out=np.zeros((1, t), np.int32), events=np.zeros((1, t, 8), np.float32),
@@ -35,6 +36,19 @@ def batch(t=4):
 
 KW = dict(n_pitchers=3, n_batters=3, n_parks=3, d_model=12,
           n_layers=2, n_heads=3, dropout=0.0)
+
+
+def test_learned_called_strike_head_is_scored_on_taken_pitches():
+    b = batch()
+    b["called_strike"][0, 0] = 1.0
+    model = TransformerB(**KW, learned_called_strike=True)
+    params = model.init(jax.random.PRNGKey(11), b, train=False)
+    out = model.apply(params, b, train=False)
+    loss, metrics = loss_b(out, b)
+
+    assert "called_strike_logit" in out
+    assert np.isfinite(loss)
+    assert float(metrics["nll_called_strike"]) > 0.0
 
 
 def test_posterior_binds_latent_sites_and_walk():
@@ -138,6 +152,19 @@ def test_history_changes_future_not_current_and_decode_matches_full():
         decoded.append(out["type_logits"][:, 0])
         valid = valid.at[:, t].set(True)
     np.testing.assert_allclose(jnp.stack(decoded, 1), actual, atol=2e-5)
+
+
+def test_d_hr_auxiliary_loss_is_opt_in_and_additive():
+    from diamondworldjax.model.transformer_d import loss_d
+    b = batch(2)
+    b["launch_valid"][:] = 1
+    b["batted_valid"][:] = 1
+    b["batted_out"][0] = np.array([4, 0])  # HR then a non-HR ball in play
+    out = {"launch_mu": jnp.zeros((1, 2, 2)), "launch_logsigma": jnp.zeros((1, 2, 2)),
+           "outcome_logits": jnp.zeros((1, 2, 6))}
+    base, parts = loss_d(out, b)
+    weighted, _ = loss_d(out, b, hr_weight=.25)
+    np.testing.assert_allclose(weighted - base, .25 * parts["nll_hr"], atol=1e-6)
 
 
 def test_frozen_pa_features_survive_optimizer_step():
@@ -292,6 +319,35 @@ def test_fast_pa_adapter_respects_explicit_position_encoding():
     expected = jax.nn.softmax(tr["pa_outcome"]["fn"].logits)
     fast = build_pa_sequence_inference(params, table, pa_arch="transformer", d_model=12,
         n_layers=1, n_heads=3, outcome_only=True, fatigue=True, position_encoding="sinusoidal")
+    carry, values = fast.init_carry(1), []
+    for t in range(3):
+        carry, logits = fast.step(carry, **_pa_features_at(b, t))
+        values.append(jax.nn.softmax(logits))
+    np.testing.assert_allclose(jnp.stack(values, 1), expected, atol=2e-5)
+
+
+def test_gru_skip_fast_adapter_matches_training_model():
+    """The residual raw context must be identical in training and rollout."""
+    from diamondworldjax.scripts.bench_pa_sequence import _make_params, _make_batch, _pa_features_at
+    from diamondworldjax.model.pa_inference import build_pa_sequence_inference
+    from diamondworldjax.model.pa_model import PAOutcomeHeadV6, pa_model
+    params, table = _make_params(jax.random.PRNGKey(8), n_players=3,
+                                 d_model=12, n_layers=1, n_heads=3)
+    # GRU-skip uses an independent backbone and a wider outcome head.
+    params["pa_gru_skip$params"] = params["pa_gru$params"]
+    params["pa_outcome_head_v6$params"] = PAOutcomeHeadV6().init(
+        jax.random.PRNGKey(9), jnp.zeros((1, 12 + 145)),
+    )["params"]
+    b = _make_batch(jax.random.PRNGKey(10), 1, 3)
+    with nh.seed(rng_seed=0), nh.substitute(data=params), nh.trace() as tr:
+        pa_model(b, table, teacher_force=False, outcome_only=True, fatigue=True,
+                 pitchformer=True, pa_arch="gru_skip", pitchformer_dim=12,
+                 pitchformer_layers=1, pitchformer_heads=3)
+    expected = jax.nn.softmax(tr["pa_outcome"]["fn"].logits)
+    fast = build_pa_sequence_inference(
+        params, table, pa_arch="gru_skip", d_model=12, n_layers=1, n_heads=3,
+        outcome_only=True, fatigue=True,
+    )
     carry, values = fast.init_carry(1), []
     for t in range(3):
         carry, logits = fast.step(carry, **_pa_features_at(b, t))

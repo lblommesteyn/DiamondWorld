@@ -1,0 +1,48 @@
+loading train seasons [2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023], test 2024
+pitchers=2257 batters=2498 parks=31 (index 0 reserved for unknown)
+events table: 183,608 rows
+game context file absent, running without environment
+train seqs (58818, 160), pitches 7,241,262
+test  seqs (7034, 160), pitches 859,258
+C transition support coverage: {'train': {'eligible': 4467848, 'unsupported': 0}, 'test': {'eligible': 529133, 'unsupported': 7}}
+Bayesian ABCD step 0: negative ELBO/sequence=4030.0554
+Bayesian ABCD step 100: negative ELBO/sequence=1010.1238
+Bayesian ABCD step 200: negative ELBO/sequence=694.9794
+Bayesian ABCD step 300: negative ELBO/sequence=742.4006
+Bayesian ABCD step 400: negative ELBO/sequence=851.0005
+Bayesian ABCD step 500: negative ELBO/sequence=640.5953
+Bayesian ABCD step 600: negative ELBO/sequence=707.7919
+Bayesian ABCD step 700: negative ELBO/sequence=683.3323
+Bayesian ABCD step 800: negative ELBO/sequence=707.4737
+Bayesian ABCD step 900: negative ELBO/sequence=815.7263
+Bayesian ABCD step 1000: negative ELBO/sequence=828.3308
+Bayesian ABCD step 1100: negative ELBO/sequence=585.1900
+Bayesian ABCD step 1200: negative ELBO/sequence=846.2756
+Bayesian ABCD step 1300: negative ELBO/sequence=807.7179
+Bayesian ABCD step 1400: negative ELBO/sequence=646.6131
+Bayesian ABCD step 1500: negative ELBO/sequence=683.1691
+Bayesian ABCD step 1600: negative ELBO/sequence=785.4310
+Bayesian ABCD step 1700: negative ELBO/sequence=712.7980
+Bayesian ABCD step 1800: negative ELBO/sequence=618.4147
+Bayesian ABCD step 1900: negative ELBO/sequence=644.4788
+Bayesian ABCD step 2000: negative ELBO/sequence=712.2401
+Bayesian ABCD step 2100: negative ELBO/sequence=643.3057
+Bayesian ABCD step 2200: negative ELBO/sequence=669.9776
+Bayesian ABCD step 2300: negative ELBO/sequence=655.0012
+Bayesian ABCD step 2400: negative ELBO/sequence=757.3244
+Bayesian ABCD step 2500: negative ELBO/sequence=683.0909
+Bayesian ABCD step 2600: negative ELBO/sequence=515.4428
+Bayesian ABCD step 2700: negative ELBO/sequence=681.4119
+Bayesian ABCD step 2800: negative ELBO/sequence=761.0979
+Bayesian ABCD step 2900: negative ELBO/sequence=656.7056
+Bayesian ABCD step 3000: negative ELBO/sequence=654.1761
+Bayesian ABCD step 3100: negative ELBO/sequence=697.9623
+Bayesian ABCD step 3200: negative ELBO/sequence=629.3414
+Bayesian ABCD step 3300: negative ELBO/sequence=656.1915
+Bayesian ABCD step 3400: negative ELBO/sequence=615.4047
+Bayesian ABCD step 3500: negative ELBO/sequence=666.5108
+Bayesian ABCD step 3600: negative ELBO/sequence=465.2071
+Bayesian ABCD step 3700: negative ELBO/sequence=664.7862
+Bayesian ABCD step 3800: negative ELBO/sequence=493.0432
+Bayesian ABCD step 3900: negative ELBO/sequence=570.9428
+Saved Bayesian posterior and mean head exports. Held-out summed log likelihood: -4208436.0736

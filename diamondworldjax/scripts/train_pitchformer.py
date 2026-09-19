@@ -179,6 +179,7 @@ def baselines(train, test):
     m_ct = vte & (test["swing"] > 0)
     m_fl = m_ct & (test["contact"] > 0)
     m_hbp = vte & (test["swing"] == 0)
+    m_called_strike = m_hbp & (test["hbp"] == 0)
     return {
         "type": float(nll_type),
         "swing": float(nll_sw),
@@ -186,6 +187,9 @@ def baselines(train, test):
         "foul": float(bern(fl.mean(), test["foul"], m_fl)),
         "hbp": float(bern(train["hbp"][vt & (train["swing"] == 0)].mean(),
                            test["hbp"], m_hbp)),
+        "called_strike": float(bern(
+            train["called_strike"][vt & (train["swing"] == 0) & (train["hbp"] == 0)].mean(),
+            test["called_strike"], m_called_strike)),
         "swing_marginal": float(sw.mean()),
     }
 
@@ -281,6 +285,7 @@ class SharedPitchformer(nn.Module):
     observation_masks: bool = False
     c_event_mode: str = "legacy"
     c_support: tuple | None = None
+    learned_called_strike: bool = False
 
     def setup(self):
         self.shared_ss = SuperState(
@@ -293,7 +298,8 @@ class SharedPitchformer(nn.Module):
                   dropout=self.dropout, player_mode=self.player_mode,
                   skill_seasons=self.skill_seasons, pitch_history=self.pitch_history,
                   position_encoding=self.position_encoding, window_size=self.window_size,
-                  observation_masks=self.observation_masks, c_event_mode=self.c_event_mode, c_support=self.c_support)
+                  observation_masks=self.observation_masks, c_event_mode=self.c_event_mode, c_support=self.c_support,
+                  learned_called_strike=self.learned_called_strike)
 
         if "a" in self.heads:
             self.res_a = HeadResidual(self.n_pitchers, self.n_batters,
@@ -373,7 +379,8 @@ def shared_marginal_prepare(model, params, heads, *, train=False, key=None):
 
 
 def run_shared(model, train, test, *, steps, bs, lr, seed, out_dir, tag,
-               heads, loss_fns, base, player_tables=None, missing_samples=0):
+               heads, loss_fns, base, player_tables=None, missing_samples=0,
+               d_hr_weight: float = 0.0):
     """Joint updates: every head receives `steps` supervised batches and updates.
 
     Summing head losses avoids dormant heads receiving extra Adam momentum or
@@ -411,7 +418,8 @@ def run_shared(model, train, test, *, steps, bs, lr, seed, out_dir, tag,
                 # Sum likelihood rather than independent mean losses; one
                 # complete probability model for all representation variants.
                 return -marginal_log_likelihood(apply, batch, key, missing_samples,
-                    prepare=shared_marginal_prepare(model, p, heads, train=True, key=key)) / batch['valid'].shape[0]
+                    prepare=shared_marginal_prepare(model, p, heads, train=True, key=key),
+                    d_hr_weight=d_hr_weight) / batch['valid'].shape[0]
             keys = jax.random.split(key, len(heads))
             losses = []
             for head, head_key in zip(heads, keys):
@@ -505,24 +513,28 @@ def main():
     ap.add_argument("--skill-residual-scale", type=float, default=0.35)
     ap.add_argument("--skill-walk-scale", type=float, default=0.3)
     ap.add_argument("--skill-feature-mode", choices=["pa", "neutral"], default="pa",
-                    help="Native Bayesian covariates: pooled training-only PA statistics or zeros")
+                    help="Native Bayesian covariates: role-aware training-only PA/BF statistics or zeros")
     ap.add_argument("--recency-halflife", type=float, default=None)
     ap.add_argument("--contact-quality", action="store_true")
     ap.add_argument("--per-stat-shrink", action="store_true")
     ap.add_argument("--skill-features", help="Optional NPZ: player_ids, stats, league, hand, through_year; no held-out-year covariates")
     ap.add_argument("--pitch-history", action=argparse.BooleanOptionalAction, default=True)
+    ap.add_argument("--learned-called-strike", action=argparse.BooleanOptionalAction, default=True,
+                    help="Train B's called-strike head from inferred taken-pitch calls.")
     ap.add_argument("--c-event-mode", choices=["bundles", "legacy"], default="bundles")
     ap.add_argument("--history-reset", choices=["game", "half_inning", "batting_side"], default="game")
     ap.add_argument("--dropout", type=float, default=0.1)
     ap.add_argument("--update-chunk-size", type=int, default=16, help="Bayesian optimizer updates per compiled chunk")
     ap.add_argument("--prefetch-depth", type=int, default=2, help="Bayesian batches prepared ahead")
     ap.add_argument("--missing-samples", type=int, default=2)
+    ap.add_argument("--d-hr-weight", type=float, default=0.0,
+                    help="Optional auxiliary binary-HR loss weight for D (0 preserves baseline).")
     ap.add_argument("--position-encoding", choices=["learned", "sinusoidal"], default="sinusoidal")
     ap.add_argument("--window-size", type=int, default=32, help="Number of prior completed tokens in the strict window (0=legacy unlimited)")
     ap.add_argument("--context-len", type=int, default=None, help="Overlapping context tokens for sliding window training")
     args = ap.parse_args()
-    if args.missing_samples < 0:
-        ap.error('missing-samples must be nonnegative')
+    if args.missing_samples < 0 or args.d_hr_weight < 0:
+        ap.error('missing-samples and d-hr-weight must be nonnegative')
     if args.missing_samples:
         if 'a' not in args.stack:
             ap.error('Missing-pitch marginalization requires A in the trained stack')
@@ -631,7 +643,8 @@ def main():
               n_layers=args.layers, n_heads=args.heads, player_mode=args.player_skills,
               skill_seasons=skill_seasons, pitch_history=args.pitch_history,
               position_encoding=args.position_encoding, window_size=args.window_size,
-              observation_masks=True, c_event_mode=args.c_event_mode, c_support=args.c_support)
+              observation_masks=True, c_event_mode=args.c_event_mode, c_support=args.c_support,
+              learned_called_strike=args.learned_called_strike)
 
     metadata = {"version": 1, "config": vars(args), "maps": maps, "train_years": seasons,
                 "skill_season_base": skill_season_base,
@@ -640,6 +653,7 @@ def main():
                                   "observation_masks": True, "c_event_mode": args.c_event_mode, "c_support": args.c_support,
                                   "position_encoding": args.position_encoding,
                                   "window_size": args.window_size,
+                                  "learned_called_strike": args.learned_called_strike,
                                   "residual_dim": args.d_residual if args.shared_emb else 0}}
     save_metadata(args.out, args.tag, metadata)
     report = {"likelihood_note": "joint_marginal is the primary score when enabled; per-head scores are complete-case/plug-in diagnostics", "baselines": base, "config": vars(args), "improvement_nats": {}}
@@ -657,19 +671,22 @@ def main():
 
     # ----- Shared-embedding joint path -----
     if args.shared_emb:
-        loss_fns = {"a": loss_a, "b": loss_b, "c": loss_c, "d": loss_d}
+        loss_fns = {"a": loss_a, "b": loss_b, "c": loss_c,
+                    "d": partial(loss_d, hr_weight=args.d_hr_weight)}
         model = SharedPitchformer(
             heads=args.stack, d_residual=args.d_residual, **kw)
         results = run_shared(
             model, train, test, steps=args.steps, bs=args.bs, lr=args.lr,
             seed=args.seed, out_dir=args.out, tag=args.tag,
-            heads=args.stack, loss_fns=loss_fns, base=base, player_tables=player_tables, missing_samples=args.missing_samples)
+            heads=args.stack, loss_fns=loss_fns, base=base, player_tables=player_tables,
+            missing_samples=args.missing_samples, d_hr_weight=args.d_hr_weight)
 
         # Map per-head results into the report.
         _head_metric_map = {
             "a": [("type", "nll_type")],
             "b": [("swing", "nll_swing"), ("contact", "nll_contact"),
-                   ("foul", "nll_foul"), ("hbp", "nll_hbp")],
+                   ("foul", "nll_foul"), ("hbp", "nll_hbp"),
+                   ("called_strike", "nll_called_strike")],
         }
         for h, res in results.items():
             if h == 'joint_marginal':
@@ -715,7 +732,7 @@ def main():
                     bs=args.bs, lr=args.lr, seed=args.seed, name=f"B_{args.tag}",
                     out_dir=args.out, player_tables=player_tables)
         report["B"] = res_b
-        for k in ("swing", "contact", "foul", "hbp"):
+        for k in ("swing", "contact", "foul", "hbp", "called_strike"):
             report["improvement_nats"][k] = base[k] - res_b[f"nll_{k}"]
 
     if "c" in args.stack:
@@ -728,7 +745,7 @@ def main():
 
     if "d" in args.stack:
         bd = report["baselines_d"]
-        res_d = run(TransformerD(**kw), loss_d, train, test, steps=args.steps,
+        res_d = run(TransformerD(**kw), partial(loss_d, hr_weight=args.d_hr_weight), train, test, steps=args.steps,
                     bs=args.bs, lr=args.lr, seed=args.seed, name=f"D_{args.tag}",
                     out_dir=args.out, player_tables=player_tables)
         report["D"] = res_d

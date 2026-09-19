@@ -1,0 +1,22 @@
+# Cross-player rate correlation with confidence intervals (paired bootstrap, 20000 reps, 382 batters with >= 150 PA, 95% CI)
+
+## Per-model correlation (unpaired CI)
+
+| model | K | BB | Hit | HR | AVG |
+|---|---|---|---|---|---|
+| v16 | 0.792 [0.752, 0.829] | 0.651 [0.584, 0.712] | 0.445 [0.360, 0.530] | 0.610 [0.538, 0.675] | 0.624 [0.586, 0.661] |
+| v25b_abcd_bayesian_s97 | 0.139 [0.039, 0.241] | 0.262 [0.171, 0.352] | 0.005 [-0.096, 0.102] | -0.043 [-0.151, 0.064] | 0.091 [0.043, 0.138] |
+
+## Paired difference vs v16 (the decisive test)
+
+| comparison | K | BB | Hit | HR | AVG |
+|---|---|---|---|---|---|
+| v25b_abcd_bayesian_s97 - v16 | -0.653 [-0.758, -0.546] p=0.000* | -0.389 [-0.490, -0.285] p=0.000* | -0.440 [-0.549, -0.331] p=0.000* | -0.653 [-0.772, -0.528] p=0.000* | -0.534 [-0.589, -0.477] p=0.000* |
+
+`*` marks a difference whose CI excludes zero.
+
+## Why the paired CI is the right one
+
+For reference, the analytic (Fisher-z) SE on a SINGLE correlation at n=382 is about +/-0.031 in r units around the baseline AVG. That is the width of the unpaired view above and it is far too wide to resolve the differences this project cares about. The paired CI is narrower because both models see the same batters, so shared batter-level noise cancels in the difference.
+
+- v25b_abcd_bayesian_s97 AVG: unpaired CI width 0.095, paired-vs-v16 CI width 0.112 (0.8x tighter).

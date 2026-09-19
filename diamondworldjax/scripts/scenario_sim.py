@@ -38,13 +38,31 @@ class Sim:
         # gets zeros in the columns it was trained to read).
         import jax, jax.numpy as jnp
         self.jax = jax
-        self.params = pickle.load(open(ckpt, "rb"))["params"]
+        checkpoint = pickle.load(open(ckpt, "rb"))
+        self.params = checkpoint["params"]
+        metadata = checkpoint.get("pa_metadata")
+        config = metadata["config"] if metadata else {}
+        if metadata:
+            # Use the stored feature table and architecture rather than trusting
+            # caller defaults.  A mismatched player table changes model inputs
+            # even though parameter shapes still load successfully.
+            train_end = config["train_end"]
+            recency_hl = config["recency_halflife"]
+            contact_quality = config["contact_quality"]
+            per_stat_shrink = config["per_stat_shrink"]
+            skill_prior = config["skill_prior"]
+            pitchformer = config["pitchformer"]
+            pa_arch = config["pa_arch"]
         train_seasons = list(range(2015, train_end + 1))
         train = load_seasons(train_seasons, data_root=processed_root())
-        self.ptab = _build_player_table(train, recency_halflife=recency_hl,
-                                        contact_quality=contact_quality,
-                                        per_stat_shrink=per_stat_shrink)
-        self.park_map = _build_park_index(train)
+        if metadata:
+            self.ptab = metadata["player_table"]
+            self.park_map = metadata["park_map"]
+        else:
+            self.ptab = _build_player_table(train, recency_halflife=recency_hl,
+                                            contact_quality=contact_quality,
+                                            per_stat_shrink=per_stat_shrink)
+            self.park_map = _build_park_index(train)
         tp = train.filter(pl.col("pa_terminal"))
         engine = EmpiricalEngine().fit(tp)
         hooks = fit_hook_dists(tp)
@@ -60,21 +78,76 @@ class Sim:
                    "bat_hand": np.asarray(self.ptab.get("bat_hand", np.full(P, .5, np.float32))),
                    "pit_hand": np.asarray(self.ptab.get("pit_hand", np.full(P, .5, np.float32))),
                    "_engine": engine, "_hook_dists": hooks}
-        _mkw = dict(outcome_only=True, fatigue=True, skill_prior=skill_prior)
+        _mkw = dict(outcome_only=config.get("outcome_only", True),
+                    fatigue=config.get("fatigue", True),
+                    platoon=config.get("platoon", False),
+                    nested=config.get("nested", False),
+                    bilinear_rank=config.get("bilinear_rank", 0),
+                    skill_prior=skill_prior)
         if skill_prior == "walk":
             _mkw.update(season_base=train_seasons[0], n_seasons=len(train_seasons))
         if pitchformer:
-            _mkw["pitchformer"] = True
-            _mkw["pa_arch"] = pa_arch
+            _mkw.update(pitchformer=True, pa_arch=pa_arch,
+                        pitchformer_dim=config.get("pitchformer_dim", 128),
+                        pitchformer_layers=config.get("pitchformer_layers", 2),
+                        pitchformer_heads=config.get("pitchformer_heads", 4),
+                        pitchformer_dropout=config.get("pitchformer_dropout", 0.0),
+                        pitchformer_position=config.get("pitchformer_position", "sinusoidal"))
         self.model_fn = partial(pa_model, **_mkw)
         self.pitchformer = pitchformer
+        self.pa_arch = pa_arch
         self.skill_prior = skill_prior
+        self.train_end = train_end
+        self.recency_hl = recency_hl
+        self.contact_quality = contact_quality
+        self.per_stat_shrink = per_stat_shrink
         self.apply_recal = apply_recal
         self.recal_vec = (
             np.load(recal)[recal_key].astype(np.float64) if apply_recal else None
         )
         self.scale, self.skill_mode = scale, skill_mode
         self.stats = self.ptab["stats"]   # per-player [hit,bb,k,hr] rates
+        self._mean_inference = None
+        self._mean_seq_inference = None
+        self._mean_adapter_built = False
+
+    def _mean_fast_adapter(self):
+        """Construct the mean-skill JAX adapter once and reuse it across chunks."""
+        if self._mean_adapter_built:
+            return self._mean_inference, self._mean_seq_inference
+        self._mean_adapter_built = True
+
+        import jax.numpy as jnp
+        from diamondworldjax.model.pa_inference import (
+            build_pa_inference, build_pa_sequence_inference,
+        )
+
+        # Match simulate(..., skill_mode="mean") exactly. The adapter owns only
+        # immutable tables/parameters; game state remains in simulate.
+        params = dict(self.params)
+        if "player_mu" in params:
+            if self.skill_prior == "walk":
+                params["player_skill_eps"] = jnp.asarray(params["player_mu"])
+                if "skill_walk_sigma_loc" in params:
+                    params["skill_walk_sigma"] = params["skill_walk_sigma_loc"]
+            else:
+                params["player_skills"] = jnp.asarray(params["player_mu"])
+        common = dict(
+            outcome_only=True, fatigue=True, platoon=False,
+            nested=False, bilinear_rank=0, skill_prior=self.skill_prior,
+            season_base=2015, n_seasons=self.train_end - 2015 + 1,
+            simulation_season=2024,
+        )
+        try:
+            if self.pitchformer:
+                self._mean_seq_inference = build_pa_sequence_inference(
+                    params, self.pt, pa_arch=self.pa_arch, **common)
+            else:
+                self._mean_inference = build_pa_inference(params, self.pt, **common)
+        except (KeyError, ValueError):
+            # Keep the established generic fallback for unsupported checkpoints.
+            pass
+        return self._mean_inference, self._mean_seq_inference
 
     def run(self, specs, R=200, seed=0, skill_mode=None, no_bullpen=False, crn=True):
         """Return home (n,R), away (n,R) run totals.
@@ -86,6 +159,9 @@ class Sim:
         R. Set False for the legacy independent-noise behaviour.
         """
         sm = skill_mode or self.skill_mode
+        cached_inference = cached_seq_inference = None
+        if sm == "mean":
+            cached_inference, cached_seq_inference = self._mean_fast_adapter()
         games = [dict(s, game_pk=i) for i, s in enumerate(specs) for _ in range(R)]
         # Spec-major flatten: position p is spec (p//R), replica (p%R). Keying the
         # stream on the replica index pairs the same replica across all specs.
@@ -95,7 +171,8 @@ class Sim:
                        recal_vec=self.recal_vec, seed=seed, skill_mode=sm, no_bullpen=no_bullpen,
                        crn_keys=crn_keys, hook_model=self.hook_model,
                        pitchformer=self.pitchformer, skill_prior=self.skill_prior,
-                       simulation_season=2024)
+                       simulation_season=2024, cached_inference=cached_inference,
+                       cached_seq_inference=cached_seq_inference)
         n = len(specs)
         return res["home"].reshape(n, R), res["away"].reshape(n, R)
 

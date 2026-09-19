@@ -11,6 +11,7 @@ from diamondworldjax.data.pipeline import load_seasons
 from diamondworldjax.data.pa_batching import build_pa_batch
 from diamondworldjax.scripts.train_pa import _build_player_table, _build_park_index, apply_park_idx
 from diamondworldjax.model.pa_model import pa_model
+from diamondworldjax.model.pa_checkpoint import restore_config, player_table
 from diamondworldjax.sim.rules_engine import PA_OUTCOME_IDX
 
 KIDX, HRIDX = PA_OUTCOME_IDX["K"], PA_OUTCOME_IDX["HR"]
@@ -24,6 +25,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--ckpt", default="checkpoints/dwjax_pa_v12/dwjax_step_0050000.pkl")
     ap.add_argument("--recal", default="data/eval2/v12_cal_params.npz")
+    ap.add_argument("--no-recal", action="store_true",
+                    help="Score raw PA outcome logits instead of adding the calibration vector.")
     ap.add_argument("--recency-halflife", type=float, default=2.0)
     ap.add_argument("--contact-quality", action="store_true",
                     help="Build the player table with xBA-style expected hit/HR columns. "
@@ -50,23 +53,36 @@ def main():
     ap.add_argument("--pitchformer-dropout", type=float, default=0.0,
                     help="PA transformer dropout rate; must match the checkpoint.")
     ap.add_argument("--pa-arch", type=str, default="transformer",
-                    choices=["transformer", "gru"],
+                    choices=["transformer", "gru", "gru_skip"],
                     help="PA sequence model architecture (requires --pitchformer).")
     ap.add_argument("--tag", default="v12")
     ap.add_argument("--train-end", type=int, default=2022,
                     help="Last training season for the player table (must match the checkpoint's "
                          "--train-end). 2023 folds in the previous season; then test 2024 only.")
-    ap.add_argument("--test-seasons", default="2023,2024",
-                    help="Comma list of eval seasons. Use 2024 when the table includes 2023.")
+    ap.add_argument("--test-seasons", default=None,
+                    help="Comma list of held-out eval seasons; modern checkpoints default to seasons after training.")
+    ap.add_argument("--max-pa-per-game", type=int, default=0,
+                    help="Optional historical per-game PA cap for a compatible rate cohort; 0 keeps every PA.")
     ap.add_argument("--mle", default=None,
                     help="Path to mle_rates.npz (ids, rates=[hit,bb,k,hr]); injects translated "
                          "minor-league rate features for rookies unseen in training, de-blanking "
                          "them instead of collapsing to the shared unknown slot.")
     args = ap.parse_args()
-    TRAIN = list(range(2015, args.train_end + 1))
-    test_seasons = [int(x) for x in args.test_seasons.split(",")]
+    if args.max_pa_per_game < 0:
+        ap.error("--max-pa-per-game must be nonnegative")
     import jax, jax.numpy as jnp, numpyro.handlers as nh
-    params = pickle.load(open(args.ckpt, "rb"))["params"]
+    checkpoint = pickle.load(open(args.ckpt, "rb"))
+    # Modern checkpoints carry the exact training table and model configuration.
+    # Restoring them here prevents a CLI default from silently rebuilding different
+    # recency/contact-quality/shrinkage features at evaluation time.
+    TRAIN, test_seasons = restore_config(checkpoint, args)
+    args.test_seasons = ",".join(str(s) for s in test_seasons)
+    if checkpoint.get("pa_metadata"):
+        print("checkpoint config restored: "
+              f"train_end={args.train_end} recency_halflife={args.recency_halflife} "
+              f"contact_quality={args.contact_quality} per_stat_shrink={args.per_stat_shrink} "
+              f"skill_prior={args.skill_prior}", flush=True)
+    params = checkpoint["params"]
     if args.skill_mode == "mean" and "player_mu" in params:
         # The walk prior's latent site is the INNOVATION tensor `player_skill_eps`
         # (the skill path itself is a deterministic cumsum of it), so substituting
@@ -76,12 +92,17 @@ def main():
         params = {**params, site: params["player_mu"]}
         if args.skill_prior == "walk" and "skill_walk_sigma_loc" in params:
             params["skill_walk_sigma"] = params["skill_walk_sigma_loc"]
-    b_heur = np.load(args.recal)["b_heur"].astype(np.float64)
-    trp = load_seasons(TRAIN, data_root=processed_root())
-    ptab = _build_player_table(trp, recency_halflife=args.recency_halflife,
-                               contact_quality=args.contact_quality,
-                               per_stat_shrink=args.per_stat_shrink)
-    park_map = _build_park_index(trp); id2i = ptab["id_to_idx"]; del trp
+    b_heur = (np.zeros(len(PA_OUTCOME_IDX), np.float64) if args.no_recal
+              else np.load(args.recal)["b_heur"].astype(np.float64))
+    if checkpoint.get("pa_metadata"):
+        ptab, park_map = player_table(checkpoint, None, args)
+    else:
+        trp = load_seasons(TRAIN, data_root=processed_root())
+        ptab = _build_player_table(trp, recency_halflife=args.recency_halflife,
+                                   contact_quality=args.contact_quality,
+                                   per_stat_shrink=args.per_stat_shrink)
+        park_map = _build_park_index(trp)
+    id2i = ptab["id_to_idx"]
 
     n_rookie = 0
     if args.mle:
@@ -110,6 +131,14 @@ def main():
 
     te = load_seasons(test_seasons, data_root=processed_root()).filter(
         pl.col("pa_terminal") & pl.col("pa_outcome").is_not_null())
+    if args.max_pa_per_game:
+        # v16's original rate artifact was produced when build_pa_batch had a
+        # fixed 90-PA tensor and silently discarded later PAs.  Make that
+        # historical cohort explicit instead of relying on tensor truncation.
+        te = (te.sort(["game_pk", "at_bat_number"])
+                .with_columns(pl.int_range(pl.len()).over("game_pk").alias("_pa_pos"))
+                .filter(pl.col("_pa_pos") < args.max_pa_per_game)
+                .drop("_pa_pos"))
     te = apply_park_idx(te, park_map)
     pt = {"stats": jnp.array(ptab["stats"]), "league": jnp.array(ptab["league"]),
           "hand": jnp.array(ptab["hand"]),
@@ -174,7 +203,7 @@ def main():
     def corr(s, r): return float(np.corrcoef((s[keep] / cnt[keep]), (r[keep] / cnt[keep]))[0, 1])
     cK, cBB, cHit, cHR = corr(sumK, rK), corr(sumBB, rBB), corr(sumHit, rHit), corr(sumHR, rHR)
     rookie_kept = int((keep[-n_rookie:]).sum()) if n_rookie else 0
-    line = (f"{args.tag} (SVI, conditioned+recal, skill={args.skill_mode}, "
+    line = (f"{args.tag} (SVI, conditioned+{'raw' if args.no_recal else 'recal'}, skill={args.skill_mode}, "
             f"train<= {args.train_end}, test {args.test_seasons}, mle={bool(args.mle)}) | "
             f"corr K {cK:.3f} BB {cBB:.3f} Hit {cHit:.3f} HR {cHR:.3f} AVG {np.mean([cK,cBB,cHit,cHR]):.3f} "
             f"(np={int(keep.sum())}, rookies_injected={n_rookie}, rookies_kept={rookie_kept})")

@@ -24,6 +24,7 @@ import polars as pl
 from diamondworldjax.model.pitchformer_checkpoint import (restore_metadata, head_kwargs, add_skill_season,
     trainable_optimizer, export_shared_head, save_metadata)
 from diamondworldjax.data.pitch_seq import build_id_maps, load_seasons, make_sequences
+from diamondworldjax.model.superstate import load_geometry
 from diamondworldjax.model.pitchformer import TransformerA, TransformerB
 from diamondworldjax.model.transformer_c import TransformerC
 from diamondworldjax.model.transformer_d import TransformerD
@@ -55,6 +56,12 @@ def _states(n_games: int) -> dict[str, np.ndarray]:
             "pa_slot": z.copy(), "ended": np.zeros(n_games, bool)}
 
 
+def _entered_extra_mask(state: dict[str, np.ndarray], done: np.ndarray) -> np.ndarray:
+    """Games tied at the regulation boundary and therefore entering extras."""
+    return (~np.asarray(done, bool)
+            & (np.asarray(state["home_score"]) == np.asarray(state["away_score"])))
+
+
 def _start_half(state: dict[str, np.ndarray], rows: np.ndarray, inning: int, half: int,
                 base_override: int | None = None) -> None:
     """Reset half-inning state but retain the game score and long-lived fields."""
@@ -84,6 +91,52 @@ def _decode_bucket(batch: dict[str, np.ndarray], max_len: int) -> int:
     used = int(np.flatnonzero(batch["valid"].any(axis=0))[-1] + 1)
     target = int(np.ceil(used * 1.5))
     return ((target + 31) // 32) * 32
+
+
+def _prepare_observed_schedule(
+    test: pl.DataFrame, game_row: dict[int, int], maps: dict, args, gctx,
+) -> dict[tuple[int, int], list[tuple[int, dict[str, np.ndarray]]]]:
+    """Build immutable held-out half-inning inputs once for every rollout rep.
+
+    ``make_sequences`` joins context, encodes every pitch, and allocates padded
+    arrays. Those values are exogenous to a generated game, so rebuilding them
+    for every world draw was pure CPU/Polars overhead. The returned arrays are
+    read-only by this evaluator; per-rep state and model caches remain separate.
+    """
+    schedules: dict[tuple[int, int], list[tuple[int, dict[str, np.ndarray]]]] = {}
+    geometry_table = load_geometry()
+    for inning in sorted(test["inning"].unique().to_list()):
+        for half_name, half in (("top", 0), ("bot", 1)):
+            phase = test.filter((pl.col("inning") == inning) & (pl.col("half") == half_name))
+            if not len(phase):
+                continue
+            # ``make_sequences`` already respects game boundaries. Building all
+            # games in a phase together replaces thousands of tiny Polars/JAX
+            # conversions (one per game-half) with one vectorised build, then
+            # slices the immutable result for the rollout scheduler.
+            seqs = add_skill_season(
+                make_sequences(phase, maps, args.max_len, game_ctx=gctx,
+                               geometry_table=geometry_table,
+                               include_game_pk=True),
+                args.checkpoint_metadata,
+            )
+            if args.no_geom:
+                seqs["geom"][:] = 0.0
+            sequence_game = np.asarray(seqs["game_pk"])[:, 0]
+            items = []
+            for game_pk in phase["game_pk"].unique(maintain_order=True).to_list():
+                rows = np.flatnonzero(sequence_game == game_pk)
+                if len(rows):
+                    items.append((game_row[int(game_pk)],
+                                  # Provenance is only needed to split this
+                                  # vectorised build; do not carry it into the
+                                  # rollout/JIT model batch.
+                                  {name: np.asarray(value)[rows]
+                                   for name, value in seqs.items()
+                                   if name != "game_pk"}))
+            if items:
+                schedules[(int(inning), half)] = items
+    return schedules
 
 
 MAX_EXTRA_INNINGS = 20
@@ -264,8 +317,8 @@ def _compose_pa_probs(
     contact_prob: np.ndarray,
     foul_prob: np.ndarray,
     hbp_prob: np.ndarray,
+    called_strike_prob: np.ndarray,
     d_outcome_probs: np.ndarray,
-    zone: np.ndarray,
     balls: np.ndarray,
     strikes: np.ndarray,
 ) -> np.ndarray:
@@ -277,12 +330,10 @@ def _compose_pa_probs(
 
     Parameters
     ----------
-    swing_prob, contact_prob, foul_prob, hbp_prob : (N,) float
+    swing_prob, contact_prob, foul_prob, hbp_prob, called_strike_prob : (N,) float
         B-head sigmoid probabilities for each terminal pitch.
     d_outcome_probs : (N, 6) float
         D-head softmax probabilities [out, 1B, 2B, 3B, HR, E].
-    zone : (N,) bool
-        Whether the pitch was in the strike zone.
     balls, strikes : (N,) int
         Count state at the time of the pitch (before the pitch is resolved).
 
@@ -293,7 +344,7 @@ def _compose_pa_probs(
     """
     from diamondworldjax.eval.pitch_calibration import pitch_resolution_probs
     probabilities = pitch_resolution_probs(swing_prob, contact_prob, foul_prob,
-        hbp_prob, d_outcome_probs, zone, balls, strikes)[..., :9]
+        hbp_prob, d_outcome_probs, called_strike_prob, balls, strikes)[..., :9]
     return probabilities / np.maximum(probabilities.sum(-1, keepdims=True), 1e-10)
 
 
@@ -344,9 +395,17 @@ def _run_one_rep(
     heads, engine, c_engine, test, games, game_row, maps, gctx, args,
     seed: int, n_batters: int,
     lineup_info: tuple | None = None,
+    phase_schedules: dict[tuple[int, int], list[tuple[int, dict[str, np.ndarray]]]] | None = None,
     terminal_outcome_sampler=None,
+    rate_batter_index: np.ndarray | None = None,
+    n_rate_players: int = 0,
+    rate_max_pa_per_game: int = 0,
 ) -> dict:
     """Run one complete game evaluation pass. Returns per-rep metrics."""
+    if phase_schedules is None:
+        # Keep this helper usable by focused tests and external callers. Normal
+        # evaluation supplies the shared cache from main(), so this runs once.
+        phase_schedules = _prepare_observed_schedule(test, game_row, maps, args, gctx)
     G = len(games)
     state = _states(G)
     done = np.zeros(G, bool)
@@ -360,41 +419,78 @@ def _run_one_rep(
     scheduled_pas, generated_pas = 0, 0
     outcome_counts = np.zeros(9, np.int64)
     pcounts = np.zeros((n_batters, 9), dtype=np.float64)
+    rate_pcounts = (np.zeros((n_rate_players, 9), dtype=np.float64)
+                    if rate_batter_index is not None else None)
+    # Rate exports may reproduce a historical cohort without truncating game
+    # state evolution or the score-based benchmark arrays.
+    rate_pa_seen = np.zeros(G, dtype=np.int32) if rate_pcounts is not None else None
     runs_by_inning = np.zeros(9, dtype=np.float64)
     extra_runs = 0.0
     n_walkoffs = 0
     score_before = np.zeros(G, dtype=np.float64)
+
+    def hybrid_game_batch(batch: dict[str, np.ndarray], rows: np.ndarray) -> dict[str, np.ndarray]:
+        """Attach stable game keys for a sequential PA carry, only in hybrid mode."""
+        if terminal_outcome_sampler is None:
+            return batch
+        out = dict(batch)
+        out["hybrid_game_index"] = np.broadcast_to(
+            np.asarray(rows, np.int32)[:, None], batch["valid"].shape,
+        ).copy()
+        return out
+
+    def add_rate_outcomes(rolled, terminal, rows_batch) -> None:
+        """Accumulate the selected observed-schedule terminal PAs by batter."""
+        if rate_pcounts is None:
+            return
+        # Score rollouts may need continuation PAs after exhausting the
+        # observed half's source schedule.  They are necessary to complete the
+        # simulated inning, but do not belong in the fixed observed-PA cohort
+        # used by the paired v16 player-rate comparison.
+        scheduled = rolled.get("scheduled_pa", np.ones_like(terminal, bool))
+        # Count unknown batters too: the cap applies to the game schedule, not
+        # just players represented in the shared rate table. Batch rows are
+        # distinct games, so only this small outer loop is needed; outcome
+        # accumulation remains vectorized over terminal pitches.
+        for batch_i, game_i in enumerate(rows_batch):
+            times = np.flatnonzero(terminal[batch_i] & scheduled[batch_i])
+            if rate_max_pa_per_game:
+                remaining = rate_max_pa_per_game - rate_pa_seen[game_i]
+                times = times[:max(remaining, 0)]
+            rate_pa_seen[game_i] += len(times)
+            if not len(times):
+                continue
+            batters = rolled["batter_idx"][batch_i, times]
+            outcomes = rolled["pa_outcome"][batch_i, times]
+            valid = (batters >= 0) & (batters < len(rate_batter_index))
+            rate_idx = np.full(len(batters), -1, dtype=np.int32)
+            rate_idx[valid] = rate_batter_index[batters[valid]]
+            known = rate_idx >= 0
+            np.add.at(rate_pcounts, (rate_idx[known], outcomes[known]), 1.0)
 
     # PIT calibration accumulators
     pit_swing_prob = []
     pit_contact_prob = []
     pit_foul_prob = []
     pit_hbp_prob = []
+    pit_called_strike_prob = []
     pit_d_probs = []
     pit_zone = []
     pit_balls = []
     pit_strikes = []
     pit_outcome = []
 
-    innings = sorted(test["inning"].unique().to_list())
+    innings = sorted({inning for inning, _ in phase_schedules})
 
     for inning in innings:
         for half_name, half in (("top", 0), ("bot", 1)):
-            phase = test.filter((pl.col("inning") == inning) & (pl.col("half") == half_name))
-            if not phase.height:
+            scheduled_items = phase_schedules.get((inning, half), ())
+            if not scheduled_items:
                 continue
             if half == 1 and inning >= 9:
                 won_before_batting = ~done & (state["home_score"] > state["away_score"])
                 done |= won_before_batting
-            candidates = []
-            for portion in phase.partition_by("game_pk", maintain_order=True):
-                gi = game_row[int(portion["game_pk"][0])]
-                if done[gi]:
-                    continue
-                seqs = add_skill_season(make_sequences(portion, maps, args.max_len, game_ctx=gctx), args.checkpoint_metadata)
-                if args.no_geom:
-                    seqs["geom"][:] = 0.0
-                candidates.append((gi, seqs))
+            candidates = [(gi, seqs) for gi, seqs in scheduled_items if not done[gi]]
             if not candidates:
                 continue
             rows_this_half = np.asarray([row for row, _ in candidates], np.int32)
@@ -413,6 +509,7 @@ def _run_one_rep(
                                 and state["half"][gi] == half)]
                 for start in range(0, len(active_items), args.batch_games):
                     rows_batch, batch = _stack_chunk(active_items[start:start + args.batch_games], chunk)
+                    batch = hybrid_game_batch(batch, rows_batch)
                     initial = {name: value[rows_batch].copy() for name, value in state.items()}
                     batch_seed = seed + int(inning) * 10_000 + half * 1_000 + chunk * 100 + start
                     history_inning = int(initial["inning"][0])
@@ -437,6 +534,7 @@ def _run_one_rep(
                     flat_oc = rolled["pa_outcome"][terminal]
                     known = (flat_bidx >= 0) & (flat_bidx < n_batters)
                     np.add.at(pcounts, (flat_bidx[known], flat_oc[known]), 1.0)
+                    add_rate_outcomes(rolled, terminal, rows_batch)
 
                     # PIT: collect B/D probabilities at terminal pitches
                     if terminal_outcome_sampler is None and "swing_prob" in rolled:
@@ -444,6 +542,7 @@ def _run_one_rep(
                         pit_contact_prob.append(rolled["contact_prob"][terminal])
                         pit_foul_prob.append(rolled["foul_prob"][terminal])
                         pit_hbp_prob.append(rolled["hbp_prob"][terminal])
+                        pit_called_strike_prob.append(rolled["called_strike_prob"][terminal])
                         pit_d_probs.append(rolled["d_outcome_probs"][terminal])
                         pit_zone.append(rolled["zone"][terminal])
                         pit_balls.append(rolled["balls"][terminal])
@@ -454,7 +553,78 @@ def _run_one_rep(
                         state[name][rows_batch] = value
                     rollout_calls += 1
 
-            # Runs scored this half-inning
+            # Truncation tracking
+            still_this_half = (~state["ended"][rows_this_half]
+                               & (state["inning"][rows_this_half] == inning)
+                               & (state["half"][rows_this_half] == half))
+            # The observed pitch segment is only a source of matchup/context
+            # rows.  A stochastic inning can take longer than that segment,
+            # so keep decoding its cyclic schedule until it reaches three outs
+            # (or the explicitly bounded safety budget is exhausted).  Without
+            # this, every long half was silently scored as an incomplete game.
+            if still_this_half.any():
+                by_game = {gi: seqs for gi, seqs in candidates}
+                unfinished_items = [(int(gi), by_game[int(gi)])
+                                    for gi in rows_this_half[still_this_half]]
+                for group_start in range(0, len(unfinished_items), args.batch_games):
+                    pending_rows, batch = _stack_chunk(
+                        unfinished_items[group_start:group_start + args.batch_games], 0)
+                    batch = hybrid_game_batch(batch, pending_rows)
+                    for continuation in range(args.max_half_continuations):
+                        initial = {name: value[pending_rows].copy() for name, value in state.items()}
+                        history_inning = int(initial["inning"][0])
+                        cache = histories.get(heads, batch, pending_rows, history_inning, half)
+                        rolled = rollout_batch(
+                            heads, batch,
+                            seed=(seed + int(inning) * 10_000 + half * 1_000
+                                  + 700_000 + group_start * 100 + continuation),
+                            engine=engine, c_engine=c_engine, initial_state=initial,
+                            initial_cache=cache, stop_when_decided=True,
+                            decode_len=_decode_bucket(batch, args.max_len),
+                            terminal_outcome_sampler=terminal_outcome_sampler,
+                        )
+                        histories.put(pending_rows, history_inning, half, rolled.get("final_cache"))
+                        event_counts += rolled["event"].sum(axis=(0, 1))
+                        terminal = rolled["pa_terminal"]
+                        generated_pas += int(terminal.sum())
+                        outcome_counts += np.bincount(
+                            rolled["pa_outcome"][terminal], minlength=len(outcome_counts)
+                        )[:len(outcome_counts)]
+                        batter_idx = rolled["batter_idx"]
+                        flat_bidx = batter_idx[terminal]
+                        flat_oc = rolled["pa_outcome"][terminal]
+                        known = (flat_bidx >= 0) & (flat_bidx < n_batters)
+                        np.add.at(pcounts, (flat_bidx[known], flat_oc[known]), 1.0)
+                        add_rate_outcomes(rolled, terminal, pending_rows)
+                        if terminal_outcome_sampler is None and "swing_prob" in rolled:
+                            pit_swing_prob.append(rolled["swing_prob"][terminal])
+                            pit_contact_prob.append(rolled["contact_prob"][terminal])
+                            pit_foul_prob.append(rolled["foul_prob"][terminal])
+                            pit_hbp_prob.append(rolled["hbp_prob"][terminal])
+                            pit_called_strike_prob.append(rolled["called_strike_prob"][terminal])
+                            pit_d_probs.append(rolled["d_outcome_probs"][terminal])
+                            pit_zone.append(rolled["zone"][terminal])
+                            pit_balls.append(rolled["balls"][terminal])
+                            pit_strikes.append(rolled["strikes"][terminal])
+                            pit_outcome.append(rolled["pa_outcome"][terminal])
+                        for name, value in rolled["final_state"].items():
+                            state[name][pending_rows] = value
+                        rollout_calls += 1
+
+                        still = (~state["ended"][pending_rows]
+                                 & (state["inning"][pending_rows] == inning)
+                                 & (state["half"][pending_rows] == half))
+                        if not still.any():
+                            break
+                        pending_rows = pending_rows[still]
+                        batch = {name: value[still] for name, value in batch.items()}
+            still_this_half = (~state["ended"][rows_this_half]
+                               & (state["inning"][rows_this_half] == inning)
+                               & (state["half"][rows_this_half] == half))
+            truncations += int(still_this_half.sum())
+            completion_faults["regulation_truncated"][rows_this_half] |= still_this_half
+
+            # Runs from continuation pitches count in the same half-inning.
             score_after = (state["home_score"][rows_this_half].astype(np.float64)
                            + state["away_score"][rows_this_half].astype(np.float64))
             half_runs = (score_after - score_before[rows_this_half]).sum()
@@ -462,13 +632,6 @@ def _run_one_rep(
                 runs_by_inning[inning - 1] += half_runs
             else:
                 extra_runs += half_runs
-
-            # Truncation tracking
-            still_this_half = (~state["ended"][rows_this_half]
-                               & (state["inning"][rows_this_half] == inning)
-                               & (state["half"][rows_this_half] == half))
-            truncations += int(still_this_half.sum())
-            completion_faults["regulation_truncated"][rows_this_half] |= still_this_half
 
             # Walk-off tracking
             if half == 1 and inning >= 9:
@@ -482,9 +645,14 @@ def _run_one_rep(
     # -----------------------------------------------------------------
     n_extra_half_innings = 0
     n_unresolved = 0
+    # This is the extra-inning metric: a game entered extras only if it was
+    # tied after regulation.  Do not infer it from final ``state['inning']``:
+    # completing a normal bottom ninth advances that state to inning 10 too.
+    entered_extras = np.zeros(G, dtype=bool)
     if lineup_info is not None:
         batting_orders, last_pitcher, lineup_ptrs, park_indices, env_contexts, geom_per_game = lineup_info
-        tied = ~done & (state["home_score"] == state["away_score"])
+        tied = _entered_extra_mask(state, done)
+        entered_extras = tied.copy()
         last_observed = max(innings) if innings else 9
         for gpk, last in test.group_by('game_pk').agg(pl.col('inning').max()).iter_rows():
             gi = game_row[int(gpk)]
@@ -536,6 +704,7 @@ def _run_one_rep(
                 for start in range(0, len(candidates), args.batch_games):
                     batch_items = candidates[start:start + args.batch_games]
                     rows_batch, batch = _stack_chunk(batch_items, 0)
+                    batch = hybrid_game_batch(batch, rows_batch)
                     initial = {name: value[rows_batch].copy() for name, value in state.items()}
                     batch_seed = seed + extra_inning * 10_000 + half * 1_000 + start + 500_000
                     history_inning = int(initial["inning"][0])
@@ -558,6 +727,8 @@ def _run_one_rep(
                     flat_oc = rolled["pa_outcome"][terminal]
                     known = (flat_bidx >= 0) & (flat_bidx < n_batters)
                     np.add.at(pcounts, (flat_bidx[known], flat_oc[known]), 1.0)
+                    # Synthetic extra innings have no observed PA rows, so
+                    # they are excluded from the paired-rate artifact.
 
                     for name, value in rolled["final_state"].items():
                         state[name][rows_batch] = value
@@ -596,12 +767,14 @@ def _run_one_rep(
         all_cp = np.concatenate(pit_contact_prob)
         all_fp = np.concatenate(pit_foul_prob)
         all_hp = np.concatenate(pit_hbp_prob)
+        all_csp = np.concatenate(pit_called_strike_prob)
         all_dp = np.concatenate(pit_d_probs)
         all_z = np.concatenate(pit_zone)
         all_b = np.concatenate(pit_balls)
         all_s = np.concatenate(pit_strikes)
         all_oc = np.concatenate(pit_outcome)
-        pa_probs = _compose_pa_probs(all_sp, all_cp, all_fp, all_hp, all_dp, all_z, all_b, all_s)
+        pa_probs = _compose_pa_probs(all_sp, all_cp, all_fp, all_hp, all_csp,
+                                     all_dp, all_b, all_s)
         pv = _pit_values(pa_probs, all_oc)
         try:
             pit_result = _pit_summary(pv)
@@ -616,11 +789,12 @@ def _run_one_rep(
         "margin": margin,
         "outcome_counts": outcome_counts,
         "pcounts": pcounts,
+        "rate_pcounts": rate_pcounts,
         "runs_by_inning": runs_by_inning,
         "extra_runs": extra_runs,
         "n_walkoffs": n_walkoffs,
         "n_ties": int((home == away).sum()),
-        "sim_extra_games": int((state["inning"] > 9).sum()),
+        "sim_extra_games": int(entered_extras.sum()),
         "truncations": truncations,
         "event_counts": event_counts,
         "rollout_calls": rollout_calls,
@@ -669,6 +843,8 @@ def main() -> None:
     ap.add_argument("--limit-games", type=int, default=None)
     ap.add_argument("--batch-games", type=int, default=32,
                     help="Active same-inning half-innings per A--D rollout batch.")
+    ap.add_argument("--max-half-continuations", type=int, default=6,
+                    help="Additional cyclic schedule decodes allowed to finish an incomplete half-inning.")
     ap.add_argument("--events", default="data/processed/events.parquet")
     ap.add_argument("--c-events", action="store_true")
     ap.add_argument("--game-context", default="data/processed/game_context.parquet")
@@ -678,21 +854,35 @@ def main() -> None:
                     help="Only report player-level stats for batters with >= this many real test PAs.")
     ap.add_argument("--player-stats", action="store_true",
                     help="Report per-player rate-stat reproduction (AVG, OBP, SLG, K%%, BB%%, HR%%).")
+    ap.add_argument("--rates-out", type=Path, default=None,
+                    help="Write PA-ladder-compatible per-batter K/BB/Hit/HR rate totals. "
+                         "Uses generated ABCD outcomes but the observed 2024 PA denominator.")
+    ap.add_argument("--rates-max-pa-per-game", type=int, default=0,
+                    help="Optional cap for only the paired-rate cohort; 0 keeps every observed PA. "
+                         "The historical v16 artifact used 90.")
+    ap.add_argument("--arrays-out", type=Path, default=None,
+                    help="Write benchmark arrays (game x replication). These use the observed "
+                         "lineup/staff schedule, cycling a half's sources only when needed to finish it; "
+                         "they are not pre-game roster/staff simulations.")
     ap.add_argument("--out", default=None)
     ap.add_argument('--skill-mode', choices=['auto', 'mean', 'sample'], default='auto',
                     help='auto samples native Bayesian skills once per rep; keeps exported worlds and ordinary checkpoints fixed')
     ap.add_argument("--hybrid-pa-ckpt", type=Path, default=None,
-                    help="Model 7 PA export: use it for generated in-play outcomes while ABCD drives pitches")
+                    help="Model 7 PA export: evaluate A/B/C pitches and use PA for generated in-play outcomes (D is omitted)")
     ap.add_argument("--hybrid-pa-skill-mode", choices=["mean", "sample"], default="mean",
                     help="Posterior policy for the hybrid PA head (default: mean)")
     args = ap.parse_args()
     if args.reps < 1:
         ap.error('--reps must be positive')
+    if args.rates_max_pa_per_game < 0:
+        ap.error('--rates-max-pa-per-game must be nonnegative')
     metadata = restore_metadata(args, args.tag)
     args.checkpoint_metadata = metadata
     args.history_reset = (metadata or {}).get("config", {}).get("history_reset", "legacy")
     if args.batch_games < 1:
         raise SystemExit("--batch-games must be positive")
+    if args.max_half_continuations < 0:
+        raise SystemExit("--max-half-continuations must be nonnegative")
 
     years = metadata["train_years"] if metadata else [2015, 2016, 2017, 2018, 2019, 2021, 2022, 2023]
     train = load_seasons(years)
@@ -708,13 +898,12 @@ def main() -> None:
     a, ap_ = load_head("A", TransformerA)
     b, bp = load_head("B", TransformerB)
     c, cp = load_head("C", TransformerC)
-    d, dp = load_head("D", TransformerD)
+    # A direct PA-on-ABC hybrid has no D dependency, including at checkpoint
+    # load time.  Native evaluation still loads D normally.
+    d, dp = ((None, None) if args.hybrid_pa_ckpt is not None
+             else load_head("D", TransformerD))
     if a is None or b is None:
         raise SystemExit("A and B checkpoints are required")
-    heads_obj = PitchformerHeads(a, b, c, d, ap_, bp, cp, dp)
-    from diamondworldjax.eval.pitchformer_worlds import PitchformerWorlds
-    worlds = PitchformerWorlds(heads_obj, args.params_dir, args.tag, metadata,
-                              args.skill_mode, args.seed)
     terminal_outcome_sampler = None
     if args.hybrid_pa_ckpt is not None:
         from diamondworldjax.simulate.pa_abcd_hybrid import PAInPlayOutcomeSampler
@@ -722,8 +911,12 @@ def main() -> None:
             args.hybrid_pa_ckpt, metadata, season=args.season,
             skill_mode=args.hybrid_pa_skill_mode, seed=args.seed,
         )
-        print("Hybrid rollout: A/B/C/D generate pitches; the Model 7 PA head resolves in-play outcomes.",
+        print("Hybrid rollout: A/B/C generate pitches; the Model 7 PA head replaces D for in-play outcomes.",
               flush=True)
+    heads_obj = PitchformerHeads(a, b, c, d, ap_, bp, cp, dp)
+    from diamondworldjax.eval.pitchformer_worlds import PitchformerWorlds
+    worlds = PitchformerWorlds(heads_obj, args.params_dir, args.tag, metadata,
+                              args.skill_mode, args.seed)
     engine = EmpiricalEngine().fit(pl.concat(train).filter(pl.col("pa_terminal")))
     c_engine = None
     if args.c_events:
@@ -739,6 +932,20 @@ def main() -> None:
     G = len(games)
     n_batters = maps["n_batter"]
 
+    # The PA ladder indexes its player table by the sorted union of training
+    # pitcher and batter IDs.  Retain the native ABCD role-local counts for its
+    # diagnostics, but build this second map only when exporting a paired-rate
+    # artifact so the bootstrap can compare the same real batters to v16.
+    rate_player_ids = None
+    rate_batter_index = None
+    if args.rates_out is not None:
+        raw_ids = list(maps.get("pitcher", {})) + list(maps.get("batter", {}))
+        rate_player_ids = np.unique(np.asarray(raw_ids, dtype=np.int64))
+        rate_lookup = {int(player_id): i for i, player_id in enumerate(rate_player_ids)}
+        rate_batter_index = np.full(n_batters, -1, np.int32)
+        for player_id, local_index in maps["batter"].items():
+            rate_batter_index[int(local_index)] = rate_lookup[int(player_id)]
+
     # =====================================================================
     # Load real comparison data from the PA pipeline
     # =====================================================================
@@ -753,6 +960,22 @@ def main() -> None:
         has_real = True
     except Exception:
         pass
+
+    # The shared game benchmark schema needs real home/away totals in precisely
+    # the game order used by the generated replications.
+    real_home = np.full(G, np.nan, dtype=np.float64)
+    real_away = np.full(G, np.nan, dtype=np.float64)
+    if has_real and "runs_scored" in real_pa.columns:
+        half_col = "half_bin" if "half_bin" in real_pa.columns else "half"
+        sides = (real_pa.with_columns(
+            pl.when(pl.col(half_col) == 0).then(pl.lit("away")).otherwise(pl.lit("home")).alias("side"))
+            .group_by(["game_pk", "side"]).agg(pl.col("runs_scored").sum().alias("runs"))
+            .pivot(on="side", values="runs", index="game_pk").fill_null(0))
+        for row in sides.iter_rows(named=True):
+            gi = game_row.get(int(row["game_pk"]))
+            if gi is not None:
+                real_home[gi] = float(row.get("home", 0))
+                real_away[gi] = float(row.get("away", 0))
 
     # Real runs/game
     real_total = float("nan")
@@ -797,12 +1020,30 @@ def main() -> None:
     # Real per-batter outcome counts
     batter_map = maps.get("batter", {})
     real_pcounts = np.zeros((n_batters, 9), dtype=np.float64)
+    real_rate_pcounts = (np.zeros((len(rate_player_ids), 9), dtype=np.float64)
+                         if rate_player_ids is not None else None)
     if has_real:
+        # Match prod_playercorr exactly: rows without an observed terminal
+        # outcome are excluded *before* the historical per-game PA cap.  Capping
+        # first lets a null label consume one of the 90 slots and creates a
+        # different paired-bootstrap denominator for that game's later batter.
+        real_rate_pa = real_pa.filter(pl.col("pa_outcome").is_not_null())
+        if args.rates_max_pa_per_game:
+            real_rate_pa = (real_rate_pa.sort(["game_pk", "at_bat_number"])
+                             .with_columns(pl.int_range(pl.len()).over("game_pk").alias("_pa_pos"))
+                             .filter(pl.col("_pa_pos") < args.rates_max_pa_per_game)
+                             .drop("_pa_pos"))
         bcol = "batter_id" if "batter_id" in real_pa.columns else "batter_idx"
         for row in real_pa.select([bcol, "pa_outcome"]).iter_rows():
             bid, oc = row
             if oc in _OUTCOME_MAP and int(bid) in batter_map:
                 real_pcounts[batter_map[int(bid)], _OUTCOME_MAP[oc]] += 1
+        for row in real_rate_pa.select([bcol, "pa_outcome"]).iter_rows():
+            bid, oc = row
+            if oc in _OUTCOME_MAP and rate_player_ids is not None:
+                rate_idx = rate_lookup.get(int(bid))
+                if rate_idx is not None:
+                    real_rate_pcounts[rate_idx, _OUTCOME_MAP[oc]] += 1
     else:
         # Fall back to pitch-level test data
         terminal = test.filter(pl.col("pa_terminal") & pl.col("pa_outcome").is_not_null())
@@ -846,33 +1087,38 @@ def main() -> None:
     # =====================================================================
     import time
     t0 = time.time()
+    print("Preparing immutable observed pitch schedules...", flush=True)
+    phase_schedules = _prepare_observed_schedule(test, game_row, maps, args, gctx)
     lineup_info = _extract_lineup_info(test, game_row, maps, G)
 
-    # Pre-populate env_ctx and geom per game from first observed chunk
-    for portion in test.partition_by("game_pk", maintain_order=True):
-        gpk = int(portion["game_pk"][0])
-        if gpk not in game_row:
-            continue
-        gi = game_row[gpk]
-        if lineup_info[4][gi] is not None:
-            continue
-        seqs = add_skill_season(make_sequences(portion, maps, args.max_len, game_ctx=gctx),
-                                args.checkpoint_metadata)
-        first_valid = int(seqs["valid"][0].argmax())
-        lineup_info[4][gi] = seqs["ctx"][0, first_valid, 16:].copy()
-        lineup_info[5][gi] = np.zeros_like(seqs["geom"][0, first_valid]) if args.no_geom else seqs["geom"][0, first_valid].copy()
+    # Pre-populate extra-inning context from the first cached observed chunk
+    # for each game. This avoids a second full make_sequences pass.
+    for items in phase_schedules.values():
+        for gi, seqs in items:
+            if lineup_info[4][gi] is not None:
+                continue
+            first_valid = int(seqs["valid"][0].argmax())
+            lineup_info[4][gi] = seqs["ctx"][0, first_valid, 16:].copy()
+            lineup_info[5][gi] = (np.zeros_like(seqs["geom"][0, first_valid])
+                                  if args.no_geom else seqs["geom"][0, first_valid].copy())
 
     rep_results = []
     for rep in range(args.reps):
         heads_obj = worlds.for_rep(rep)
         rep_seed = args.seed + rep * 1_000_003
         print(f"\n--- Rep {rep + 1}/{args.reps} (seed={rep_seed}) ---", flush=True)
+        if terminal_outcome_sampler is not None and hasattr(terminal_outcome_sampler, "reset"):
+            terminal_outcome_sampler.reset()
         import copy
         li = copy.deepcopy(lineup_info)
         res = _run_one_rep(
             heads_obj, engine, c_engine, test, games, game_row, maps, gctx, args,
             seed=rep_seed, n_batters=n_batters,
-            lineup_info=li, terminal_outcome_sampler=terminal_outcome_sampler,
+            lineup_info=li, phase_schedules=phase_schedules,
+            terminal_outcome_sampler=terminal_outcome_sampler,
+            rate_batter_index=rate_batter_index,
+            n_rate_players=0 if rate_player_ids is None else len(rate_player_ids),
+            rate_max_pa_per_game=args.rates_max_pa_per_game,
         )
         rep_results.append(res)
     elapsed = time.time() - t0
@@ -908,17 +1154,26 @@ def main() -> None:
 
     # Aggregate player counts (average across reps)
     avg_pcounts = sum(r["pcounts"] for r in rep_results) / n_reps
+    avg_rate_pcounts = (sum(r["rate_pcounts"] for r in rep_results) / n_reps
+                        if rate_player_ids is not None else None)
 
     # Generated targets check sampling consistency, not held-out calibration.
     pit_result = rep_results[0].get("simulation_consistency")
 
-    from diamondworldjax.eval.pitch_calibration import score_heldout
-    calibration_arrays = add_skill_season(
-        make_sequences(test, maps, args.max_len, game_ctx=gctx, history_reset=args.history_reset if args.history_reset != "legacy" else "batting_side", context_len=(metadata or {}).get("config", {}).get("context_len", 0)), metadata)
-    if args.no_geom:
-        calibration_arrays["geom"][:] = 0
-    heldout_calibration = score_heldout(worlds.calibration_heads(), calibration_arrays,
-                                       batch_size=args.batch_games, seed=args.seed)
+    if terminal_outcome_sampler is None:
+        from diamondworldjax.eval.pitch_calibration import score_heldout
+        calibration_arrays = add_skill_season(
+            make_sequences(test, maps, args.max_len, game_ctx=gctx, history_reset=args.history_reset if args.history_reset != "legacy" else "batting_side", context_len=(metadata or {}).get("config", {}).get("context_len", 0)), metadata)
+        if args.no_geom:
+            calibration_arrays["geom"][:] = 0
+        heldout_calibration = score_heldout(worlds.calibration_heads(), calibration_arrays,
+                                           batch_size=args.batch_games, seed=args.seed)
+    else:
+        heldout_calibration = {
+            "n": 0,
+            "scope": "not_applicable_pa_replaces_d",
+            "reason": "Native B+D held-out resolution is not a score for an A/B/C+PA hybrid.",
+        }
     # =====================================================================
     # Print results
     # =====================================================================
@@ -927,6 +1182,19 @@ def main() -> None:
         if n_reps == 1:
             return f"{values[0]:{fmt}}"
         return f"{values.mean():{fmt}} +/- {values.std():{fmt}}"
+
+    # This is the pitch-level held-out score.  It conditions on the observed
+    # pitch and prior history, so it evaluates B+D's next-pitch resolution—not
+    # A's pitch-generation density or an unconstrained full-game rollout.
+    print("\n=== Held-out next-pitch resolution (B+D) ===", flush=True)
+    if heldout_calibration.get("n", 0):
+        print(f"  n={heldout_calibration['n']}  NLL={heldout_calibration['nll']:.4f}  "
+              f"Brier={heldout_calibration['brier']:.4f}", flush=True)
+        print("  conditioning: observed pitch + prior history; launch marginalized; "
+              "includes continuation", flush=True)
+    else:
+        print("  not reported for the A/B/C + PA hybrid" if terminal_outcome_sampler is not None
+              else "  no eligible held-out pitch-resolution rows", flush=True)
 
     # --- Marginal outcome calibration ---
     print(f"\n=== Marginal outcome calibration ===", flush=True)
@@ -1081,6 +1349,55 @@ def main() -> None:
         elif n_reps > 1:
             print(f"\n  (coverage requires >= 3 reps; got {n_reps})", flush=True)
 
+    rate_export = None
+    if args.rates_out is not None:
+        if not has_real or real_rate_pcounts is None:
+            raise SystemExit("--rates-out requires held-out PA rows with terminal outcomes")
+        real_cnt = real_rate_pcounts.sum(axis=1)
+        sim_cnt = avg_rate_pcounts.sum(axis=1)
+        sim_rates = np.divide(avg_rate_pcounts, sim_cnt[:, None],
+                              out=np.zeros_like(avg_rate_pcounts), where=sim_cnt[:, None] > 0)
+        args.rates_out.parent.mkdir(parents=True, exist_ok=True)
+        np.savez(
+            args.rates_out,
+            # Match prod_playercorr's contract: sum* / cnt is the model's
+            # expected rate on the real held-out PA denominator.
+            sumK=sim_rates[:, _K] * real_cnt,
+            sumBB=(sim_rates[:, _BB] + sim_rates[:, _HBP]) * real_cnt,
+            sumHit=(sim_rates[:, _1B] + sim_rates[:, _2B] + sim_rates[:, _3B] + sim_rates[:, _HR]) * real_cnt,
+            sumHR=sim_rates[:, _HR] * real_cnt,
+            rK=real_rate_pcounts[:, _K],
+            rBB=real_rate_pcounts[:, _BB] + real_rate_pcounts[:, _HBP],
+            rHit=(real_rate_pcounts[:, _1B] + real_rate_pcounts[:, _2B]
+                  + real_rate_pcounts[:, _3B] + real_rate_pcounts[:, _HR]),
+            rHR=real_rate_pcounts[:, _HR],
+            cnt=real_cnt,
+            player_ids=rate_player_ids,
+        )
+        rate_export = dict(path=str(args.rates_out), players=int((real_cnt > 0).sum()),
+                           max_pa_per_game=args.rates_max_pa_per_game,
+                           note="Generated-outcome rates on the selected observed 2024 PA denominator.")
+        print(f"saved paired-rate artifact -> {args.rates_out}", flush=True)
+
+    arrays_export = None
+    if args.arrays_out is not None:
+        if not np.isfinite(real_home).all() or not np.isfinite(real_away).all():
+            raise SystemExit("--arrays-out requires real home and away scores for every evaluated game")
+        args.arrays_out.parent.mkdir(parents=True, exist_ok=True)
+        sim_home = np.stack([r["home"] for r in rep_results], axis=1)
+        sim_away = np.stack([r["away"] for r in rep_results], axis=1)
+        np.savez(args.arrays_out, sim_home=sim_home, sim_away=sim_away,
+                 sim_total=sim_home + sim_away, real_home=real_home,
+                 real_away=real_away, real_total=real_home + real_away,
+                 game_pk=np.asarray(games, dtype=np.int64),
+                 evaluation_mode=np.asarray("observed_schedule"))
+        arrays_export = dict(
+            path=str(args.arrays_out), games=G, reps=n_reps,
+            note="Observed lineup/staff schedule; source rows cycle only if a generated half outlives "
+                 "its observed PA schedule. Not a pre-game roster/staff simulation.",
+        )
+        print(f"saved benchmark arrays -> {args.arrays_out}", flush=True)
+
     # =====================================================================
     # Build result dict
     # =====================================================================
@@ -1127,10 +1444,16 @@ def main() -> None:
         "heldout_pitch_calibration": heldout_calibration,
         "skill_policy": worlds.report(args.reps),
         "completion_diagnostics": completion_report(rep_results, game_row),
-        "note": ("Generated game state on observed lineup/staff schedule; not pre-game roster selection. "
-                 "Hybrid mode keeps A/B/C/D pitch generation and samples only in-play PA outcomes from the Model 7 PA head."
+        "rate_export": rate_export,
+        "arrays_export": arrays_export,
+        "note": ("Generated game state on observed lineup/staff schedule; a half that outlives its "
+                 "observed PA sources cycles those sources until a generated third out. Continuation PAs "
+                 "are excluded from the paired fixed-cohort rate export; this is not pre-game roster selection. "
+                 "Hybrid mode generates pitches with A/B/C and replaces D's in-play outcome with the Model 7 PA head."
                  if terminal_outcome_sampler is not None else
-                 "Generated game state on observed lineup/staff schedule; not pre-game roster selection."),
+                 "Generated game state on observed lineup/staff schedule; a half that outlives its "
+                 "observed PA sources cycles those sources until a generated third out. Continuation PAs "
+                 "are excluded from the paired fixed-cohort rate export; not a pre-game roster/staff simulation."),
     }
     if args.hybrid_pa_ckpt is not None:
         result["hybrid_pa_checkpoint"] = str(args.hybrid_pa_ckpt)

@@ -1,0 +1,31 @@
+SIMULATOR BENCHMARKS (v26a_pa_abcd_s42_hybrid-observed-schedule) — 2429 games, 2376 decided
+
+1. WIN PROBABILITY (home), lower log-loss / Brier better, higher AUC better:
+   model                       n   logloss    brier     AUC     ECE
+   base rate (home 0.521)   2376    0.6923   0.2496       -       -
+   DiamondWorld sim         2376    1.3937   0.3093   0.512   0.202
+   Log5 (Pythagorean)       2376    0.6709   0.2391   0.617   0.019
+   Market (devig close)     2302    0.6707   0.2391   0.614   0.019
+   (common set n=2302: sim logloss 1.3870, Log5 0.6700, market 0.6707)
+
+2. RUN-TOTAL DISTRIBUTION. mean/variance and how well each covers reality:
+   real total: mean 8.63  var 18.24
+   model                        mean     var  P(>=10)  P(<=5)  logscore
+   real (empirical)             8.63   18.24    0.366   0.261         -
+   DiamondWorld sim             9.13   15.95    0.415   0.233     2.991
+   independent 2-Poisson        9.14    7.35    0.429   0.167     2.988
+   league neg-binomial          8.68   14.63    0.377   0.244     2.997
+
+   central-interval coverage (should equal the nominal level):
+   model                          50%     80%     90%
+   DiamondWorld sim             0.410   0.587   0.631
+   independent 2-Poisson        0.306   0.428   0.471
+   league neg-binomial          0.396   0.549   0.594
+
+   randomized-PIT uniformity (KS distance from Uniform, lower = better calibrated):
+   DiamondWorld sim           KS 0.1449
+   independent 2-Poisson      KS 0.2445
+   league neg-binomial        KS 0.1549
+
+   overdispersion: sim within-game total variance is 1.75x the independent-Poisson
+   value (var = mean); real is 2.11x. The summed model cannot produce this.

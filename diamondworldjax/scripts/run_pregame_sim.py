@@ -54,6 +54,8 @@ def main():
     # to have been run on v15. Now the checkpoint is explicit.
     ap.add_argument("--ckpt", default=None,
                     help="checkpoint .pkl; default is Sim's V15 (say so in --tag)")
+    ap.add_argument("--recency-halflife", type=float, default=2.0,
+                    help="Player-table recency half-life for legacy checkpoints; modern checkpoints restore it.")
     ap.add_argument("--contact-quality", action="store_true",
                     help="must match how the checkpoint was trained (v16+, v22+)")
     ap.add_argument("--per-stat-shrink", action="store_true",
@@ -63,7 +65,7 @@ def main():
     ap.add_argument("--pitchformer", action="store_true",
                     help="must match: checkpoint trained with --pitchformer")
     ap.add_argument("--pa-arch", type=str, default="transformer",
-                    choices=["transformer", "gru"],
+                    choices=["transformer", "gru", "gru_skip"],
                     help="PA sequence model architecture (requires --pitchformer).")
     ap.add_argument("--train-end", type=int, default=2023)
     ap.add_argument("--recal-file", default="data/eval2/v13_cal_params.npz",
@@ -80,6 +82,7 @@ def main():
     args = ap.parse_args()
 
     sim_kw = dict(hook_model=True, train_end=args.train_end,
+                  recency_hl=args.recency_halflife,
                   contact_quality=args.contact_quality,
                   per_stat_shrink=args.per_stat_shrink,
                   skill_prior=args.skill_prior,
@@ -97,6 +100,10 @@ def main():
           f"{'off' if args.no_recal else f'{args.recal_file}[{args.recal_key}] x {args.recal_scale:g}'}",
           flush=True)
     s = Sim(**sim_kw)
+    print("checkpoint config resolved: "
+          f"train_end={s.train_end} recency_halflife={s.recency_hl} "
+          f"contact_quality={s.contact_quality} per_stat_shrink={s.per_stat_shrink} "
+          f"skill_prior={s.skill_prior} pitchformer={s.pitchformer}", flush=True)
     outcomes = real_runs(2024)
     games = [g for g in s.real_games(2024, limit=10000, pregame_staff=args.pregame_staff)
              if g["park"] != 0 and int(g["game_pk"]) in outcomes]

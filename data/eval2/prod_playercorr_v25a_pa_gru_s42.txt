@@ -1,0 +1,1 @@
+v25a_pa_gru_s42 (SVI, conditioned+raw, skill=mean, train<= 2023, test 2024, mle=False) | corr K 0.777 BB 0.670 Hit 0.423 HR 0.582 AVG 0.613 (np=382, rookies_injected=0, rookies_kept=0)

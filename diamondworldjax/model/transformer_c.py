@@ -67,6 +67,8 @@ class TransformerC(nn.Module):
     observation_masks: bool = False
     c_event_mode: str = "legacy"
     c_support: tuple | None = None
+    # Accepted for shared/joint configuration compatibility; only B uses it.
+    learned_called_strike: bool = False
 
     @nn.compact
     def __call__(self, batch, *, train: bool, decode: bool = False,

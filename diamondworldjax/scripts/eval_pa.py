@@ -187,7 +187,7 @@ def main() -> None:
     parser.add_argument("--pitchformer-heads", type=int, default=4)
     parser.add_argument("--pitchformer-dropout", type=float, default=0.0)
     parser.add_argument("--pa-arch", type=str, default="transformer",
-                        choices=["transformer", "gru"],
+                        choices=["transformer", "gru", "gru_skip"],
                         help="PA sequence model architecture (requires --pitchformer).")
     from diamondworldjax.model.pa_checkpoint import (add_eval_arguments, restore_config,
         model_kwargs, player_table as checkpoint_player_table, posterior_params)

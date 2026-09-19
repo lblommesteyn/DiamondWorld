@@ -15,23 +15,22 @@ Starting from the real game context, the PA is rolled forward one pitch at a tim
 
   A     samples the pitch type, then the stuff (location and velocity) for it
   B     samples swing given that pitch, then contact given swing, then foul
-  zone  a TAKEN pitch is a called strike if it crossed the rules-based zone
+  call  B samples a called strike on a taken non-HBP pitch (or, for older
+        checkpoints, a rules-based-zone fallback is used)
 
   swing, no contact           -> strike
   swing, contact, foul        -> strike, except with two strikes, where the count
                                  holds, which is why a PA can run long
   swing, contact, not foul    -> ball in play, PA ends
-  take, in zone               -> strike
-  take, outside               -> ball
+  take, called strike         -> strike
+  take, no called strike      -> ball
 
   three strikes -> strikeout      four balls -> walk
 
-The called-strike rule is deliberately rules-based rather than learned. There is no
-called_strike column in the processed parquet, so a learned head would need a label
-that does not exist, and inventing one is how the transition heads ended up sampling
-from their priors for the whole project. A geometric zone is honest about what it is.
-It also means the K and BB rates below are NOT free parameters fitted to match real
-K and BB rates: they fall out of A's location model plus a fixed zone.
+The processed pitch export has no raw call-description field, but it does have the
+pre-pitch count.  The training loader infers calls from the next pitch's count (and
+terminal taken strikeouts), so new B checkpoints learn this conditional event.
+Older checkpoints fall back to the geometric zone, retaining compatibility.
 
 CONTEXT IS REAL, THE PITCHES ARE SIMULATED
 
@@ -134,7 +133,7 @@ def main():
         outa = fwd_a(batch)
         outb = fwd_b(batch)
 
-        key, k1, k2, k3, k4, k5 = jax.random.split(key, 6)
+        key, k1, k2, k3, k4, k5, k6 = jax.random.split(key, 7)
         # A: pitch type, then the stuff for that type.
         ptype = jax.random.categorical(k1, outa["type_logits"])
         idx = ptype[..., None, None]
@@ -160,6 +159,9 @@ def main():
         px = np.asarray(stuff[..., 3]) * STUFF_SCALE[3] + STUFF_CENTRE[3]
         pz = np.asarray(stuff[..., 4]) * STUFF_SCALE[4] + STUFF_CENTRE[4]
         in_zone = (np.abs(px) <= ZONE_HALF_WIDTH) & (pz >= ZONE_BOTTOM) & (pz <= ZONE_TOP)
+        called_strike = (jax.random.bernoulli(
+            k6, jax.nn.sigmoid(outb["called_strike_logit"])
+        ) if "called_strike_logit" in outb else jnp.asarray(in_zone))
 
         # How often do SAMPLED locations land in the zone, against 47.7% for real
         # 2024 pitches? If the model's Gaussian is over-dispersed, every taken
@@ -172,6 +174,7 @@ def main():
         sw = np.asarray(swing)
         ct = np.asarray(contact)
         fl = np.asarray(foul)
+        cs = np.asarray(called_strike)
         valid = np.asarray(seqs["valid"][sl]) > 0
         bidx = np.asarray(seqs["batter_idx"][sl])
 
@@ -217,7 +220,7 @@ def main():
                             outcome = "inplay"
                             break
                     else:
-                        if in_zone[i, u]:
+                        if cs[i, u]:
                             strikes += 1
                         else:
                             balls += 1

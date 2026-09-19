@@ -432,14 +432,22 @@ def pa_model(
     context_raw = jnp.concatenate([game_state, pitcher_z, batter_z, park_emb], axis=-1)  # (B, T, 144/145)
 
     if pitchformer:
-        if pa_arch == "gru":
+        if pa_arch in ("gru", "gru_skip"):
             from .pa_transformer import pa_gru_numpyro
             context = pa_gru_numpyro(
                 context_raw,
                 batch["pa_valid"],
                 d_model=pitchformer_dim,
                 n_layers=pitchformer_layers,
+                # Keep the checkpoint namespace distinct: this is an
+                # experiment, not a compatible re-interpretation of a GRU.
+                name="pa_gru_skip" if pa_arch == "gru_skip" else "pa_gru",
             )
+            # The recurrent state is useful for recent PA history, but it
+            # should not be a bottleneck for matchup/player features.  This
+            # residual path lets the outcome head use both representations.
+            if pa_arch == "gru_skip":
+                context = jnp.concatenate([context_raw, context], axis=-1)
         else:
             from .pa_transformer import pa_transformer_numpyro
             context = pa_transformer_numpyro(

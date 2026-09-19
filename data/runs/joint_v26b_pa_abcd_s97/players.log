@@ -1,0 +1,16 @@
+Loading checkpoint checkpoints/pa_abcd/pa_v26b_pa_abcd_s97.pkl
+  382 batters with >= 150 test PAs
+  batch 1/38  elapsed=11s
+  batch 21/38  elapsed=90s
+  batch 38/38  elapsed=159s
+
+=== Player-level stat reproduction (382 batters) ===
+  stat   real_mean   sim_mean      MAE    corr
+  AVG       0.2390     0.2429   0.0255   0.334
+  OBP       0.3097     0.3179   0.0270   0.463
+  SLG       0.3905     0.4087   0.0545   0.458
+  K%        0.2260     0.2234   0.0308   0.762
+  BB%       0.0814     0.0881   0.0174   0.686
+  HR%       0.0292     0.0333   0.0101   0.617
+
+  corr = cross-player correlation (does the model rank players correctly?)

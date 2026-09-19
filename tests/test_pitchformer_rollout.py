@@ -60,6 +60,19 @@ class _NoSwingHbpB:
         }
 
 
+class _TakeCalledStrikeB:
+    """A deterministic taken-pitch response with a learned called-strike head."""
+    def apply(self, _params, batch, *, train):
+        b, t = batch["valid"].shape
+        return {
+            "swing_logit": jnp.full((b, t), -100.0),
+            "contact_logit": jnp.full((b, t), -100.0),
+            "foul_logit": jnp.full((b, t), -100.0),
+            "hbp_logit": jnp.full((b, t), -100.0),
+            "called_strike_logit": jnp.full((b, t), 100.0),
+        }
+
+
 class _NoEventC:
     def apply(self, _params, batch, *, train):
         b, t = batch["valid"].shape
@@ -97,17 +110,17 @@ def test_rollout_composes_abcd_and_uses_generated_terminal_outcome():
     assert np.all(got["event"].sum(axis=-1) == 1)
 
 
-def test_rollout_hybrid_replaces_only_generated_in_play_outcomes():
+def test_rollout_hybrid_replaces_d_for_generated_in_play_outcomes():
     calls = []
 
     def pa_in_play(state, source, in_play, original, _key):
         calls.append((state["outs"].copy(), source.copy(), in_play.copy(), original["ctx"].shape))
         return np.full(len(source), int(PAOutcome.SINGLE), np.int32)
 
-    # A/B make every pitch a ball in play and D selects HR.  The hybrid callback
-    # must replace just that D-derived PA class, while retaining normal rollout
-    # scheduling and state advancement.
-    heads = PitchformerHeads(_A(), _B(), _C(), _D(), None, None, {}, {})
+    # A/B make every pitch a ball in play.  D is intentionally absent: the
+    # hybrid must use the PA callback while retaining normal rollout scheduling
+    # and state advancement.
+    heads = PitchformerHeads(_A(), _B(), _C(), None, None, None, {}, None)
     got = rollout_batch(
         heads, _batch(b=1, t=2), seed=0, engine=EmpiricalEngine(),
         terminal_outcome_sampler=pa_in_play,
@@ -116,10 +129,115 @@ def test_rollout_hybrid_replaces_only_generated_in_play_outcomes():
     assert len(calls) == 2
     assert calls[0][1].tolist() == [0]
     assert calls[0][2].tolist() == [True]
+    assert np.all(got["pa_outcome"][got["pa_terminal"]] == int(PAOutcome.SINGLE))
+
+
+def test_checkpoint_hybrid_uses_cached_abc_history():
+    """The PA callback must not force checkpoint ABC heads back to full-prefix mode."""
+    batch = _batch(b=1, t=2)
+    kw = dict(n_pitchers=4, n_batters=4, n_parks=4,
+              d_model=12, n_layers=1, n_heads=3, dropout=0.0, window_size=2)
+    a, b = TransformerA(**kw), TransformerB(**kw)
+    jbatch = {name: jnp.asarray(value) for name, value in batch.items()}
+    a_params = a.init(jax.random.PRNGKey(20), jbatch, train=False)
+    b_params = unfreeze(b.init(jax.random.PRNGKey(21), jbatch, train=False))
+    for name, bias in (("swing", 100.0), ("contact", 100.0),
+                       ("foul", -100.0), ("hbp", -100.0)):
+        b_params["params"][name]["kernel"] = jnp.zeros_like(b_params["params"][name]["kernel"])
+        b_params["params"][name]["bias"] = jnp.full_like(b_params["params"][name]["bias"], bias)
+
+    def pa_in_play(_state, _source, in_play, _original, _key):
+        return np.where(in_play, int(PAOutcome.SINGLE), int(PAOutcome.OUT)).astype(np.int32)
+
+    got = rollout_batch(
+        PitchformerHeads(a, b, None, None, a_params, b_params), batch,
+        seed=0, engine=EmpiricalEngine(), terminal_outcome_sampler=pa_in_play,
+    )
+
+    assert got["final_cache"] is not None
     assert np.all(got["pa_outcome"] == int(PAOutcome.SINGLE))
 
 
-def test_rollout_advances_observed_pa_schedule_after_generated_terminal():
+class _CompiledHybrid:
+    """Minimal PA-checkpoint protocol used to exercise the fused scan."""
+    def __init__(self, mode="flat"):
+        self.mode = mode
+        self.saved = None
+
+    def supports_compiled_rollout(self):
+        return True
+
+    def compiled_mode(self):
+        return self.mode
+
+    @staticmethod
+    def _flat_logits(**inputs):
+        return jnp.zeros((inputs["inning"].shape[0], 9)).at[:, 3].set(100.0)
+
+    @staticmethod
+    def _gru_step(carry, **inputs):
+        logits = jnp.zeros((inputs["inning"].shape[0], 9)).at[:, 3].set(100.0)
+        return carry + 1.0, logits
+
+    def compiled_functions(self):
+        return (self._flat_logits, None) if self.mode == "flat" else (None, self._gru_step)
+
+    def compiled_maps(self):
+        mapping = jnp.arange(4, dtype=jnp.int32)
+        return mapping, mapping, mapping
+
+    def compiled_carry(self, game_ids):
+        if self.mode == "flat":
+            return None
+        return (jnp.zeros((len(game_ids), 1), jnp.float32)
+                if self.saved is None else self.saved)
+
+    def commit_compiled_carry(self, _game_ids, carry):
+        self.saved = np.asarray(carry)
+
+
+def _checkpoint_abc_inplay_heads(batch):
+    kw = dict(n_pitchers=4, n_batters=4, n_parks=4,
+              d_model=12, n_layers=1, n_heads=3, dropout=0.0, window_size=2)
+    a, b = TransformerA(**kw), TransformerB(**kw)
+    jbatch = {name: jnp.asarray(value) for name, value in batch.items()}
+    a_params = a.init(jax.random.PRNGKey(30), jbatch, train=False)
+    b_params = unfreeze(b.init(jax.random.PRNGKey(31), jbatch, train=False))
+    for name, bias in (("swing", 100.0), ("contact", 100.0),
+                       ("foul", -100.0), ("hbp", -100.0)):
+        b_params["params"][name]["kernel"] = jnp.zeros_like(b_params["params"][name]["kernel"])
+        b_params["params"][name]["bias"] = jnp.full_like(b_params["params"][name]["bias"], bias)
+    return PitchformerHeads(a, b, None, None, a_params, b_params)
+
+
+def test_checkpoint_hybrid_flat_pa_uses_fused_scan():
+    """Flat PA hybrid should not need a per-pitch Python callback."""
+    batch = _batch(b=1, t=2)
+    sampler = _CompiledHybrid("flat")
+    got = rollout_batch(
+        _checkpoint_abc_inplay_heads(batch), batch, seed=0, engine=EmpiricalEngine(),
+        terminal_outcome_sampler=sampler,
+    )
+    assert np.all(got["pa_outcome"][got["pa_terminal"]] == int(PAOutcome.SINGLE))
+
+
+def test_checkpoint_hybrid_gru_carry_advances_and_persists():
+    """The fused GRU path advances once per generated PA across calls."""
+    batch = _batch(b=1, t=2)
+    batch["hybrid_game_index"] = np.full((1, 2), 77, np.int32)
+    sampler = _CompiledHybrid("gru")
+    heads = _checkpoint_abc_inplay_heads(batch)
+    first = rollout_batch(heads, batch, seed=0, engine=EmpiricalEngine(),
+                          terminal_outcome_sampler=sampler)
+    assert np.all(first["pa_outcome"][first["pa_terminal"]] == int(PAOutcome.SINGLE))
+    np.testing.assert_allclose(sampler.saved, [[2.0]])
+    second = rollout_batch(heads, batch, seed=1, engine=EmpiricalEngine(),
+                           terminal_outcome_sampler=sampler)
+    assert np.all(second["pa_outcome"][second["pa_terminal"]] == int(PAOutcome.SINGLE))
+    np.testing.assert_allclose(sampler.saved, [[4.0]])
+
+
+def test_rollout_cycles_observed_pa_schedule_after_generated_terminal():
     batch = _batch(b=1, t=3)
     batch["pa_start"] = np.array([[True, False, True]])
     batch["batter_idx"][:] = np.array([[2, 99, 3]])
@@ -128,8 +246,11 @@ def test_rollout_advances_observed_pa_schedule_after_generated_terminal():
 
     # The first generated in-play ends the PA immediately, so the next pitch
     # uses the second scheduled PA's batter (3), not the recorded mid-PA actor.
-    assert got["active"].tolist() == [[True, True, False]]
-    assert got["batter_idx"][0, :2].tolist() == [2, 3]
+    # Once those two observed source rows are exhausted, continuation uses the
+    # schedule cyclically rather than silently ending a live half-inning.
+    assert got["active"].tolist() == [[True, True, True]]
+    assert got["batter_idx"][0].tolist() == [2, 3, 2]
+    assert got["scheduled_pa"].tolist() == [[True, True, False]]
 
 
 def test_rollout_samples_hbp_as_a_terminal_no_swing_outcome():
@@ -139,6 +260,16 @@ def test_rollout_samples_hbp_as_a_terminal_no_swing_outcome():
     assert got["hbp"].all()
     assert got["pa_terminal"].all()
     assert np.all(got["pa_outcome"] == int(PAOutcome.HIT_BY_PITCH))
+
+
+def test_rollout_uses_learned_called_strike_for_taken_pitch():
+    """The learned B branch, rather than the legacy rectangle, advances strikes."""
+    heads = PitchformerHeads(_A(), _TakeCalledStrikeB(), None, None, None, None)
+    got = rollout_batch(heads, _batch(b=1, t=2), seed=0, engine=EmpiricalEngine())
+
+    np.testing.assert_allclose(got["called_strike_prob"], 1.0)
+    assert got["final_state"]["balls"][0] == 0
+    assert got["final_state"]["strikes"][0] == 2
 
 
 def test_rollout_keeps_c_rare_events_rare():
@@ -195,6 +326,10 @@ def test_cached_rollout_restores_trailing_padding():
 def test_cached_rollout_stops_when_generated_third_out_ends_half():
     """A per-half cached rollout must not consume rows from the next half."""
     batch = _batch(b=1, t=12)
+    # Only two observed PA sources are available, while three generated
+    # strikeouts are required for the half.  The compiled path must cycle the
+    # sources for the third PA rather than truncating at source exhaustion.
+    batch["pa_start"] = np.array([[True, False, False, True] + [False] * 8])
     kw = dict(n_pitchers=4, n_batters=4, n_parks=4,
               d_model=12, n_layers=1, n_heads=3, dropout=0.0,
               window_size=1)
@@ -230,6 +365,8 @@ def test_cached_rollout_stops_when_generated_third_out_ends_half():
 
     np.testing.assert_array_equal(got["active"][0, :9], np.ones(9, bool))
     assert not got["active"][0, 9:].any()
+    np.testing.assert_array_equal(got["scheduled_pa"][0, :6], np.ones(6, bool))
+    assert not got["scheduled_pa"][0, 6:9].any()
     # _initial_state starts synthetic rollouts in the fifth inning.
     assert got["final_state"]["inning"][0] == 5
     assert got["final_state"]["half"][0] == 1

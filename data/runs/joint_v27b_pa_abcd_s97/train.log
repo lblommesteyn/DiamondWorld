@@ -1,0 +1,52 @@
+Loading joint train seasons [2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023]; test 2024
+Game context unavailable; environment features are neutral.
+Joint PA+ABCD: 20,334 games, batch=32, 636 batches/pass, planned passes=31.4, ABCD windows/game=1, KL scale=0.00157372, PA:ABCD=1.0:1.0
+  player_skills KL scale = 0.00157372
+Initialising SVI...
+  Init done in 43.9s
+  step      0  ELBO =  -96061.48  pa_outcome_nll = 1.8637  abcd_nll_per_pitch = 15.4719  elapsed = 89s  nan_skips = 0
+  step    500  ELBO =  -22921.98  pa_outcome_nll = 1.4609  abcd_nll_per_pitch = 7.1034  elapsed = 546s  nan_skips = 0
+  step   1000  ELBO =  -20432.61  pa_outcome_nll = 1.4715  abcd_nll_per_pitch = 6.0990  elapsed = 1004s  nan_skips = 0
+  step   1500  ELBO =  -19500.62  pa_outcome_nll = 1.4379  abcd_nll_per_pitch = 6.0846  elapsed = 1462s  nan_skips = 0
+  step   2000  ELBO =  -18675.61  pa_outcome_nll = 1.4360  abcd_nll_per_pitch = 5.7852  elapsed = 1920s  nan_skips = 0
+  step   2500  ELBO =  -19326.24  pa_outcome_nll = 1.5009  abcd_nll_per_pitch = 5.6673  elapsed = 2378s  nan_skips = 0
+  step   3000  ELBO =  -17730.09  pa_outcome_nll = 1.4337  abcd_nll_per_pitch = 5.5705  elapsed = 2837s  nan_skips = 0
+  step   3500  ELBO =  -18752.02  pa_outcome_nll = 1.4675  abcd_nll_per_pitch = 5.5859  elapsed = 3295s  nan_skips = 0
+  step   4000  ELBO =  -17794.25  pa_outcome_nll = 1.4519  abcd_nll_per_pitch = 5.4275  elapsed = 3753s  nan_skips = 0
+  step   4500  ELBO =  -16973.14  pa_outcome_nll = 1.4569  abcd_nll_per_pitch = 5.1703  elapsed = 4211s  nan_skips = 0
+  step   5000  ELBO =  -17567.01  pa_outcome_nll = 1.4392  abcd_nll_per_pitch = 5.2121  elapsed = 4670s  nan_skips = 0
+  Checkpoint saved â†’ checkpoints/pa_abcd/joint_v27b_pa_abcd_s97/dwjax_step_0005000.pkl
+  step   5500  ELBO =  -18118.34  pa_outcome_nll = 1.4787  abcd_nll_per_pitch = 5.2856  elapsed = 5129s  nan_skips = 0
+  step   6000  ELBO =  -18634.01  pa_outcome_nll = 1.4786  abcd_nll_per_pitch = 5.5467  elapsed = 5588s  nan_skips = 0
+  step   6500  ELBO =  -17910.22  pa_outcome_nll = 1.4380  abcd_nll_per_pitch = 5.5815  elapsed = 6046s  nan_skips = 0
+  step   7000  ELBO =  -16992.10  pa_outcome_nll = 1.4605  abcd_nll_per_pitch = 5.1335  elapsed = 6505s  nan_skips = 0
+  step   7500  ELBO =  -16354.64  pa_outcome_nll = 1.4345  abcd_nll_per_pitch = 5.0439  elapsed = 6964s  nan_skips = 0
+  step   8000  ELBO =  -16488.16  pa_outcome_nll = 1.4634  abcd_nll_per_pitch = 5.0526  elapsed = 7423s  nan_skips = 0
+  step   8500  ELBO =  -15960.91  pa_outcome_nll = 1.4189  abcd_nll_per_pitch = 4.9562  elapsed = 7881s  nan_skips = 0
+  step   9000  ELBO =  -16350.50  pa_outcome_nll = 1.4373  abcd_nll_per_pitch = 5.0080  elapsed = 8340s  nan_skips = 0
+  step   9500  ELBO =  -16711.85  pa_outcome_nll = 1.4647  abcd_nll_per_pitch = 5.0526  elapsed = 8798s  nan_skips = 0
+  step  10000  ELBO =  -17408.26  pa_outcome_nll = 1.4738  abcd_nll_per_pitch = 5.1982  elapsed = 9256s  nan_skips = 0
+  Checkpoint saved â†’ checkpoints/pa_abcd/joint_v27b_pa_abcd_s97/dwjax_step_0010000.pkl
+  step  10500  ELBO =  -17353.86  pa_outcome_nll = 1.4855  abcd_nll_per_pitch = 5.1159  elapsed = 9716s  nan_skips = 0
+  step  11000  ELBO =  -16624.61  pa_outcome_nll = 1.4494  abcd_nll_per_pitch = 4.9622  elapsed = 10174s  nan_skips = 0
+  step  11500  ELBO =  -16603.90  pa_outcome_nll = 1.4614  abcd_nll_per_pitch = 4.8579  elapsed = 10633s  nan_skips = 0
+  step  12000  ELBO =  -16424.27  pa_outcome_nll = 1.4343  abcd_nll_per_pitch = 5.1912  elapsed = 11091s  nan_skips = 0
+  step  12500  ELBO =  -16412.57  pa_outcome_nll = 1.4615  abcd_nll_per_pitch = 5.0315  elapsed = 11550s  nan_skips = 0
+  step  13000  ELBO =  -16812.46  pa_outcome_nll = 1.4709  abcd_nll_per_pitch = 4.9598  elapsed = 12008s  nan_skips = 0
+  step  13500  ELBO =  -16777.64  pa_outcome_nll = 1.4514  abcd_nll_per_pitch = 5.0277  elapsed = 12466s  nan_skips = 0
+  step  14000  ELBO =  -16406.40  pa_outcome_nll = 1.4467  abcd_nll_per_pitch = 5.0239  elapsed = 12925s  nan_skips = 0
+  step  14500  ELBO =  -16286.02  pa_outcome_nll = 1.4588  abcd_nll_per_pitch = 5.0276  elapsed = 13383s  nan_skips = 0
+  step  15000  ELBO =  -16261.05  pa_outcome_nll = 1.4572  abcd_nll_per_pitch = 4.9984  elapsed = 13841s  nan_skips = 0
+  Checkpoint saved â†’ checkpoints/pa_abcd/joint_v27b_pa_abcd_s97/dwjax_step_0015000.pkl
+  step  15500  ELBO =  -15609.30  pa_outcome_nll = 1.4588  abcd_nll_per_pitch = 4.8223  elapsed = 14299s  nan_skips = 0
+  step  16000  ELBO =  -16690.95  pa_outcome_nll = 1.4807  abcd_nll_per_pitch = 4.9622  elapsed = 14757s  nan_skips = 0
+  step  16500  ELBO =  -15516.77  pa_outcome_nll = 1.4452  abcd_nll_per_pitch = 4.7355  elapsed = 15215s  nan_skips = 0
+  step  17000  ELBO =  -16015.26  pa_outcome_nll = 1.4359  abcd_nll_per_pitch = 4.9479  elapsed = 15674s  nan_skips = 0
+  step  17500  ELBO =  -16838.04  pa_outcome_nll = 1.4781  abcd_nll_per_pitch = 5.0344  elapsed = 16132s  nan_skips = 0
+  step  18000  ELBO =  -16843.23  pa_outcome_nll = 1.4639  abcd_nll_per_pitch = 4.9809  elapsed = 16590s  nan_skips = 0
+  step  18500  ELBO =  -16644.83  pa_outcome_nll = 1.4693  abcd_nll_per_pitch = 5.0221  elapsed = 17048s  nan_skips = 0
+  step  19000  ELBO =  -16265.87  pa_outcome_nll = 1.4275  abcd_nll_per_pitch = 4.9226  elapsed = 17507s  nan_skips = 0
+  step  19500  ELBO =  -16886.91  pa_outcome_nll = 1.4577  abcd_nll_per_pitch = 5.2131  elapsed = 17965s  nan_skips = 0
+  Checkpoint saved â†’ checkpoints/pa_abcd/joint_v27b_pa_abcd_s97/dwjax_step_0020000.pkl
+Joint checkpoint: checkpoints/pa_abcd/joint_v27b_pa_abcd_s97/dwjax_step_0020000.pkl
+Exported PA and ABCD heads to checkpoints/pa_abcd

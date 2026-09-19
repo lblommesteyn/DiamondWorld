@@ -303,7 +303,13 @@ def _d_heads(params: dict[str, Any], hidden: jax.Array, pitch_type: jax.Array,
 
 
 def _pa_sources(batch: dict[str, np.ndarray]) -> tuple[np.ndarray, np.ndarray]:
-    """Map generated PA slots back to the observed exogenous schedule."""
+    """Map generated PA slots back to the observed exogenous schedule.
+
+    A simulated half can legitimately need more plate appearances than the
+    observed half.  Callers therefore use ``counts`` to identify the observed
+    portion of a rollout, but decode slots beyond that portion cycle through
+    the available exogenous matchup rows instead of ending the half early.
+    """
     B, T = batch["valid"].shape
     source = np.zeros((B, T), np.int32)
     counts = np.zeros(B, np.int32)
@@ -363,7 +369,10 @@ def _restore_trailing_padding(records: dict[str, np.ndarray], full_t: int) -> di
     return restored
 
 
-@partial(jax.jit, static_argnames=("a", "b", "c", "d", "has_c", "has_d", "has_schedule", "stop_when_decided"))
+@partial(jax.jit, static_argnames=(
+    "a", "b", "c", "d", "has_c", "has_d", "has_schedule", "stop_when_decided",
+    "hybrid_mode", "hybrid_flat_logits", "hybrid_sequence_step",
+))
 def _compiled_rollout(
     *,
     a: Any, b: Any, c: Any, d: Any, has_c: bool, has_d: bool, has_schedule: bool, stop_when_decided: bool,
@@ -372,7 +381,17 @@ def _compiled_rollout(
     sources: jax.Array, source_counts: jax.Array, cache_a: Any, cache_b: Any,
     cache_c: Any, cache_d: Any, empirical: dict[str, jax.Array], c_transitions: dict[str, jax.Array],
     key: jax.Array,
-) -> tuple[dict[str, jax.Array], dict[str, jax.Array]]:
+    # A compiled PA-on-ABC hybrid passes a small PA inference function plus
+    # its remapped ID tables.  Keeping the function static lets XLA inline the
+    # checkpoint-specific PA head into this same generated-pitch scan.
+    hybrid_mode: str | None = None,
+    hybrid_flat_logits=None,
+    hybrid_sequence_step=None,
+    hybrid_pitcher_to_pa: jax.Array | None = None,
+    hybrid_batter_to_pa: jax.Array | None = None,
+    hybrid_park_to_pa: jax.Array | None = None,
+    hybrid_pa_carry: Any = None,
+) -> tuple[dict[str, jax.Array], dict[str, jax.Array], Any, Any]:
     """One whole half-inning batch as a single XLA program.
 
     The Python transition adapters are converted to tables before entry, so
@@ -382,10 +401,50 @@ def _compiled_rollout(
     B, T = original["valid"].shape
     empty_launch = jnp.zeros((B, 2), jnp.float32)
     empty_batted = jnp.zeros(B, jnp.int32)
+    has_hybrid = hybrid_mode is not None
+    if has_hybrid and hybrid_mode not in {"flat", "gru"}:
+        raise ValueError(f"Unsupported compiled PA hybrid mode: {hybrid_mode!r}")
+
+    def hybrid_inputs(state, source, source_ctx, pitcher, batter, park):
+        """Build the PA head's pre-PA state entirely on device."""
+        half = state["half"].astype(jnp.float32)
+        score_diff = jnp.where(
+            half == 0,
+            state["away_score"] - state["home_score"],
+            state["home_score"] - state["away_score"],
+        )
+        return dict(
+            inning=(state["inning"].astype(jnp.float32) - 1.0) / 8.0,
+            half=half,
+            outs=state["outs"].astype(jnp.float32) / 2.0,
+            base_state=state["base"].astype(jnp.float32) / 7.0,
+            score_diff=jnp.clip(score_diff, -10, 10).astype(jnp.float32) / 10.0,
+            tto=jnp.clip(state["tto"], 0, 3).astype(jnp.float32) / 3.0,
+            shift_restricted=jnp.zeros(B, jnp.float32),
+            pitch_clock=jnp.zeros(B, jnp.float32),
+            pitch_count_game=state["pitch_count"].astype(jnp.float32) / 120.0,
+            pitcher_ids=hybrid_pitcher_to_pa[jnp.clip(pitcher, 0, len(hybrid_pitcher_to_pa) - 1)],
+            batter_ids=hybrid_batter_to_pa[jnp.clip(batter, 0, len(hybrid_batter_to_pa) - 1)],
+            park_ids=hybrid_park_to_pa[jnp.clip(park, 0, len(hybrid_park_to_pa) - 1)],
+            bat_side=(source_ctx[:, 13] if source_ctx.shape[1] > 13
+                      else jnp.full(B, .5, jnp.float32)),
+            pit_hand=(source_ctx[:, 14] if source_ctx.shape[1] > 14
+                      else jnp.full(B, .5, jnp.float32)),
+        )
+
+    def merge_carry(updated, previous, use_updated):
+        """Select a GRU carry row-by-row without advancing inactive PAs."""
+        return jax.tree.map(
+            lambda new, old: jnp.where(
+                use_updated.reshape((B,) + (1,) * (new.ndim - 1)), new, old,
+            ),
+            updated, previous,
+        )
 
     def body(carry, t):
         (state, half_complete, history_valid,
-         cache_a, cache_b, cache_c, cache_d, key) = carry
+         cache_a, cache_b, cache_c, cache_d,
+         hybrid_pa_carry, hybrid_pa_slot, hybrid_pa_logits, key) = carry
 
         # ------------------------------------------------------------------
         # 1. Determine whether this rollout row is active and which scheduled
@@ -401,12 +460,22 @@ def _compiled_rollout(
                   & ~state["ended"] & ~half_complete)
 
         if has_schedule:
-            source_ok = state["pa_slot"] < source_counts
-            active = active & source_ok
+            # The observed schedule supplies exogenous matchup information,
+            # not a legal cap on generated plate appearances.  Once a world
+            # outlives its observed half, cycle those source rows so it can
+            # still reach a generated third out.  ``scheduled_pa`` below
+            # preserves the boundary for paired fixed-cohort rate exports.
+            source_slot = jnp.mod(
+                state["pa_slot"],
+                jnp.maximum(source_counts, 1),
+            )
+            # A padded mixed batch can theoretically contain an empty source
+            # row.  It has no legal exogenous context to recycle.
+            active = active & (source_counts > 0)
 
             source = jnp.take_along_axis(
                 sources,
-                jnp.clip(state["pa_slot"], 0, T - 1)[:, None],
+                source_slot[:, None],
                 axis=1,
             )[:, 0]
         else:
@@ -664,12 +733,20 @@ def _compiled_rollout(
             & (pz <= ZONE_TOP)
         )
 
-        called_strike = (
-            active
-            & ~swing
-            & ~hit_by_pitch
-            & zone
-        )
+        if "called_strike_logit" in out_b:
+            called_strike = (
+                jax.random.bernoulli(
+                    jax.random.fold_in(kb, 817),
+                    jax.nn.sigmoid(out_b["called_strike_logit"][:, 0]),
+                )
+                & active
+                & ~swing
+                & ~hit_by_pitch
+            )
+        else:
+            # Compatibility path for checkpoints trained before the B call
+            # head. New checkpoints learn this conditional event.
+            called_strike = active & ~swing & ~hit_by_pitch & zone
 
         in_play = (
             active
@@ -753,6 +830,44 @@ def _compiled_rollout(
 
         token["launch"] = launch[:, None]
 
+        # A sequence PA model advances once per *generated PA*, before the
+        # first pitch decides whether that PA becomes a K/BB/HBP/in-play ball.
+        # This mirrors the PA simulator's history contract.  We compute a
+        # vectorised candidate for all rows but retain old carry/logits for
+        # rows that are still in the same PA or are inactive.
+        if has_hybrid:
+            new_pa = active & (state["pa_slot"] != hybrid_pa_slot)
+            pa_inputs = hybrid_inputs(state, source, source_ctx, pitcher, batter, park)
+            if hybrid_mode == "flat":
+                def advance_flat(previous_logits):
+                    candidate_logits = hybrid_flat_logits(**pa_inputs)
+                    return jnp.where(new_pa[:, None], candidate_logits, previous_logits)
+                next_hybrid_pa_logits = jax.lax.cond(
+                    jnp.any(new_pa), advance_flat, lambda value: value, hybrid_pa_logits,
+                )
+                next_hybrid_pa_carry = hybrid_pa_carry
+            else:
+                def advance_gru(values):
+                    previous_carry, previous_logits = values
+                    candidate_carry, candidate_logits = hybrid_sequence_step(
+                        previous_carry, **pa_inputs,
+                    )
+                    return (
+                        merge_carry(candidate_carry, previous_carry, new_pa),
+                        jnp.where(new_pa[:, None], candidate_logits, previous_logits),
+                    )
+                next_hybrid_pa_carry, next_hybrid_pa_logits = jax.lax.cond(
+                    jnp.any(new_pa), advance_gru, lambda values: values,
+                    (hybrid_pa_carry, hybrid_pa_logits),
+                )
+            next_hybrid_pa_slot = jnp.where(
+                new_pa, state["pa_slot"], hybrid_pa_slot,
+            )
+        else:
+            next_hybrid_pa_carry = hybrid_pa_carry
+            next_hybrid_pa_slot = hybrid_pa_slot
+            next_hybrid_pa_logits = hybrid_pa_logits
+
         # ------------------------------------------------------------------
         # 5. Resolve PA outcome.
         # ------------------------------------------------------------------
@@ -780,7 +895,13 @@ def _compiled_rollout(
             outcome,
         )
 
-        if has_d:
+        if has_hybrid:
+            hybrid_batted = jax.random.categorical(
+                jax.random.fold_in(kpa, 271),
+                next_hybrid_pa_logits[:, 3:9],
+            ).astype(jnp.int32) + 3
+            outcome = jnp.where(in_play, hybrid_batted, outcome)
+        elif has_d:
             outcome = jnp.where(
                 in_play,
                 jnp.asarray(_D_TO_PA)[batted],
@@ -1093,6 +1214,8 @@ def _compiled_rollout(
         contact_prob = jax.nn.sigmoid(out_b["contact_logit"][:, 0])
         foul_prob = jax.nn.sigmoid(out_b["foul_logit"][:, 0])
         hbp_prob = jax.nn.sigmoid(out_b["hbp_logit"][:, 0])
+        called_strike_prob = (jax.nn.sigmoid(out_b["called_strike_logit"][:, 0])
+                              if "called_strike_logit" in out_b else zone.astype(jnp.float32))
 
         if has_d:
             d_outcome_probs = jax.nn.softmax(d_outcome_logits_raw, axis=-1)
@@ -1102,6 +1225,7 @@ def _compiled_rollout(
         record = {
             "ctx": ctx,
             "active": active,
+            "scheduled_pa": active & (state["pa_slot"] < source_counts),
             "pa_terminal": terminal,
             "pa_outcome": jnp.where(
                 terminal,
@@ -1122,6 +1246,7 @@ def _compiled_rollout(
             "contact_prob": contact_prob,
             "foul_prob": foul_prob,
             "hbp_prob": hbp_prob,
+            "called_strike_prob": called_strike_prob,
             "d_outcome_probs": d_outcome_probs,
             "zone": zone,
             "balls": state["balls"],
@@ -1137,22 +1262,28 @@ def _compiled_rollout(
                 next_cache_b,
                 next_cache_c,
                 next_cache_d,
+                next_hybrid_pa_carry,
+                next_hybrid_pa_slot,
+                next_hybrid_pa_logits,
                 key,
             ),
             record,
         )
 
     carry = (state, jnp.zeros(B, bool), jnp.zeros((B, T), bool),
-             cache_a, cache_b, cache_c, cache_d, key)
+             cache_a, cache_b, cache_c, cache_d,
+             hybrid_pa_carry, jnp.full(B, -1, jnp.int32),
+             jnp.zeros((B, 9), jnp.float32), key)
     final, records = jax.lax.scan(body, carry, jnp.arange(T, dtype=jnp.int32))
     final_state = final[0]
-    return records, final_state, final[3:7]
+    return records, final_state, final[3:7], final[7]
 
 
 def _rollout_batch_cached(
     heads: PitchformerHeads, batch: dict[str, np.ndarray], *, seed: int, engine: EmpiricalEngine,
     c_engine: CTransitionEngine | None, initial_state: dict[str, np.ndarray] | None,
     stop_when_decided: bool, decode_len: int | None, initial_cache=None,
+    hybrid_sampler=None,
 ) -> dict[str, np.ndarray]:
     """Run the checkpoint path with K/V cache + one compiled scan."""
 
@@ -1182,23 +1313,46 @@ def _rollout_batch_cached(
     }
     if "pa_start" in original and rollout_t > old_t:
         # Extra time positions are real decode opportunities, not inert zero
-        # padding.  ``source_counts`` below limits them to observed scheduled
-        # plate appearances, while the active body copies each PA's static
-        # matchup/park/environment values from its scheduled source row.
+        # padding.  The active body copies each PA's static matchup/park/
+        # environment values from its scheduled source row; if that schedule
+        # is exhausted, it cycles rather than truncating the half-inning.
         original["valid"][:, old_t:rollout_t] = 1.0
     state = _initial_state(original) if initial_state is None else {
         name: np.asarray(value).copy() for name, value in initial_state.items()
     }
     sources, counts = _pa_sources(original)
-    cache_a = _cache_template(heads.a, heads.a_params, original)
-    cache_b = _cache_template(heads.b, heads.b_params, original)
-    cache_c = _cache_template(heads.c, heads.c_params, original) if heads.c is not None else None
-    cache_d = _cache_template(heads.d, heads.d_params, original) if heads.d is not None else None
+    if initial_cache is None:
+        cache_a = _cache_template(heads.a, heads.a_params, original)
+        cache_b = _cache_template(heads.b, heads.b_params, original)
+        cache_c = _cache_template(heads.c, heads.c_params, original) if heads.c is not None else None
+        cache_d = _cache_template(heads.d, heads.d_params, original) if heads.d is not None else None
+    else:
+        cache_a, cache_b, cache_c, cache_d = initial_cache
     c_tables = _c_tables(c_engine)
     c_tables["enabled"] = jnp.array(int(c_engine is not None and heads.c is not None), jnp.int32)
-    if initial_cache is not None:
-        cache_a, cache_b, cache_c, cache_d = initial_cache
-    records, final_state, final_cache = _compiled_rollout(
+    if hybrid_sampler is None:
+        hybrid_mode = None
+        hybrid_flat_logits = None
+        hybrid_sequence_step = None
+        hybrid_pitcher_to_pa = None
+        hybrid_batter_to_pa = None
+        hybrid_park_to_pa = None
+        hybrid_pa_carry = None
+        game_ids = None
+    else:
+        if heads.d is not None or heads.d_params is not None:
+            raise ValueError("Compiled PA-on-ABC hybrid must omit ABCD head D")
+        hybrid_mode = hybrid_sampler.compiled_mode()
+        hybrid_flat_logits, hybrid_sequence_step = hybrid_sampler.compiled_functions()
+        (hybrid_pitcher_to_pa, hybrid_batter_to_pa,
+         hybrid_park_to_pa) = hybrid_sampler.compiled_maps()
+        n_rows = original["valid"].shape[0]
+        default_game_ids = np.arange(n_rows, dtype=np.int32)[:, None]
+        game_ids = np.asarray(
+            original.get("hybrid_game_index", default_game_ids),
+        )[:, 0].astype(np.int32)
+        hybrid_pa_carry = hybrid_sampler.compiled_carry(game_ids)
+    records, final_state, final_cache, final_pa_carry = _compiled_rollout(
         a=heads.a, b=heads.b, c=heads.c, d=heads.d,
         has_c=heads.c is not None and heads.c_params is not None,
         has_d=heads.d is not None and heads.d_params is not None,
@@ -1210,11 +1364,20 @@ def _rollout_batch_cached(
         sources=jnp.asarray(sources), source_counts=jnp.asarray(counts),
         cache_a=cache_a, cache_b=cache_b, cache_c=cache_c, cache_d=cache_d,
         empirical=_empirical_tables(engine), c_transitions=c_tables, key=jax.random.PRNGKey(seed),
+        hybrid_mode=hybrid_mode,
+        hybrid_flat_logits=hybrid_flat_logits,
+        hybrid_sequence_step=hybrid_sequence_step,
+        hybrid_pitcher_to_pa=hybrid_pitcher_to_pa,
+        hybrid_batter_to_pa=hybrid_batter_to_pa,
+        hybrid_park_to_pa=hybrid_park_to_pa,
+        hybrid_pa_carry=hybrid_pa_carry,
     )
     out = {name: np.asarray(jnp.swapaxes(value, 0, 1)) for name, value in records.items()}
     out["final_state"] = {name: np.asarray(value) for name, value in final_state.items()}
     out = _restore_trailing_padding(out, rollout_t)
     out["final_cache"] = jax.tree.map(np.asarray, final_cache)
+    if hybrid_sampler is not None:
+        hybrid_sampler.commit_compiled_carry(game_ids, final_pa_carry)
     return out
 
 
@@ -1227,6 +1390,7 @@ def _rollout_batch_reference(
     c_engine: CTransitionEngine | None = None,
     initial_state: dict[str, np.ndarray] | None = None,
     stop_when_decided: bool = False,
+    initial_cache=None,
     terminal_outcome_sampler: Callable[[dict[str, np.ndarray], np.ndarray, np.ndarray,
                                        dict[str, np.ndarray], jax.Array], np.ndarray] | None = None,
 ) -> dict[str, np.ndarray]:
@@ -1236,11 +1400,29 @@ def _rollout_batch_reference(
     positions are marked inactive.  This bounded layout lets the existing causal
     transformer run one compiled shape while every prefix contains generated—not
     observed—pitch and game-state history.  ``terminal_outcome_sampler`` is an
-    optional PA-level override for *in-play* outcomes only.  A/B still decide
-    whether a ball is put in play and D still supplies launch/outcome history.
+    optional PA-level replacement for *in-play* outcomes only.  A/B still
+    decide whether a ball is put in play; callers may omit D entirely because
+    launch is not part of A/B/C's pitch-history package.
     """
     original = {name: np.asarray(value) for name, value in batch.items()}
     B, T = original["valid"].shape
+    # Hybrid needs its PA callback to remain in Python, but the ABC heads do
+    # not.  Reuse their token K/V decode path here: this avoids re-running the
+    # full causal transformer over every generated prefix (O(T^2) work) while
+    # retaining the callback's exact generated-state contract.
+    cached_decode = (terminal_outcome_sampler is not None
+                     and _supports_cached_decode(heads))
+    if cached_decode:
+        if initial_cache is None:
+            cache_a = _cache_template(heads.a, heads.a_params, original)
+            cache_b = _cache_template(heads.b, heads.b_params, original)
+            cache_c = (_cache_template(heads.c, heads.c_params, original)
+                       if heads.c is not None and heads.c_params is not None else None)
+            cache_d = (_cache_template(heads.d, heads.d_params, original)
+                       if heads.d is not None and heads.d_params is not None else None)
+        else:
+            cache_a, cache_b, cache_c, cache_d = initial_cache
+        history_valid = jnp.zeros((B, T), bool)
     rolling = {name: value.copy() for name, value in original.items()}
     # These are generated causal-history fields; no real values survive.
     for name in ("pitch_type", "stuff", "swing", "contact", "foul", "launch"):
@@ -1259,6 +1441,7 @@ def _rollout_batch_reference(
     records = {
         "ctx": np.zeros_like(original["ctx"]),
         "active": np.zeros((B, T), bool),
+        "scheduled_pa": np.zeros((B, T), bool),
         "pa_terminal": np.zeros((B, T), bool),
         "pa_outcome": np.full((B, T), -1, np.int32),
         "pitch_type": np.zeros((B, T), np.int32),
@@ -1275,6 +1458,7 @@ def _rollout_batch_reference(
         "contact_prob": np.zeros((B, T), np.float32),
         "foul_prob": np.zeros((B, T), np.float32),
         "hbp_prob": np.zeros((B, T), np.float32),
+        "called_strike_prob": np.zeros((B, T), np.float32),
         "d_outcome_probs": np.zeros((B, T, 6), np.float32),
         "zone": np.zeros((B, T), bool),
         "balls": np.zeros((B, T), np.int32),
@@ -1289,6 +1473,8 @@ def _rollout_batch_reference(
     }
     pa_context_slot = np.full(B, -1, np.int32)
     pa_context_source = np.zeros(B, np.int32)
+    scheduled_counts = (np.asarray(original["pa_start"], bool).sum(axis=1).astype(np.int32)
+                        if "pa_start" in original else None)
 
     for t in range(T):
         active = original["valid"][:, t].astype(bool) & ~state["ended"]
@@ -1299,11 +1485,10 @@ def _rollout_batch_reference(
             for bi in np.flatnonzero(active):
                 starts = np.flatnonzero(original["pa_start"][bi])
                 slot = int(state["pa_slot"][bi])
-                if slot >= len(starts):
-                    state["ended"][bi] = True
+                if not len(starts):
                     active[bi] = False
                     continue
-                source = starts[slot]
+                source = starts[slot % len(starts)]
                 pa_source[bi] = source
                 for name in ("pitcher_idx", "batter_idx", "park_idx"):
                     rolling[name][bi, t] = original[name][bi, source]
@@ -1313,13 +1498,34 @@ def _rollout_batch_reference(
                 value[refresh_pa_context] = state[name][refresh_pa_context]
             pa_context_slot[refresh_pa_context] = state["pa_slot"][refresh_pa_context]
             pa_context_source[refresh_pa_context] = pa_source[refresh_pa_context]
+            # Sequential PA heads must see every completed PA, including ones
+            # that ABC resolves as a K, BB, or HBP.  The sampler retains the
+            # resulting logits and consumes them only if B produces in-play.
+            if terminal_outcome_sampler is not None and hasattr(terminal_outcome_sampler, "begin_pa"):
+                terminal_outcome_sampler.begin_pa(
+                    pa_context, pa_context_source, refresh_pa_context, original,
+                )
         _write_generated_context(rolling["ctx"], original["ctx"], state, t)
         if "pa_start" in original:
             for bi in np.flatnonzero(active):
-                source = np.flatnonzero(original["pa_start"][bi])[int(state["pa_slot"][bi])]
+                starts = np.flatnonzero(original["pa_start"][bi])
+                source = starts[int(state["pa_slot"][bi]) % len(starts)]
                 rolling["ctx"][bi, t, 13:16] = original["ctx"][bi, source, 13:16]
         rolling["valid"][:, t] = active
-        model_batch = {name: jnp.asarray(value) for name, value in rolling.items()}
+        if cached_decode:
+            token = {
+                name: jnp.asarray(value[:, t:t + 1])
+                for name, value in rolling.items()
+                if value.ndim >= 2 and value.shape[:2] == (B, T)
+            }
+            token["_decode_position"] = jnp.array(t, jnp.int32)
+            token["_cache_valid"] = history_valid
+            out_a, _ = _cached_apply(heads.a, heads.a_params, cache_a, token)
+            output_t = 0
+        else:
+            model_batch = {name: jnp.asarray(value) for name, value in rolling.items()}
+            out_a = heads.a.apply(heads.a_params, model_batch, train=False)
+            output_t = t
 
         # Preserve the native reference path's random stream exactly.  Hybrid
         # mode alone consumes the additional PA-head key.
@@ -1328,42 +1534,62 @@ def _rollout_batch_reference(
             kpa = None
         else:
             key, ka, kb, khbp, kc, kd1, kd2, kpa = jax.random.split(key, 8)
-        out_a = heads.a.apply(heads.a_params, model_batch, train=False)
-        typ, stuff = _sample_a(out_a, t, ka)
+        typ, stuff = _sample_a(out_a, output_t, ka)
         rolling["pitch_type"][:, t] = typ
         rolling["stuff"][:, t] = stuff
-        model_batch = {name: jnp.asarray(value) for name, value in rolling.items()}
-        out_b = heads.b.apply(heads.b_params, model_batch, train=False)
-        swing = np.asarray(jax.random.bernoulli(kb, jax.nn.sigmoid(out_b["swing_logit"][:, t]))).copy()
+        if cached_decode:
+            token["pitch_type"] = jnp.asarray(typ[:, None])
+            token["stuff"] = jnp.asarray(stuff[:, None])
+            out_b, _ = _cached_apply(heads.b, heads.b_params, cache_b, token)
+        else:
+            model_batch = {name: jnp.asarray(value) for name, value in rolling.items()}
+            out_b = heads.b.apply(heads.b_params, model_batch, train=False)
+        swing = np.asarray(jax.random.bernoulli(kb, jax.nn.sigmoid(out_b["swing_logit"][:, output_t]))).copy()
         key, kcontact, kfoul = jax.random.split(key, 3)
-        contact = np.asarray(jax.random.bernoulli(kcontact, jax.nn.sigmoid(out_b["contact_logit"][:, t]))).copy()
-        foul = np.asarray(jax.random.bernoulli(kfoul, jax.nn.sigmoid(out_b["foul_logit"][:, t]))).copy()
+        contact = np.asarray(jax.random.bernoulli(kcontact, jax.nn.sigmoid(out_b["contact_logit"][:, output_t]))).copy()
+        foul = np.asarray(jax.random.bernoulli(kfoul, jax.nn.sigmoid(out_b["foul_logit"][:, output_t]))).copy()
         swing &= active
         contact &= swing
         foul &= contact
         hit_by_pitch = np.asarray(jax.random.bernoulli(
-            khbp, jax.nn.sigmoid(out_b["hbp_logit"][:, t]))).copy()
+            khbp, jax.nn.sigmoid(out_b["hbp_logit"][:, output_t]))).copy()
         hit_by_pitch &= active & ~swing
         rolling["swing"][:, t] = swing
         rolling["contact"][:, t] = contact
         rolling["foul"][:, t] = foul
+        if cached_decode:
+            token["swing"] = jnp.asarray(swing[:, None], jnp.float32)
+            token["contact"] = jnp.asarray(contact[:, None], jnp.float32)
+            token["foul"] = jnp.asarray(foul[:, None], jnp.float32)
 
         event = np.full(B, -1, np.int32)
         if heads.c is not None and heads.c_params is not None:
-            out_c = heads.c.apply(heads.c_params, {name: jnp.asarray(value) for name, value in rolling.items()}, train=False)
-            event = np.asarray(_sample_c_event(out_c["event_logits"][:, t], kc)).astype(np.int32)
+            if cached_decode:
+                out_c, _ = _cached_apply(heads.c, heads.c_params, cache_c, token)
+            else:
+                out_c = heads.c.apply(heads.c_params, {name: jnp.asarray(value) for name, value in rolling.items()}, train=False)
+            event = np.asarray(_sample_c_event(out_c["event_logits"][:, output_t], kc)).astype(np.int32)
             event[~active] = -1
 
         px = stuff[:, 3] * STUFF_SCALE[3] + STUFF_CENTRE[3]
         pz = stuff[:, 4] * STUFF_SCALE[4] + STUFF_CENTRE[4]
-        called_strike = (~swing) & ~hit_by_pitch & (np.abs(px) <= ZONE_HALF_WIDTH) & (pz >= ZONE_BOTTOM) & (pz <= ZONE_TOP)
+        zone = ((np.abs(px) <= ZONE_HALF_WIDTH) & (pz >= ZONE_BOTTOM) & (pz <= ZONE_TOP))
+        if "called_strike_logit" in out_b:
+            called_strike = np.asarray(jax.random.bernoulli(
+                jax.random.fold_in(kb, 817),
+                jax.nn.sigmoid(out_b["called_strike_logit"][:, output_t]),
+            )).copy()
+            called_strike &= active & ~swing & ~hit_by_pitch
+        else:
+            called_strike = (~swing) & ~hit_by_pitch & zone
         in_play = swing & contact & ~foul
         outcome = np.full(B, int(PAOutcome.OUT), np.int32)
         outcome[(state["strikes"] + ((swing & ~contact) | called_strike) >= 3)] = int(PAOutcome.STRIKEOUT)
         outcome[(state["balls"] + ((~swing) & ~hit_by_pitch & ~called_strike) >= 4)] = int(PAOutcome.WALK)
         outcome[hit_by_pitch] = int(PAOutcome.HIT_BY_PITCH)
 
-        if in_play.any() and heads.d is not None and heads.d_params is not None:
+        if (terminal_outcome_sampler is None and in_play.any()
+                and heads.d is not None and heads.d_params is not None):
             d_batch = {name: jnp.asarray(value) for name, value in rolling.items()}
             out_d = heads.d.apply(heads.d_params, d_batch, train=False)
             mu, ls = out_d["launch_mu"][:, t], out_d["launch_logsigma"][:, t]
@@ -1430,7 +1656,20 @@ def _rollout_batch_reference(
         state["pitch_count"] += active
         state["ended"] |= inning_over
         state["pa_slot"] += terminal.astype(np.int32)
+        if cached_decode:
+            # Commit the completed generated token to every ABC history.  The
+            # prediction calls above intentionally used the pre-token caches.
+            _, cache_a = _cached_apply(heads.a, heads.a_params, cache_a, token)
+            _, cache_b = _cached_apply(heads.b, heads.b_params, cache_b, token)
+            if heads.c is not None and heads.c_params is not None:
+                _, cache_c = _cached_apply(heads.c, heads.c_params, cache_c, token)
+            history_valid = history_valid.at[:, t].set(jnp.asarray(active))
         records["active"][:, t] = active
+        pre_terminal_slot = state["pa_slot"] - terminal.astype(np.int32)
+        records["scheduled_pa"][:, t] = (
+            active & (pre_terminal_slot < scheduled_counts)
+            if scheduled_counts is not None else active
+        )
         records["ctx"][:, t] = rolling["ctx"][:, t]
         records["pa_terminal"][:, t] = terminal
         records["pa_outcome"][:, t] = np.where(terminal, outcome, -1)
@@ -1443,17 +1682,25 @@ def _rollout_batch_reference(
         records["hbp"][:, t] = hit_by_pitch
         records["batter_idx"][:, t] = rolling["batter_idx"][:, t]
         # PIT calibration fields
-        records["swing_prob"][:, t] = np.asarray(jax.nn.sigmoid(out_b["swing_logit"][:, t]))
-        records["contact_prob"][:, t] = np.asarray(jax.nn.sigmoid(out_b["contact_logit"][:, t]))
-        records["foul_prob"][:, t] = np.asarray(jax.nn.sigmoid(out_b["foul_logit"][:, t]))
-        records["hbp_prob"][:, t] = np.asarray(jax.nn.sigmoid(out_b["hbp_logit"][:, t]))
-        zone_mask = (np.abs(px) <= ZONE_HALF_WIDTH) & (pz >= ZONE_BOTTOM) & (pz <= ZONE_TOP)
-        records["zone"][:, t] = zone_mask
+        records["swing_prob"][:, t] = np.asarray(jax.nn.sigmoid(out_b["swing_logit"][:, output_t]))
+        records["contact_prob"][:, t] = np.asarray(jax.nn.sigmoid(out_b["contact_logit"][:, output_t]))
+        records["foul_prob"][:, t] = np.asarray(jax.nn.sigmoid(out_b["foul_logit"][:, output_t]))
+        records["hbp_prob"][:, t] = np.asarray(jax.nn.sigmoid(out_b["hbp_logit"][:, output_t]))
+        records["called_strike_prob"][:, t] = np.asarray(
+            jax.nn.sigmoid(out_b["called_strike_logit"][:, output_t])
+            if "called_strike_logit" in out_b else zone
+        )
+        records["zone"][:, t] = zone
         records["balls"][:, t] = pre_balls
         records["strikes"][:, t] = pre_strikes
         if in_play.any() and heads.d is not None and heads.d_params is not None:
             records["d_outcome_probs"][:, t] = np.asarray(jax.nn.softmax(out_d["outcome_logits"][:, t], axis=-1))
     records["final_state"] = state
+    if cached_decode:
+        # Keep evaluator game-history storage on the host; retaining every
+        # game's four transformer caches on GPU would trade speed for GBs of
+        # persistent VRAM.
+        records["final_cache"] = jax.tree.map(np.asarray, (cache_a, cache_b, cache_c, cache_d))
     return records
 
 
@@ -1475,9 +1722,16 @@ class GameHistory:
             return None
         if heads.a.window_size <= 0:
             raise ValueError('History continuation requires a strict window checkpoint')
+        keys = [self.key(game, inning, half) for game in games]
+        if not any(key in self.rows for key in keys):
+            # The common case at a new history boundary. Building four caches
+            # for the full batch avoids B separate JAX calls plus a concatenate;
+            # this is especially material for half-inning-reset evaluation.
+            return tuple(_cache_template(model, params, batch) if model is not None else None
+                         for model, params in [(heads.a, heads.a_params), (heads.b, heads.b_params),
+                                               (heads.c, heads.c_params), (heads.d, heads.d_params)])
         values = []
-        for i, game in enumerate(games):
-            key = self.key(game, inning, half)
+        for i, key in enumerate(keys):
             if key in self.rows:
                 values.append(self.rows[key])
             else:
@@ -1513,18 +1767,25 @@ def rollout_batch(
     small reference implementation is retained for test doubles and is useful
     when inspecting a single hand-written transition fixture.
     """
+    if (terminal_outcome_sampler is not None
+            and _supports_cached_decode(heads)
+            and getattr(terminal_outcome_sampler, "supports_compiled_rollout", lambda: False)()):
+        return _rollout_batch_cached(
+            heads, batch, seed=seed, engine=engine, c_engine=c_engine,
+            initial_state=initial_state, stop_when_decided=stop_when_decided,
+            decode_len=decode_len, initial_cache=initial_cache,
+            hybrid_sampler=terminal_outcome_sampler,
+        )
     if terminal_outcome_sampler is not None:
-        # The cached path is fully JIT-compiled around native A--D outcomes.
-        # The hybrid PA callback intentionally uses the transparent reference
-        # loop instead.  Retaining the incoming cache keeps callers that manage
-        # history uniformly shaped, while generated reference history remains
-        # self-contained for this rollout.
+        # Generic callbacks remain in the transparent Python state loop.  Real
+        # PA checkpoint samplers take the compiled branch above.
         out = _rollout_batch_reference(
             heads, batch, seed=seed, engine=engine, c_engine=c_engine,
             initial_state=initial_state, stop_when_decided=stop_when_decided,
+            initial_cache=initial_cache,
             terminal_outcome_sampler=terminal_outcome_sampler,
         )
-        out["final_cache"] = initial_cache
+        out.setdefault("final_cache", initial_cache)
         return out
     if _supports_cached_decode(heads):
         return _rollout_batch_cached(
@@ -1536,4 +1797,5 @@ def rollout_batch(
     return _rollout_batch_reference(
         heads, batch, seed=seed, engine=engine, c_engine=c_engine,
         initial_state=initial_state, stop_when_decided=stop_when_decided,
+        initial_cache=initial_cache,
     )
