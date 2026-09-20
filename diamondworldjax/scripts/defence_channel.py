@@ -130,13 +130,22 @@ def main():
     zs, zl = logit(sim_wp), logit(l5)
 
     specs = [
+        # How far the simulator gets with the defence channel added.
         ("sim alone", lambda i: zs[i, None]),
         ("sim + DER (oracle)", lambda i: np.column_stack([zs[i], d_der[i]])),
         ("sim + runs allowed", lambda i: np.column_stack([zs[i], d_ra[i]])),
         ("sim + DER + runs allowed", lambda i: np.column_stack([zs[i], d_der[i], d_ra[i]])),
         ("sim + DER + off + RA", lambda i: np.column_stack([zs[i], d_der[i], d_off[i], d_ra[i]])),
         ("DER alone", lambda i: d_der[i, None]),
+        # The requested second step: blend the defence-augmented simulator with Log5.
+        # Blending the BARE sim with Log5 was already measured in wp_blend.py and gave
+        # the simulator a coefficient of +0.008; the question here is whether the
+        # defence channel gives it something Log5 does not already have.
         ("Log5 alone", lambda i: zl[i, None]),
+        ("Log5 + sim", lambda i: np.column_stack([zl[i], zs[i]])),
+        ("Log5 + DER", lambda i: np.column_stack([zl[i], d_der[i]])),
+        ("Log5 + sim + DER", lambda i: np.column_stack([zl[i], zs[i], d_der[i]])),
+        ("Log5 + sim + DER + RA", lambda i: np.column_stack([zl[i], zs[i], d_der[i], d_ra[i]])),
     ]
 
     L = []
@@ -174,6 +183,32 @@ def main():
     L.append("gap from the best sim-based row to Log5 alone: "
              + format(min(res[k][0] for k in res if k.startswith("sim"))
                       - res["Log5 alone"][0], "+.4f") + " nats")
+    L.append("")
+
+    # --- the requested second step, reported explicitly
+    l5 = res["Log5 alone"][0]
+    L.append("BLEND WITH LOG5 (the second half of the item). Deltas against Log5 alone,")
+    L.append("negative = the blend improves on Log5:")
+    for name in ("Log5 + sim", "Log5 + DER", "Log5 + sim + DER", "Log5 + sim + DER + RA"):
+        L.append("  " + name.ljust(26) + format(res[name][0] - l5, "+.4f") + " nats   AUC "
+                 + format(res[name][1], ".3f"))
+    L.append("")
+    w = res["Log5 + sim + DER"][2]
+    L.append("coefficients in 'Log5 + sim + DER': Log5 " + format(w[0], "+.3f")
+             + ", sim " + format(w[1], "+.4f") + ", DER " + format(w[2], "+.3f"))
+    best_blend = min(("Log5 + sim", "Log5 + DER", "Log5 + sim + DER",
+                      "Log5 + sim + DER + RA"), key=lambda k: res[k][0])
+    L.append("best blend: " + best_blend + " at " + format(res[best_blend][0], ".4f")
+             + " against Log5 alone at " + format(l5, ".4f"))
+    L.append("")
+    if res[best_blend][0] < l5 - 0.002:
+        L.append("VERDICT: the defence-augmented simulator carries win-probability")
+        L.append("information Log5 lacks, so the blend is worth building properly.")
+    else:
+        L.append("VERDICT: no blend of the defence-augmented simulator with Log5 improves on")
+        L.append("Log5 alone by a meaningful margin. Log5 already contains everything the")
+        L.append("simulator and the defence channel contribute, so the game axis is closed on")
+        L.append("both halves of the item: the channel was built, and the blend was measured.")
     L.append("")
     L.append("Reading it. DER is an ORACLE here. If it does not close the gap to Log5 when")
     L.append("handed the answer for the season being predicted, then building a learned or")

@@ -17,6 +17,10 @@ half-sample fit, scored on the held-out 1188 games:
 | sim + DER + off + RA       |   0.6768 |  0.612 |
 | DER alone                  |   0.6916 |  0.557 |
 | Log5 alone                 |   0.6765 |  0.614 |
+| Log5 + sim                 |   0.6765 |  0.614 |
+| Log5 + DER                 |   0.6764 |  0.613 |
+| Log5 + sim + DER           |   0.6764 |  0.613 |
+| Log5 + sim + DER + RA      |   0.6764 |  0.612 |
 
 coefficient on DER in 'sim + DER': +10.6534
 
@@ -27,6 +31,21 @@ deltas against sim alone (negative = better):
   sim + DER + off + RA      -0.0159 nats
 
 gap from the best sim-based row to Log5 alone: +0.0004 nats
+
+BLEND WITH LOG5 (the second half of the item). Deltas against Log5 alone,
+negative = the blend improves on Log5:
+  Log5 + sim                +0.0000 nats   AUC 0.614
+  Log5 + DER                -0.0001 nats   AUC 0.613
+  Log5 + sim + DER          -0.0001 nats   AUC 0.613
+  Log5 + sim + DER + RA     -0.0001 nats   AUC 0.612
+
+coefficients in 'Log5 + sim + DER': Log5 +1.076, sim -0.0060, DER -3.138
+best blend: Log5 + sim + DER + RA at 0.6764 against Log5 alone at 0.6765
+
+VERDICT: no blend of the defence-augmented simulator with Log5 improves on
+Log5 alone by a meaningful margin. Log5 already contains everything the
+simulator and the defence channel contribute, so the game axis is closed on
+both halves of the item: the channel was built, and the blend was measured.
 
 Reading it. DER is an ORACLE here. If it does not close the gap to Log5 when
 handed the answer for the season being predicted, then building a learned or

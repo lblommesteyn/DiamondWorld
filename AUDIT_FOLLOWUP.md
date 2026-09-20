@@ -118,9 +118,26 @@ checkpoint twice, with and without history, so **any** checkpoint trained on the
 v22pf recipe will do.
 
 `scripts/run_v22pf_ablation.sh` trains v22pf on the recipe copied verbatim from
-`run_v22pf.sh` (seed 1), then scores it normally, scores it history-ablated, and runs
-the paired bootstrap of both against v22_s42 and against Jaden's committed
-`prod_rates_v22pf_s42.npz`. Queued as pcslurm job 416 behind the v28 run.
+`run_v22pf.sh` (seed 1), then scores it both ways at 10k and 20k steps and runs the
+paired bootstrap against v22_s42, against Jaden's committed `prod_rates_v22pf_s42.npz`,
+and finally the with-versus-without-history contrast on its own. Queued as pcslurm job
+416 behind the v28 run.
+
+**Why 20k steps and not 50k.** The verdict is an internal contrast, the same checkpoint
+scored with and without history, and that is valid at any step count. So the only
+requirement is that the K/BB gain has emerged enough to be ablatable, and 20k cuts the
+run from ~8h to ~3h. The cost is stated rather than hidden: v22pf_audit's **absolute**
+level is not comparable to v22_s42 at 50k, so the against-v22 rows are context and the
+with-versus-without difference is the result. Both 10k and 20k are scored so the
+contrast can be checked for stability instead of trusted at one point.
+
+**Why v28 was not preempted to run this first.** Item 2 is the higher-information item,
+so reordering was the obvious move, and it was rejected on evidence. `train/svi.py:507`
+prints "Resumed parameters from ... (optimizer/schedule restarted)": `--resume` restores
+parameters but restarts the optimizer and the cosine LR schedule. A resumed v28 would
+therefore follow a different LR trajectory than v22's uninterrupted 50k cosine run,
+making item 5 a two-lever change (feature plus schedule) and violating the ladder's one
+change per rung rule. Buying latency by invalidating the experiment is the wrong trade.
 
 The ablation is `--pitchformer-ablate-history`, which passes an all-False validity
 mask so `causal_mask` is fully masked on every row and the sequence model degenerates
@@ -421,6 +438,27 @@ almost entirely subsumed by runs allowed**: DER buys -0.0033 nats on the simulat
 only **-0.0001** once runs allowed is present. And **the whole stack asymptotes to
 Log5**: even oracle DER plus offence plus runs allowed only reaches 0.6768 against
 Log5's 0.6765, a gap of +0.0004 nats, never beating it.
+
+### Then blend it with Log5, which is the second half of the item
+
+Blending the *bare* simulator with Log5 is the `wp_blend.py` table above (simulator
+coefficient +0.008). The defence channel deserves its own blend, because the question
+is whether defence gives the simulator something Log5 does not already hold.
+
+| model | logloss | AUC | vs Log5 alone |
+|---|---|---|---|
+| Log5 alone | 0.6765 | 0.614 | - |
+| Log5 + sim | 0.6765 | 0.614 | +0.0000 |
+| Log5 + DER | 0.6764 | 0.613 | -0.0001 |
+| Log5 + sim + DER | 0.6764 | 0.613 | -0.0001 |
+| Log5 + sim + DER + runs allowed | 0.6764 | 0.612 | -0.0001 |
+
+Coefficients in `Log5 + sim + DER`: Log5 **+1.076**, sim **-0.0060**, DER **-3.138**.
+
+Nothing added to Log5 improves it by more than **0.0001 nats**, and the simulator's
+coefficient goes slightly *negative* once Log5 is present. DER's coefficient also flips
+sign between the two fits (+10.65 with the simulator, -3.14 with Log5), which is the
+signature of a collinear term absorbing noise rather than carrying signal.
 
 **Recommendation: stop work on the game-prediction axis.** Not because it was not
 tried, but because the oracle version of the requested channel was built and measured,
