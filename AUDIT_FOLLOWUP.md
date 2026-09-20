@@ -102,16 +102,39 @@ the amount of in-game conditioning being exploited is exactly what grew between
 v22 and v22pf. A lineup-slot effect would also produce a K/BB-only gain, and would
 be entirely legitimate.
 
-**Blocked:** no v22-v27 checkpoint exists locally (only v0-v21). The decisive
-experiment needs `checkpoints/dwjax_pa_v22pf*/`:
+**Blocked on the checkpoint, but the test is now implemented and one command away.**
+No v22-v27 checkpoint exists locally (only v0-v21, plus `pitchformer/`). The
+ablation is committed as `--pitchformer-ablate-history`, which passes an all-False
+validity mask so `causal_mask` is fully masked on every row and the sequence model
+degenerates to a per-PA encoder with the trained weights untouched. Four property
+tests verify it on random weights, so it needed no checkpoint to be trusted.
 
-> Score v22pf twice, once normally and once with the PA-transformer history
-> ablated so each PA attends to nothing (the fully-masked path `CausalBlock`
-> already handles). If the +0.041 K and +0.091 BB survive, they come from the
-> player representation and the number is real. If they collapse toward v22, they
-> come from within-game context, and the Steamer comparison must be withdrawn.
+When `checkpoints/dwjax_pa_v22pf_s42/` is available:
 
-Until that runs, **do not quote 0.681 against Steamer.**
+```
+python -m diamondworldjax.scripts.prod_playercorr \
+  --ckpt checkpoints/dwjax_pa_v22pf_s42/dwjax_step_0050000.pkl \
+  --recal data/eval2/v13_cal_params.npz --recency-halflife 2.0 --skill-mode mean \
+  --train-end 2023 --test-seasons 2024 --contact-quality --per-stat-shrink \
+  --skill-prior walk --pitchformer --tag v22pf_s42_nohist \
+  --pitchformer-ablate-history
+
+python -m diamondworldjax.scripts.bootstrap_playercorr \
+  --rates v22_s42=data/eval2/prod_rates_v22_s42.npz \
+  --rates v22pf_s42=data/eval2/prod_rates_v22pf_s42.npz \
+  --rates v22pf_nohist=data/eval2/prod_rates_v22pf_s42_nohist.npz \
+  --baseline v22_s42 --out data/eval2/bootstrap_v22pf_ablation.txt
+```
+
+If the +0.041 K and +0.091 BB survive the ablation they come from the player
+representation and the number is real. If they collapse toward v22 they come from
+within-game context, and the Steamer comparison must be withdrawn.
+
+One limitation to carry: positional encoding still applies, so **lineup slot is not
+ablated**, only within-game history. A lineup-slot effect would also give a K/BB-only
+gain and would be legitimate, so this narrows the question rather than closing it.
+
+Until it runs, **do not quote 0.681 against Steamer.**
 
 ---
 
