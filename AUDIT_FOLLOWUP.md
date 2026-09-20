@@ -33,10 +33,17 @@ Summary of what changed:
 League rates agree closely (2024 K .2219 BB .0936 hit .2211 HR .0308; 2025 K .2168
 BB .0956 hit .2232 HR .0320), so 2025 is not malformed.
 
-`TRACKING_SEASONS` now runs to 2025 and `restore_config`'s hard-coded 2025 bound is
-a named `LAST_SEASON = 2026`. **Note the behaviour change:** a `train_end=2023`
-checkpoint now defaults to testing 2024+2025 pooled, not 2024 alone, so any
-comparison against an existing 2024-only rate file must pass `--test-seasons 2024`.
+`TRACKING_SEASONS` now runs to 2025. `restore_config`'s hard-coded 2025 bound is a
+named `DEFAULT_LAST_SEASON` that is deliberately **left at 2025**, so **2025 is
+opt-in**: pass `--test-seasons 2025`, or `--test-seasons 2024,2025` for the pooled
+slate.
+
+I first bumped it to 2026 so the default absorbed the new season, and two tests in
+`test_model_review_fixes.py` caught it. They were right and the change was wrong.
+Every committed `prod_rates_*.npz` was scored on 2024 alone, so silently widening
+the default slate would have made new numbers incomparable to all of them, and
+`bootstrap_playercorr`'s PA-count guard would only have caught part of it. That is
+the same class of error as the index-0 sink and the benchmark tag that lied.
 
 What it buys on the detection floor:
 

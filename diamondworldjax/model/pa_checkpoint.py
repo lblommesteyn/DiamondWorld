@@ -46,15 +46,19 @@ def restore_config(checkpoint, args):
         warnings.warn("Legacy PA checkpoint: using explicit CLI configuration; verify the training split and features.")
         train = list(range(2015, args.train_end + 1))
     test_arg = getattr(args, "test_seasons", None)
-    # LAST_SEASON is exclusive. It moved 2025 -> 2026 when the 2025 season was
-    # ingested. Note what the default does: it takes EVERY season after training,
-    # so a train_end=2023 checkpoint now defaults to testing 2024+2025 pooled
-    # rather than 2024 alone. That is the intended new behaviour (it is what
-    # halves the detection floor), but it means any comparison against a rate
-    # file scored on 2024 only must pass --test-seasons 2024 explicitly.
-    LAST_SEASON = 2026
+    # DEFAULT_LAST_SEASON is exclusive and is deliberately NOT bumped when a new
+    # season is ingested. 2025 exists in data/processed as of 2026-09-20, but
+    # letting the default absorb it would silently change the test slate of every
+    # eval script that does not pass --test-seasons, and every committed
+    # prod_rates_*.npz was scored on 2024 alone. A paired comparison across two
+    # different slates is exactly the class of error this project has been bitten
+    # by repeatedly (the index-0 sink, the benchmark tag that lied, the destroyed
+    # v13 baseline), and bootstrap_playercorr's PA-count guard would only catch
+    # some of it. So new seasons are OPT-IN: pass --test-seasons 2025, or
+    # --test-seasons 2024,2025 for the pooled slate.
+    DEFAULT_LAST_SEASON = 2025
     test = ([int(s) for s in test_arg.split(",")] if test_arg
-            else list(range(max(train) + 1, LAST_SEASON)))
+            else list(range(max(train) + 1, DEFAULT_LAST_SEASON)))
     if not test or set(train) & set(test):
         raise ValueError("Evaluation requires nonempty held-out --test-seasons disjoint from training")
     return train, test
