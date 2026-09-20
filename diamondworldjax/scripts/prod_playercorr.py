@@ -47,6 +47,13 @@ def main():
                          "checkpoints restore this automatically from pa_metadata.")
     ap.add_argument("--pitchformer", action="store_true",
                     help="Evaluate a causal PA-transformer checkpoint.")
+    ap.add_argument("--pitchformer-ablate-history", action="store_true",
+                    help="ABLATION, not a checkpoint property: make every PA attend to "
+                         "nothing, so the sequence model sees only its own PA's context. "
+                         "Score a pitchformer checkpoint with and without this to find out "
+                         "whether its gain comes from the player representation or from "
+                         "within-game context a projection system cannot see. Positional "
+                         "encoding still applies, so lineup slot is NOT ablated.")
     ap.add_argument("--pitchformer-dim", type=int, default=128,
                     help="PA transformer hidden width; must match the checkpoint.")
     ap.add_argument("--pitchformer-layers", type=int, default=2,
@@ -167,6 +174,7 @@ def main():
         pitchformer_layers=args.pitchformer_layers,
         pitchformer_heads=args.pitchformer_heads,
         pitchformer_dropout=args.pitchformer_dropout,
+        pitchformer_ablate_history=args.pitchformer_ablate_history,
         **_walk_kw,
     )
     gids = te["game_pk"].unique().to_numpy()

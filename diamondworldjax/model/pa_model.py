@@ -312,6 +312,15 @@ def pa_model(
     pitchformer_dropout: float = 0.0,
     pa_arch: str = "transformer",
     pitchformer_position: str = "auto",
+    # EVAL-TIME ABLATION, never a trained property, so it is deliberately absent
+    # from pa_checkpoint.MODEL_FIELDS: restoring it from a checkpoint would defeat
+    # the point. With this on, every PA attends to NOTHING, so the sequence model
+    # sees only its own PA's context and the trained weights are otherwise
+    # untouched. The purpose is to ask what a PA-transformer checkpoint's headline
+    # gain is actually made of: if it survives with no within-game history, it came
+    # from the player representation; if it collapses, it came from in-game context
+    # that a projection system like Steamer cannot see. See AUDIT_FOLLOWUP.md item 2.
+    pitchformer_ablate_history: bool = False,
     runs_upweight: float = 2.0,
     player_skills_override: jnp.ndarray | None = None,
 ) -> None:
@@ -432,11 +441,22 @@ def pa_model(
     context_raw = jnp.concatenate([game_state, pitcher_z, batter_z, park_emb], axis=-1)  # (B, T, 144/145)
 
     if pitchformer:
+        # All-False validity makes causal_mask fully masked on every row, and
+        # CausalBlock already zeroes the attention contribution of a fully-masked
+        # row (that path exists for "first PA of a game, no history"). So the
+        # sequence model degenerates to a per-PA encoder over context_raw with the
+        # trained weights unchanged. The GRU path gets the same treatment: a zero
+        # mask stops the hidden state carrying across timesteps.
+        #
+        # Caveat to state whenever this is used: positional encoding still enters,
+        # so lineup slot is not ablated, only the within-game history is.
+        seq_valid = (jnp.zeros_like(batch["pa_valid"]) if pitchformer_ablate_history
+                     else batch["pa_valid"])
         if pa_arch in ("gru", "gru_skip"):
             from .pa_transformer import pa_gru_numpyro
             context = pa_gru_numpyro(
                 context_raw,
-                batch["pa_valid"],
+                seq_valid,
                 d_model=pitchformer_dim,
                 n_layers=pitchformer_layers,
                 # Keep the checkpoint namespace distinct: this is an
@@ -452,7 +472,7 @@ def pa_model(
             from .pa_transformer import pa_transformer_numpyro
             context = pa_transformer_numpyro(
                 context_raw,
-                batch["pa_valid"],
+                seq_valid,
                 d_model=pitchformer_dim,
                 n_layers=pitchformer_layers,
                 n_heads=pitchformer_heads,
