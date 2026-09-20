@@ -1,0 +1,30 @@
+# Cross-player rate correlation with confidence intervals (paired bootstrap, 20000 reps, 382 batters with >= 150 PA, 95% CI)
+
+## Per-model correlation (unpaired CI)
+
+| model | K | BB | Hit | HR | AVG |
+|---|---|---|---|---|---|
+| v22_s42 | 0.797 [0.760, 0.831] | 0.669 [0.604, 0.728] | 0.483 [0.389, 0.568] | 0.627 [0.555, 0.691] | 0.644 [0.604, 0.681] |
+| v22pf_s42_JADEN | 0.838 [0.804, 0.868] | 0.760 [0.710, 0.804] | 0.506 [0.416, 0.588] | 0.620 [0.550, 0.682] | 0.681 [0.645, 0.715] |
+| mine_10k_nohist | 0.805 [0.768, 0.839] | 0.670 [0.607, 0.727] | 0.430 [0.340, 0.512] | 0.610 [0.539, 0.673] | 0.629 [0.591, 0.664] |
+| mine_10k_hist | 0.794 [0.754, 0.829] | 0.682 [0.618, 0.739] | 0.414 [0.320, 0.502] | 0.593 [0.520, 0.659] | 0.621 [0.581, 0.657] |
+
+## Paired difference vs mine_10k_nohist (the decisive test)
+
+| comparison | K | BB | Hit | HR | AVG |
+|---|---|---|---|---|---|
+| v22_s42 - mine_10k_nohist | -0.008 [-0.027, +0.010] p=0.395  | -0.001 [-0.028, +0.026] p=0.951  | +0.053 [+0.006, +0.098] p=0.027* | +0.017 [-0.011, +0.044] p=0.234  | +0.015 [-0.003, +0.032] p=0.097  |
+| v22pf_s42_JADEN - mine_10k_nohist | +0.033 [+0.011, +0.054] p=0.002* | +0.090 [+0.059, +0.124] p=0.000* | +0.076 [+0.032, +0.120] p=0.001* | +0.010 [-0.014, +0.034] p=0.428  | +0.052 [+0.035, +0.069] p=0.000* |
+| mine_10k_hist - mine_10k_nohist | -0.012 [-0.027, +0.003] p=0.112  | +0.012 [-0.003, +0.027] p=0.114  | -0.015 [-0.047, +0.015] p=0.313  | -0.017 [-0.036, +0.001] p=0.068  | -0.008 [-0.020, +0.003] p=0.163  |
+
+`*` marks a difference whose CI excludes zero.
+
+## Why the paired CI is the right one
+
+For reference, the analytic (Fisher-z) SE on a SINGLE correlation at n=382 is about +/-0.031 in r units around the baseline AVG. That is the width of the unpaired view above and it is far too wide to resolve the differences this project cares about. The paired CI is narrower because both models see the same batters, so shared batter-level noise cancels in the difference.
+
+- v22_s42 AVG: unpaired CI width 0.077, paired-vs-mine_10k_nohist CI width 0.035 (2.2x tighter).
+
+- v22pf_s42_JADEN AVG: unpaired CI width 0.070, paired-vs-mine_10k_nohist CI width 0.034 (2.1x tighter).
+
+- mine_10k_hist AVG: unpaired CI width 0.076, paired-vs-mine_10k_nohist CI width 0.023 (3.3x tighter).

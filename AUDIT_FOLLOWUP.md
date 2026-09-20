@@ -8,10 +8,10 @@ Summary of what changed:
 | # | item | outcome |
 |---|---|---|
 | 1 | 2025 ingest + pooled slate | **DONE.** 2025 ingested and validated. Pooled MDE 0.029 -> ~0.021 |
-| 2 | v22pf leakage | **QUEUED.** Discrepancy resolved and mechanism narrowed; ablation implemented, and our own v22pf is training (job 416) to run it |
+| 2 | v22pf leakage | **ANSWERED. The architecture does not explain 0.681.** History ablation is a null (-0.008, ns) and an independent v22pf lands 0.052 below Jaden's number. Do not quote it |
 | 3 | v27 vs v22 / v25a | **DONE. Decisive null.** v27 - v22 = +0.007 [-0.006, +0.021] |
 | 4 | run-total mean bias | **DONE.** One parameter closes 99% of the calibration gap |
-| 5 | Hit% extraction | **DONE, hypothesis revised.** Feature-side, not extraction-side. Fix implemented, retrain running |
+| 5 | Hit% extraction | **ANSWERED, and the fix FAILED.** Better input, significantly WORSE output: Hit -0.039 [-0.076, -0.004] p=0.033 against v22 |
 | 6 | blend with Marcel+CQ | **DONE. Best result of the day.** 0.668, statistically level with Steamer |
 | 7 | age curves + MiLB | **DONE. Near-null.** Age worth +0.001, not the +0.005-0.010 assumed |
 | 8 | team defence + Log5 blend | **DONE. Channel built, route closed on evidence.** Oracle DER buys -0.0001 nats once runs allowed is present |
@@ -144,7 +144,46 @@ mask so `causal_mask` is fully masked on every row and the sequence model degene
 to a per-PA encoder with the trained weights untouched. Four property tests verify it
 on random weights, so it was trustworthy before any checkpoint existed.
 
-To run it by hand against a checkpoint someone sends over:
+### Result at 10k steps: the architecture does not explain 0.681
+
+Scored both ways on the same checkpoint, matched to Jaden's eval config, 20,000 reps:
+
+| model | K | BB | Hit | HR | AVG |
+|---|---|---|---|---|---|
+| v22_s42 (no pitchformer, 50k) | 0.797 | 0.669 | 0.483 | 0.627 | 0.644 |
+| **v22pf_s42, Jaden's (50k)** | **0.838** | **0.760** | 0.506 | 0.620 | **0.681** |
+| mine, 10k, history ablated | 0.805 | 0.670 | 0.430 | 0.610 | 0.629 |
+| mine, 10k, history on | 0.794 | 0.682 | 0.414 | 0.593 | 0.621 |
+
+Paired against my ablated run:
+
+| comparison | K | BB | Hit | AVG |
+|---|---|---|---|---|
+| **mine, history on - ablated** | -0.012 | +0.012 | -0.015 | **-0.008 [-0.020, +0.003] p=0.163** |
+| Jaden's v22pf - mine ablated | +0.033* | **+0.090*** | +0.076* | **+0.052 [+0.035, +0.069]*** |
+
+Two findings, and the second is the important one.
+
+**The within-game history is worth nothing.** Ablating it moves AVG by -0.008 with a CI
+spanning zero, and if anything the ablated model is *better*. So the only extra
+information the PA transformer has over v22 does not help.
+
+**And an independently trained v22pf does not reproduce Jaden's gain at all.** Mine lands
+at BB 0.670-0.682 against v22's 0.669 and Jaden's 0.760. His run is +0.052 AVG and
++0.090 BB above mine, on the same recipe and the same eval config.
+
+Put together: his gain is confined to exactly the two count-readable stats, the
+architectural mechanism that could produce it is measurably worth zero, and retraining
+the recipe does not produce it. The weight of evidence says **0.681 is an artifact of his
+evaluation pipeline, not a model gain. Do not quote it against Steamer.**
+
+Honest limits. Mine is 10k steps against his 50k, so I cannot formally exclude a gain
+that only emerges later, and the 20k pair (running, ~13:10) will narrow that. But v22
+without the pitchformer sits at BB 0.669 at 50k, so step count alone does not produce a
+0.09 BB jump anywhere else in this family. The ablation also leaves positional encoding
+intact, so lineup slot is not ablated, only within-game history.
+
+To run the same test against a checkpoint someone sends over:
 
 ```
 python -m diamondworldjax.scripts.prod_playercorr \
@@ -287,9 +326,53 @@ Refactor safety: shrinkage is now one helper, `shrink_toward_league`, verified
 bit-identical against the pre-refactor source from git across all four flag
 combinations that existing checkpoints used, plus six unit tests.
 
-**v28 = v22 + this one lever** is training (`scripts/run_v28.sh`, seed 42, 50k
-steps). It answers whether the model converts a better input into a better output,
-which the v17-v21 series gives real reason to doubt.
+### v28 result: the model got a better input and produced a worse output
+
+v28 = v22 + `--shrink-contact-quality`, seed 42, 50k steps, completed. Scored to match
+Jaden's eval config exactly (`--no-recal`, `--max-pa-per-game 90`), because the first
+scoring used recal and the full PA cohort and the bootstrap's PA-count guard correctly
+**refused the comparison** on 271 players. That guard earned its keep here.
+
+Paired against v22_s42, 20,000 reps, 382 batters:
+
+| comparison | K | BB | Hit | HR | AVG |
+|---|---|---|---|---|---|
+| v28_s42 - v22_s42 | -0.006 | +0.009 | **-0.039 [-0.076, -0.004] p=0.033*** | -0.008 | -0.011 [-0.024, +0.002] p=0.101 |
+
+Absolute: v28 AVG 0.633, Hit 0.443, against v22's 0.644 / 0.483.
+
+**The lever made the input demonstrably better and the output significantly worse on
+exactly the stat it targeted.** The expected-hit feature went 0.409 to 0.496 in its own
+right, honestly holdout-tuned, and the model's hit-rate correlation fell 0.483 to 0.443
+with a CI that excludes zero. AVG is -0.011 and does not clear the gate, but the Hit
+regression does.
+
+The likeliest mechanism, and it is a warning worth generalising: **shrinkage improves
+rank correlation while destroying spread.** On the scored cohort the expected-hit column's
+standard deviation collapses from 0.0264 to 0.0064, a 4x compression, and over the full
+table from 0.0933 to 0.0031. Rank correlation improves because noisy low-PA players are
+pulled toward the mean, but a downstream learner needs dynamic range relative to the
+noise floor of its other inputs. The model already receives the PA count in column 4 and
+can in principle do this weighting itself; pre-shrinking removed the raw signal and left
+a nearly constant feature.
+
+**So a correlation-improving transform can be an information-destroying transform for a
+downstream learner.** Validating a feature fix at the feature level, as I did, is
+necessary and clearly not sufficient. That is the fourth instance in this project of the
+fit-versus-metric inversion, and the sharpest: v17b had the best ELBO and nearly the
+worst player-corr; here the input is better by 0.087 and the output is worse by 0.039.
+
+The blend confirms it rather than rescuing it: v28 blended reaches 0.661 against v22's
+and v27a's 0.668.
+
+**First number on the 2025 slate**, incidentally: v28 on 2025 scores AVG 0.578, Hit 0.364
+over 315 batters. Not comparable to the 2024 figures, since 2025 is two seasons past
+`train_end=2023` and the rate priors are correspondingly staler, but it confirms the new
+slate is scoreable end to end.
+
+**Recommendation: do not ship `--shrink-contact-quality`.** It stays in the tree behind a
+default-off flag as a recorded negative, with the constants and the reasoning, so nobody
+re-runs it.
 
 ---
 

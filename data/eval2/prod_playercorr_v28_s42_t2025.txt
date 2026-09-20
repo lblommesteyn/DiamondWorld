@@ -1,0 +1,1 @@
+v28_s42_t2025 (SVI, conditioned+recal, skill=mean, train<= 2023, test 2025, mle=False) | corr K 0.719 BB 0.695 Hit 0.364 HR 0.535 AVG 0.578 (np=315, rookies_injected=0, rookies_kept=0)
