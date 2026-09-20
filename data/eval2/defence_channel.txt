@@ -1,0 +1,34 @@
+# Item 8: the team-defence channel, measured as an oracle upper bound
+
+DER = outs / balls in play (HR excluded), fielding team = home in the top half.
+Computed on the SAME season being predicted, so it is a best-case estimate of
+team defence and strictly better than any pre-game feature could be.
+
+DER spread across 30 teams: min 0.6824  max 0.7379  sd 0.0119
+
+half-sample fit, scored on the held-out 1188 games:
+
+| model                      |  logloss |    AUC |
+|----------------------------|----------|--------|
+| sim alone                  |   0.6927 |  0.539 |
+| sim + DER (oracle)         |   0.6894 |  0.562 |
+| sim + runs allowed         |   0.6836 |  0.597 |
+| sim + DER + runs allowed   |   0.6835 |  0.599 |
+| sim + DER + off + RA       |   0.6768 |  0.612 |
+| DER alone                  |   0.6916 |  0.557 |
+| Log5 alone                 |   0.6765 |  0.614 |
+
+coefficient on DER in 'sim + DER': +10.6534
+
+deltas against sim alone (negative = better):
+  sim + DER (oracle)        -0.0033 nats
+  sim + runs allowed        -0.0091 nats
+  sim + DER + runs allowed  -0.0092 nats
+  sim + DER + off + RA      -0.0159 nats
+
+gap from the best sim-based row to Log5 alone: +0.0004 nats
+
+Reading it. DER is an ORACLE here. If it does not close the gap to Log5 when
+handed the answer for the season being predicted, then building a learned or
+prior-season defence channel into the model cannot close it either, and the
+team-defence route is shut on evidence rather than on assumption.

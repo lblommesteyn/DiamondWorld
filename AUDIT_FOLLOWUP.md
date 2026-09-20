@@ -8,13 +8,13 @@ Summary of what changed:
 | # | item | outcome |
 |---|---|---|
 | 1 | 2025 ingest + pooled slate | **DONE.** 2025 ingested and validated. Pooled MDE 0.029 -> ~0.021 |
-| 2 | v22pf leakage | **PARTIAL.** Discrepancy resolved, gain replicated, mechanism narrowed. Blocked on the checkpoint |
+| 2 | v22pf leakage | **QUEUED.** Discrepancy resolved and mechanism narrowed; ablation implemented, and our own v22pf is training (job 416) to run it |
 | 3 | v27 vs v22 / v25a | **DONE. Decisive null.** v27 - v22 = +0.007 [-0.006, +0.021] |
 | 4 | run-total mean bias | **DONE.** One parameter closes 99% of the calibration gap |
 | 5 | Hit% extraction | **DONE, hypothesis revised.** Feature-side, not extraction-side. Fix implemented, retrain running |
 | 6 | blend with Marcel+CQ | **DONE. Best result of the day.** 0.668, statistically level with Steamer |
 | 7 | age curves + MiLB | **DONE. Near-null.** Age worth +0.001, not the +0.005-0.010 assumed |
-| 8 | team defence + Log5 blend | **DONE. Route closed.** The simulator's WP signal is fully redundant |
+| 8 | team defence + Log5 blend | **DONE. Channel built, route closed on evidence.** Oracle DER buys -0.0001 nats once runs allowed is present |
 
 ---
 
@@ -109,14 +109,25 @@ the amount of in-game conditioning being exploited is exactly what grew between
 v22 and v22pf. A lineup-slot effect would also produce a K/BB-only gain, and would
 be entirely legitimate.
 
-**Blocked on the checkpoint, but the test is now implemented and one command away.**
-No v22-v27 checkpoint exists locally (only v0-v21, plus `pitchformer/`). The
-ablation is committed as `--pitchformer-ablate-history`, which passes an all-False
-validity mask so `causal_mask` is fully masked on every row and the sequence model
-degenerates to a per-PA encoder with the trained weights untouched. Four property
-tests verify it on random weights, so it needed no checkpoint to be trusted.
+**Not blocked after all: we can train our own.** No v22-v27 checkpoint exists locally
+(only v0-v21, plus `pitchformer/`, which holds the pitch-level A/B/C/D transformers,
+a different architecture). But the decisive question is not "what does Jaden's v22pf
+score", it is "does the PA-level pitchformer's gain come from the player
+representation or from within-game context". That is answered by scoring ONE
+checkpoint twice, with and without history, so **any** checkpoint trained on the
+v22pf recipe will do.
 
-When `checkpoints/dwjax_pa_v22pf_s42/` is available:
+`scripts/run_v22pf_ablation.sh` trains v22pf on the recipe copied verbatim from
+`run_v22pf.sh` (seed 1), then scores it normally, scores it history-ablated, and runs
+the paired bootstrap of both against v22_s42 and against Jaden's committed
+`prod_rates_v22pf_s42.npz`. Queued as pcslurm job 416 behind the v28 run.
+
+The ablation is `--pitchformer-ablate-history`, which passes an all-False validity
+mask so `causal_mask` is fully masked on every row and the sequence model degenerates
+to a per-PA encoder with the trained weights untouched. Four property tests verify it
+on random weights, so it was trustworthy before any checkpoint existed.
+
+To run it by hand against a checkpoint someone sends over:
 
 ```
 python -m diamondworldjax.scripts.prod_playercorr \
@@ -377,13 +388,44 @@ Two numbers per team, runs scored and runs allowed per game, reproduce Log5 exac
 and **adding the simulator on top changes nothing to four decimal places.**
 
 So the simulator's win-probability signal is entirely redundant given season-level
-team strength. Building a team-defence channel would recover information that two
-aggregates already encode, and the market still beats Log5 anyway. Recalibration is
-independently dead: AUC is 0.549 before and after, exactly as monotone invariance
-requires.
+team strength. Recalibration is independently dead: AUC is 0.549 before and after,
+exactly as monotone invariance requires.
 
-**Recommendation: stop work on the game-prediction axis.** It is not a tuning
-problem and it is not a blending problem.
+### The team-defence channel, built rather than assumed
+
+Runs allowed conflates pitching with fielding, and the simulator already has pitcher
+identity, so the test above does not settle whether FIELDING adds anything. Fielding
+is the channel the simulator genuinely lacks: the rules engine converts batted balls
+to outs at league-average empirical rates, with no notion that defences differ.
+
+`diamondworldjax/scripts/defence_channel.py` builds a real defensive-efficiency ratio
+(DER = outs / balls in play, home runs excluded, fielding team = home in the top half)
+and measures it as an **oracle upper bound**: DER is computed on the same season being
+predicted, so it is strictly better than any pre-game feature could be. A null from an
+oracle is decisive rather than suggestive.
+
+DER spread across 30 teams: 0.6824 to 0.7379, sd 0.0119.
+
+| model | logloss | AUC |
+|---|---|---|
+| sim alone | 0.6927 | 0.539 |
+| sim + DER (oracle) | 0.6894 | 0.562 |
+| sim + runs allowed | 0.6836 | 0.597 |
+| sim + DER + runs allowed | 0.6835 | 0.599 |
+| sim + DER + offence + RA | 0.6768 | 0.612 |
+| DER alone | 0.6916 | 0.557 |
+| Log5 alone | **0.6765** | **0.614** |
+
+Three things follow. **Team defence is real**: DER alone reaches AUC 0.557. **It is
+almost entirely subsumed by runs allowed**: DER buys -0.0033 nats on the simulator, and
+only **-0.0001** once runs allowed is present. And **the whole stack asymptotes to
+Log5**: even oracle DER plus offence plus runs allowed only reaches 0.6768 against
+Log5's 0.6765, a gap of +0.0004 nats, never beating it.
+
+**Recommendation: stop work on the game-prediction axis.** Not because it was not
+tried, but because the oracle version of the requested channel was built and measured,
+and its ceiling is "match a one-line formula that the market already beats." It is not
+a tuning problem, not a blending problem, and not a missing-feature problem.
 
 ---
 
