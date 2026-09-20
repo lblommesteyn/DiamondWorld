@@ -1,0 +1,34 @@
+# Cross-player rate correlation with confidence intervals (paired bootstrap, 20000 reps, 382 batters with >= 150 PA, 95% CI)
+
+## Per-model correlation (unpaired CI)
+
+| model | K | BB | Hit | HR | AVG |
+|---|---|---|---|---|---|
+| v16 | 0.792 [0.752, 0.829] | 0.651 [0.584, 0.712] | 0.445 [0.360, 0.530] | 0.610 [0.538, 0.675] | 0.624 [0.586, 0.661] |
+| v22_s42 | 0.797 [0.760, 0.831] | 0.669 [0.604, 0.728] | 0.483 [0.389, 0.568] | 0.627 [0.555, 0.691] | 0.644 [0.604, 0.681] |
+| v22pf_old | 0.779 [0.737, 0.817] | 0.693 [0.629, 0.750] | 0.474 [0.386, 0.554] | 0.592 [0.524, 0.656] | 0.635 [0.596, 0.670] |
+| v22pf_s42 | 0.838 [0.804, 0.868] | 0.760 [0.710, 0.804] | 0.506 [0.416, 0.588] | 0.620 [0.550, 0.682] | 0.681 [0.645, 0.715] |
+| v22pf_s97 | 0.836 [0.800, 0.866] | 0.756 [0.705, 0.800] | 0.500 [0.412, 0.581] | 0.613 [0.543, 0.676] | 0.676 [0.639, 0.710] |
+
+## Paired difference vs v22_s42 (the decisive test)
+
+| comparison | K | BB | Hit | HR | AVG |
+|---|---|---|---|---|---|
+| v16 - v22_s42 | -0.005 [-0.021, +0.011] p=0.557  | -0.018 [-0.037, -0.000] p=0.047* | -0.038 [-0.069, -0.002] p=0.038* | -0.017 [-0.035, +0.001] p=0.066  | -0.019 [-0.031, -0.007] p=0.003* |
+| v22pf_old - v22_s42 | -0.018 [-0.048, +0.011] p=0.223  | +0.024 [-0.016, +0.063] p=0.235  | -0.009 [-0.057, +0.039] p=0.721  | -0.034 [-0.070, +0.003] p=0.071  | -0.009 [-0.031, +0.013] p=0.407  |
+| v22pf_s42 - v22_s42 | +0.041 [+0.023, +0.059] p=0.000* | +0.091 [+0.064, +0.120] p=0.000* | +0.024 [-0.020, +0.067] p=0.282  | -0.007 [-0.027, +0.013] p=0.488  | +0.037 [+0.022, +0.053] p=0.000* |
+| v22pf_s97 - v22_s42 | +0.038 [+0.020, +0.057] p=0.000* | +0.086 [+0.061, +0.113] p=0.000* | +0.018 [-0.026, +0.063] p=0.427  | -0.014 [-0.035, +0.009] p=0.224  | +0.032 [+0.016, +0.049] p=0.000* |
+
+`*` marks a difference whose CI excludes zero.
+
+## Why the paired CI is the right one
+
+For reference, the analytic (Fisher-z) SE on a SINGLE correlation at n=382 is about +/-0.030 in r units around the baseline AVG. That is the width of the unpaired view above and it is far too wide to resolve the differences this project cares about. The paired CI is narrower because both models see the same batters, so shared batter-level noise cancels in the difference.
+
+- v16 AVG: unpaired CI width 0.075, paired-vs-v22_s42 CI width 0.024 (3.1x tighter).
+
+- v22pf_old AVG: unpaired CI width 0.074, paired-vs-v22_s42 CI width 0.043 (1.7x tighter).
+
+- v22pf_s42 AVG: unpaired CI width 0.070, paired-vs-v22_s42 CI width 0.031 (2.2x tighter).
+
+- v22pf_s97 AVG: unpaired CI width 0.071, paired-vs-v22_s42 CI width 0.033 (2.2x tighter).

@@ -9,8 +9,10 @@ from diamondworldjax.schema import DW_REMAP, PITCH_TYPE_IDX, PA_OUTCOME_IDX
 
 _DATA_ROOT = processed_root()
 
-# Seasons with full Statcast pitch tracking
-TRACKING_SEASONS = list(range(2017, 2025))
+# Seasons with full Statcast pitch tracking. 2025 ingested 2026-09-20; it is the
+# independent-batter test season the power analysis names as the only way to move
+# the +0.030 detection floor, so it must be reachable here.
+TRACKING_SEASONS = list(range(2017, 2026))
 
 
 def _rule_era(season: int) -> dict[str, int]:

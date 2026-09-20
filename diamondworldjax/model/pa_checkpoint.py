@@ -15,7 +15,8 @@ def add_eval_arguments(parser):
     """Add missing legacy overrides; new checkpoints restore these automatically."""
     options = {a.dest for a in parser._actions}
     defaults = dict(train_end=2022, recency_halflife=None, contact_quality=False,
-                    per_stat_shrink=False, platoon=False, nested=False,
+                    per_stat_shrink=False, shrink_contact_quality=False,
+                    platoon=False, nested=False,
                     bilinear_rank=0, skill_prior="iso", skill_mode="mean")
     for name, default in defaults.items():
         if name in options:
@@ -45,8 +46,15 @@ def restore_config(checkpoint, args):
         warnings.warn("Legacy PA checkpoint: using explicit CLI configuration; verify the training split and features.")
         train = list(range(2015, args.train_end + 1))
     test_arg = getattr(args, "test_seasons", None)
+    # LAST_SEASON is exclusive. It moved 2025 -> 2026 when the 2025 season was
+    # ingested. Note what the default does: it takes EVERY season after training,
+    # so a train_end=2023 checkpoint now defaults to testing 2024+2025 pooled
+    # rather than 2024 alone. That is the intended new behaviour (it is what
+    # halves the detection floor), but it means any comparison against a rate
+    # file scored on 2024 only must pass --test-seasons 2024 explicitly.
+    LAST_SEASON = 2026
     test = ([int(s) for s in test_arg.split(",")] if test_arg
-            else list(range(max(train) + 1, 2025)))
+            else list(range(max(train) + 1, LAST_SEASON)))
     if not test or set(train) & set(test):
         raise ValueError("Evaluation requires nonempty held-out --test-seasons disjoint from training")
     return train, test
@@ -65,7 +73,9 @@ def player_table(checkpoint, pitches, args):
         return meta["player_table"], meta["park_map"] if args.use_park else None
     return (_build_player_table(pitches, recency_halflife=args.recency_halflife,
                                contact_quality=args.contact_quality,
-                               per_stat_shrink=args.per_stat_shrink),
+                               per_stat_shrink=args.per_stat_shrink,
+                               shrink_contact_quality=getattr(
+                                   args, "shrink_contact_quality", False)),
             _build_park_index(pitches) if args.use_park else None)
 
 

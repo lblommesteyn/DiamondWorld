@@ -93,9 +93,44 @@ def _contact_quality(terminal, batter_col, id_to_idx, P, weights):
     return x
 
 
+# PA of league average to add to the contact-quality columns (5 = expected hit,
+# 6 = expected HR) when --shrink-contact-quality is on. Tuned on 2023, never on
+# the 2024 test season; see the comment at the use site.
+CQ_SHRINK_REG = (700.0, 100.0)
+
+
+def shrink_toward_league(rates, n, reg):
+    """Empirical-Bayes shrink per-player rates toward the PA-weighted league rate.
+
+    rates : (P, S) observed rates, one column per stat
+    n     : (P, 1) weighted PA count behind each row
+    reg   : (S,)   PA of league average to add, per stat
+
+    The league baseline is PA-weighted so it is not dragged toward the many
+    near-zero-PA rows that a full player table contains. Rows with n = 0 come out
+    exactly at the league rate, which is the right prior for a player we have
+    never seen bat.
+    """
+    rates = np.asarray(rates, dtype=np.float64)
+    n = np.asarray(n, dtype=np.float64)
+    reg = np.asarray(reg, dtype=np.float64)
+    seen = (n > 0).ravel()
+    if not seen.any():
+        return rates.astype(np.float32)
+    league_rate = (rates[seen] * n[seen]).sum(0) / max(n[seen].sum(), 1.0)
+    # A player with no PAs and a stat whose constant is 0 would divide 0 by 0.
+    # Keep the league rate there rather than emitting NaN into the player table,
+    # where it would silently poison every logit the row touches.
+    denom = n + reg
+    out = np.where(denom > 0, (rates * n + reg * league_rate) / np.maximum(denom, 1e-12),
+                   league_rate[None, :])
+    return out.astype(np.float32)
+
+
 def _build_player_table(pitches, recency_halflife: float | None = None,
                         contact_quality: bool = False,
-                        per_stat_shrink: bool = False) -> dict:
+                        per_stat_shrink: bool = False,
+                        shrink_contact_quality: bool = False) -> dict:
     """Build the per-player stat/handedness table.
 
     recency_halflife (seasons): if set, each PA's contribution to a player's rate
@@ -168,20 +203,12 @@ def _build_player_table(pitches, recency_halflife: float | None = None,
         # Order of columns 0..3 is (hit, bb, k, hr); mismatching this would
         # silently shrink strikeouts with the home-run constant, so it is
         # asserted against PA_OUTCOME order in the tests.
-        reg = np.array([2200.0, 400.0, 200.0, 2200.0], dtype=np.float64)
-        n = stats[:, 4:5].astype(np.float64)
-        seen = (n > 0).ravel()
-        # League baseline from PA-weighted observed rates, so it is not dragged
-        # by the many near-zero-PA rows in the table.
-        #
-        # NOTE the name: `league` is already taken by the league_id int array a
+        # NOTE on naming: `league` is already taken by the league_id int array a
         # few lines above, which feeds LeagueEmbedding. Shadowing it here silently
         # replaced those ints with float rates and blew up inside nn.Embed with
         # "Input type must be an integer" from three frames away.
-        league_rate = ((stats[seen, :4].astype(np.float64) * n[seen]).sum(0)
-                       / max(n[seen].sum(), 1.0))
-        stats[:, :4] = ((stats[:, :4].astype(np.float64) * n + reg * league_rate)
-                        / (n + reg)).astype(np.float32)
+        stats[:, :4] = shrink_toward_league(
+            stats[:, :4], stats[:, 4:5], np.array([2200.0, 400.0, 200.0, 2200.0]))
 
     if contact_quality and {"launch_speed", "launch_angle"}.issubset(terminal.columns):
         tnn = terminal.filter(pl.col("pa_outcome").is_not_null())
@@ -192,6 +219,35 @@ def _build_player_table(pitches, recency_halflife: float | None = None,
         xq = _contact_quality(terminal, batter_col, id_to_idx, P, w.astype(np.float64))
         if xq is not None:
             stats[:, 5:7] = xq
+            if shrink_contact_quality:
+                # Columns 5:7 are filled AFTER the per-stat shrinkage block above, so
+                # until now they went in completely unregularised while the raw rates
+                # in 0..3 were shrunk with their own measured constants. That
+                # asymmetry is measurable: hit_extraction.py finds the expected-hit
+                # column correlates 0.275 with the realised 2024 rate on the low-PA
+                # half of batters against 0.578 on the high-PA half, so its
+                # reliability swings by a factor of two across the table and the
+                # model is left to infer the trust weighting from the PA count by
+                # itself. The v17-v21 series is eight results' worth of evidence
+                # that this model does not infer such things.
+                #
+                # The constants are NOT the 2200 that columns 0 and 3 receive, and
+                # assuming they were is the same mistake as the single shipped
+                # REG=1200. Expected rates are already averages over contact
+                # quality, so they are far less noisy than the raw rates and need
+                # much less regression, and the two columns differ sharply from
+                # each other. Tuned on 2023 with the table built from 2015-2022
+                # (scripts/_tune_cq_shrink.py), so 2024 is untouched:
+                #
+                #   expected hit: reg 700, holdout corr 0.359 -> 0.464
+                #   expected HR : reg 100, holdout corr 0.599 -> 0.634
+                #
+                # On 2024 those same constants give hit 0.409 -> 0.496 and HR
+                # 0.630 -> 0.643, and both match the 2024 oracle choice exactly,
+                # so the holdout selection costs nothing. Using 2200 for HR would
+                # make it WORSE than raw (0.614 against 0.630).
+                stats[:, 5:7] = shrink_toward_league(
+                    stats[:, 5:7], stats[:, 4:5], np.array(CQ_SHRINK_REG))
 
     # Per-player modal handedness for the simulator + the hand embedding.
     # bat_hand: modal batting side (stand); pit_hand: modal throw hand (p_throws).
@@ -371,6 +427,14 @@ def main() -> None:
                              "measured stabilisation constant (K 200 PA, BB 400, hit/HR 2200) "
                              "instead of feeding raw rates. Changes the input distribution, so "
                              "eval scripts must pass the same flag.")
+    parser.add_argument("--shrink-contact-quality", action="store_true",
+                        help="Also shrink the contact-quality columns (5:7) toward the league "
+                             "rate with the 2200-PA hit/HR constant, instead of feeding them "
+                             "raw. Without this the expected-hit column arrives unregularised "
+                             "while the raw rate columns are shrunk, and its reliability swings "
+                             "from 0.275 to 0.578 correlation across the PA range "
+                             "(hit_extraction.py). Changes the input distribution, so eval "
+                             "scripts must pass the same flag.")
     parser.add_argument("--pitchformer", action="store_true",
                         help="Replace the flat context with a causal PA-level transformer "
                              "adapted from the pitchformer architecture. Each PA attends to "
@@ -423,7 +487,8 @@ def main() -> None:
     print("Building player table...", flush=True)
     player_table_np = _build_player_table(pitches, recency_halflife=args.recency_halflife,
                                           contact_quality=args.contact_quality,
-                                          per_stat_shrink=args.per_stat_shrink)
+                                          per_stat_shrink=args.per_stat_shrink,
+                                          shrink_contact_quality=args.shrink_contact_quality)
     print(f"  {len(player_table_np['all_ids']):,} unique players.", flush=True)
 
     print("Filtering to PA-terminal rows...", flush=True)
@@ -485,7 +550,8 @@ def main() -> None:
     metadata = {"pa_metadata": {
         "version": 1, "train_seasons": TRAIN_SEASONS,
         "config": {name: getattr(args, name) for name in (*MODEL_FIELDS,
-            "train_end", "recency_halflife", "contact_quality", "per_stat_shrink")},
+            "train_end", "recency_halflife", "contact_quality", "per_stat_shrink",
+            "shrink_contact_quality")},
         "player_table": player_table_np, "park_map": park_map,
     }}
     svi_state, guide, losses = train(

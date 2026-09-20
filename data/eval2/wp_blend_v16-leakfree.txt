@@ -1,0 +1,28 @@
+# Item 8: win-probability blend of the simulator with Log5
+
+arrays: calib_v16-pregame-leakfree_arrays.npz
+games with sim, Log5 and market all present, decided: 2302
+weights fitted on 1151 games, scored on the held-out 1151.
+
+| model                  |     n |  logloss |   brier |    AUC |    ECE |
+|------------------------|-------|----------|---------|--------|--------|
+| base rate (train)      |  1151 |   0.6929 |  0.2499 |  0.475 |  0.045 |
+| DiamondWorld sim       |  1151 |   0.6938 |  0.2501 |  0.549 |  0.048 |
+| sim, recalibrated      |  1151 |   0.6888 |  0.2478 |  0.549 |  0.043 |
+| Log5 (Pythagorean)     |  1151 |   0.6609 |  0.2344 |  0.635 |  0.037 |
+| Log5, recalibrated     |  1151 |   0.6655 |  0.2366 |  0.635 |  0.052 |
+| Market (devig close)   |  1151 |   0.6599 |  0.2338 |  0.639 |  0.026 |
+| BLEND sim + Log5       |  1151 |   0.6655 |  0.2365 |  0.635 |  0.052 |
+
+blend coefficients (logit scale): sim +0.008, Log5 +0.832, intercept -0.073
+
+Reading it:
+  recalibration moved AUC 0.549 -> 0.549, i.e. not at all, exactly as the monotone-invariance argument predicts.
+  blend vs Log5:   +0.0047 nats
+  blend vs market: +0.0056 nats
+  blend vs sim:    -0.0283 nats
+  The blend does not improve on Log5, so the simulator's win-probability signal
+  is subsumed by season-level team strength. That closes the blend route.
+
+Caveat: Log5 uses same-season Pythagorean rates, a mild in-sample peek, so the
+blend inherits it. The market row is the clean pre-game reference.

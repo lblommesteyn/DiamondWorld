@@ -1,0 +1,32 @@
+# Item 4: run-total mean bias, fitted out of sample
+
+arrays: calib_v16-pregame-leakfree_arrays.npz   games 2429   replicas 100
+correction fitted on 1214 games, scored on the held-out 1215.
+
+fitted on the training half:
+  sim mean 9.131  real mean 8.671   bias +0.459
+  sim var  19.28   real var  17.62
+  shift q = 0.4592
+  thin  p = 0.9497
+  both  p = 0.9500, q = 0.0027
+
+held-out half (1215 games), real mean 8.60  var 18.85:
+
+| model                  |  mean |    var | P>=10 |  P<=5 | logscore |     KS |   c50 |   c80 |   c90 |
+|------------------------|-------|-------|-------|-------|----------|-------|-------|-------|-------|
+| sim, uncorrected       |  9.03 |  18.91 | 0.402 | 0.226 |    2.855 | 0.0514 | 0.537 | 0.808 | 0.902 |
+| sim + shift            |  8.57 |  19.15 | 0.372 | 0.260 |    2.876 | 0.0163 | 0.545 | 0.827 | 0.911 |
+| sim + thin             |  8.57 |  17.53 | 0.366 | 0.251 |    2.851 | 0.0246 | 0.535 | 0.807 | 0.898 |
+| sim + thin&shift       |  8.57 |  17.52 | 0.365 | 0.251 |    2.850 | 0.0252 | 0.536 | 0.804 | 0.898 |
+| league neg-binomial    |  8.62 |  18.92 | 0.371 | 0.255 |    2.882 | 0.0159 | 0.550 | 0.829 | 0.919 |
+
+Reading it:
+  uncorrected sim KS 0.0514 vs league NB 0.0159  (gap +0.0355)
+  best correction (sim + shift) KS 0.0163  (gap to NB +0.0004)
+  a one-parameter location fix closes 99% of the calibration gap to a baseline that uses no team, park or roster information.
+  logscore: sim 2.855 -> 2.876, NB 2.882
+
+Caveat kept in view: this is a post-hoc calibration layer on sim output, in the
+same family as the b_heur/recal scale the project already ships. It is fitted on
+a disjoint half of the games, so it is honest, but it does not explain WHY the
+sim overproduces by half a run. That mechanism is a separate question.

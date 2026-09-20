@@ -1,0 +1,34 @@
+# Item 6: per-stat blend of DiamondWorld with Marcel + contact quality
+
+DW model: DiamondWorld v27a  (prod_rates_v27a_pa_abcd_s42_pa.npz)
+Batters scored: 376 (covered by DW, Marcel+CQ and Steamer, and >= 150 PA in 2024)
+Marcel regression constants tuned on 2023: {'k': 200, 'bb': 400, 'hit': 2200, 'hr': 2200}
+Blend weights: 5-fold out-of-fold over BATTERS, seed 0; reported correlations use out-of-fold predictions only.
+
+| system                         |      K |     BB |    Hit |     HR |    AVG |
+|--------------------------------|--------|--------|--------|--------|--------|
+| DiamondWorld v27a              |  0.795 |  0.690 |  0.469 |  0.663 |  0.654 |
+| Marcel+CQ                      |  0.793 |  0.674 |  0.497 |  0.641 |  0.651 |
+| Steamer                        |  0.820 |  0.702 |  0.510 |  0.651 |  0.671 |
+| Blend 50/50 (no fitting)       |  0.799 |  0.689 |  0.509 |  0.674 |  0.668 |
+| Blend fitted (out-of-fold)     |  0.794 |  0.687 |  0.497 |  0.669 |  0.662 |
+| Blend + Steamer (out-of-fold)  |  0.819 |  0.709 |  0.501 |  0.672 |  0.675 |
+
+Fitted blend weights (mean over folds, on z-scored predictions):
+  k     DW +0.03   Marcel+CQ +0.02
+  bb    DW +0.02   Marcel+CQ +0.00
+  hit   DW +0.01   Marcel+CQ +0.01
+  hr    DW +0.01   Marcel+CQ +0.00
+
+Paired bootstrap over batters (20000 reps, 95% CI) on AVG:
+  Blend 50/50 (no fitting)       - DiamondWorld v27a  +0.013 [+0.002, +0.024] p=0.015 *
+  Blend 50/50 (no fitting)       - Marcel+CQ     +0.016 [+0.006, +0.027] p=0.003 *
+  Blend 50/50 (no fitting)       - Steamer       -0.003 [-0.021, +0.014] p=0.724  
+  Blend fitted (out-of-fold)     - DiamondWorld v27a  +0.008 [-0.004, +0.020] p=0.209  
+  Blend fitted (out-of-fold)     - Marcel+CQ     +0.011 [-0.000, +0.022] p=0.052  
+  Blend fitted (out-of-fold)     - Steamer       -0.009 [-0.026, +0.008] p=0.318  
+  Blend + Steamer (out-of-fold)  - DiamondWorld v27a  +0.021 [+0.004, +0.038] p=0.014 *
+  Blend + Steamer (out-of-fold)  - Marcel+CQ     +0.024 [+0.010, +0.038] p=0.001 *
+  Blend + Steamer (out-of-fold)  - Steamer       +0.005 [-0.005, +0.013] p=0.329  
+
+`*` marks a difference whose CI excludes zero.

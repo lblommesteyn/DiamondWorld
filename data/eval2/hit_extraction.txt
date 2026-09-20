@@ -1,0 +1,74 @@
+# Item 5: hit-rate extraction loss
+
+Player table rebuilt from 2015-2023, recency halflife 2, contact_quality on (cols 5:7 = expected hit/HR).
+
+## v16   (382 batters)
+
+  corr with realized 2024 hit rate:
+    model prediction        0.448
+    raw hit rate (col 0)    0.308
+    expected hit (col 5)    0.409
+
+  nested regressions on realized hit rate (R^2):
+    model only                    0.2007
+    expected-hit only             0.1670
+    model + expected-hit          0.2115   (+0.0108 over model alone)
+    coefs: model +0.450, expected-hit +0.183
+
+  partial corr(expected-hit, actual | model pred) = +0.116
+  partial corr(model pred, actual | expected-hit) = +0.231
+
+  how well the model's own prediction tracks the feature it was given:
+    regress model pred on expected-hit: slope +0.628, R^2 0.580
+    corr(expected-hit, actual)  low-PA half 0.275   high-PA half 0.578
+
+## v22_s42   (382 batters)
+
+  corr with realized 2024 hit rate:
+    model prediction        0.484
+    raw hit rate (col 0)    0.308
+    expected hit (col 5)    0.409
+
+  nested regressions on realized hit rate (R^2):
+    model only                    0.2341
+    expected-hit only             0.1670
+    model + expected-hit          0.2354   (+0.0014 over model alone)
+    coefs: model +0.709, expected-hit +0.070
+
+  partial corr(expected-hit, actual | model pred) = +0.042
+  partial corr(model pred, actual | expected-hit) = +0.287
+
+  how well the model's own prediction tracks the feature it was given:
+    regress model pred on expected-hit: slope +0.558, R^2 0.638
+    corr(expected-hit, actual)  low-PA half 0.275   high-PA half 0.578
+
+## v27a   (382 batters)
+
+  corr with realized 2024 hit rate:
+    model prediction        0.460
+    raw hit rate (col 0)    0.308
+    expected hit (col 5)    0.409
+
+  nested regressions on realized hit rate (R^2):
+    model only                    0.2115
+    expected-hit only             0.1670
+    model + expected-hit          0.2132   (+0.0017 over model alone)
+    coefs: model +0.579, expected-hit +0.087
+
+  partial corr(expected-hit, actual | model pred) = +0.047
+  partial corr(model pred, actual | expected-hit) = +0.236
+
+  how well the model's own prediction tracks the feature it was given:
+    regress model pred on expected-hit: slope +0.654, R^2 0.705
+    corr(expected-hit, actual)  low-PA half 0.275   high-PA half 0.578
+
+Reading it. A positive partial correlation of the expected-hit feature with the
+realized hit rate, AFTER conditioning on the model's own prediction, means the
+model is not extracting information it was handed. That is a fixable modelling
+defect, not a data ceiling, and it is the opposite of the 'we are at the
+information limit of the feature set' reading in RESULTS.md.
+
+The low-PA / high-PA split is the mechanism test: columns 5:7 are filled AFTER
+per-stat shrinkage runs on columns 0..3 and are never shrunk, so if the feature
+is much weaker on the low-PA half then it is arriving unregularised and the fix
+is to shrink it with the same 2200-PA constant the raw hit column already gets.

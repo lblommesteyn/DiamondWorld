@@ -42,6 +42,9 @@ def main():
                     help="Must match the checkpoint's --skill-prior (v17+).")
     ap.add_argument("--per-stat-shrink", action="store_true",
                     help="Must match the checkpoint's --per-stat-shrink.")
+    ap.add_argument("--shrink-contact-quality", action="store_true",
+                    help="Must match the checkpoint's --shrink-contact-quality. New "
+                         "checkpoints restore this automatically from pa_metadata.")
     ap.add_argument("--pitchformer", action="store_true",
                     help="Evaluate a causal PA-transformer checkpoint.")
     ap.add_argument("--pitchformer-dim", type=int, default=128,
@@ -100,7 +103,8 @@ def main():
         trp = load_seasons(TRAIN, data_root=processed_root())
         ptab = _build_player_table(trp, recency_halflife=args.recency_halflife,
                                    contact_quality=args.contact_quality,
-                                   per_stat_shrink=args.per_stat_shrink)
+                                   per_stat_shrink=args.per_stat_shrink,
+                                   shrink_contact_quality=args.shrink_contact_quality)
         park_map = _build_park_index(trp)
     id2i = ptab["id_to_idx"]
 
