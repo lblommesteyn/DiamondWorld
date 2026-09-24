@@ -1,0 +1,17 @@
+COUNTERFACTUAL VALIDATION vs market repricing (CFV-v25b_pa_transformer_s97-pregame-leakfree) -- 2355 games with odds
+
+1. TEAM FIXED-EFFECTS residual (controls team strength + home field, no outcomes):
+   corr(sim, market) game-specific = 0.194
+
+2. WITHIN-SERIES (home field constant -> starter/park/rest only): 646 series, 2343 game-deviations
+   corr(sim dWP, market dWP)      = 0.183   (permutation null 95th pct 0.034; SIGNIFICANT)
+   OLS slope (market ~ sim)       = 0.068
+   noise-corrected slope          = 0.726   (sim replica-noise reliability 0.09; 1.0 = magnitudes match market)
+
+3. VERDICT
+   Direction: the simulator's causal starter effects agree with the market
+   (leak-free, significant). Magnitude: the raw simulator overstates effects;
+   multiply raw counterfactual WP deltas by ~0.73 to put them in
+   market-calibrated units. Example: a raw +9.8-point ace swap becomes ~+7.1 points calibrated.
+   (The remaining gap to slope 1.0 is real over-reaction plus residual market
+   noise; more replicas would sharpen the estimate.)

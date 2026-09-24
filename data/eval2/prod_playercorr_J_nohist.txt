@@ -1,0 +1,1 @@
+J_nohist (SVI, conditioned+raw, skill=mean, train<= 2023, test 2024, mle=False) | corr K 0.537 BB 0.389 Hit 0.209 HR 0.473 AVG 0.402 (np=382, rookies_injected=0, rookies_kept=0)

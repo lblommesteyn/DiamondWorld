@@ -1,0 +1,26 @@
+WITHIN-SERIES VALIDATION STATISTICS (2024, R=100, market forecast changes)
+  arrays: data/eval2/calib_v22_s42-pregame-leakfree_arrays.npz
+
+  2343 games in 646 series across 30 teams; games/series: mean 3.6, median 3, max 7
+
+  [probability scale]  n_dev=2343
+    Pearson r     0.311  95% CI [0.256, 0.368]  (cluster bootstrap by series)
+    Spearman rho  0.336
+    OLS slope     0.166  95% CI [0.140, 0.192]   intercept -0.0000
+    R^2           0.097
+    sign accuracy 0.606  95% CI [0.583, 0.626]
+    MAE of forecast change (residual) 0.0290
+
+  [logit scale]  n_dev=2343
+    Pearson r     0.304  95% CI [0.246, 0.364]  (cluster bootstrap by series)
+    Spearman rho  0.336
+    OLS slope     0.161  95% CI [0.136, 0.187]   intercept +0.0000
+    R^2           0.092
+    sign accuracy 0.610  95% CI [0.588, 0.631]
+    MAE of forecast change (residual) 0.1211
+
+  CALIBRATION / EVALUATION SPLIT (fit slope on a random half of series, freeze, eval on rest):
+    slope fit on 323 series = 0.164
+    held-out 323 series own OLS: slope 0.169, intercept +0.0000, corr 0.304, sign acc 0.596
+    held-out MAE 0.0296 vs 0.0319 (predict-zero) = 7% better
+    frozen-calibration check (market on frozen-calibrated sim): slope 1.032 (want ~1), intercept +0.0000 (want ~0)

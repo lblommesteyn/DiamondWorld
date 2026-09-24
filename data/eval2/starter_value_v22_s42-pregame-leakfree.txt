@@ -1,0 +1,34 @@
+STARTER VALUE PER START: simulator vs market (v22_s42-pregame-leakfree)
+  175 starters with >= 10 starts (3976 starts); credit = within-series WP deviation, own-team view (top half = 'top')
+
+  in-sample   corr(sim value, market value)   0.411  95% CI [0.242, 0.564]
+  cross-fit   sim(half A) vs market(half B)    0.349  95% CI [0.188, 0.502]
+              sim(half B) vs market(half A)    0.344  95% CI [0.186, 0.497]
+  ceiling     market(half A) vs market(half B) 0.790  (market split-half agreement)
+
+  calibration fit on 87 pitchers: market = 0.204 x sim
+  frozen on the other 88: slope 1.344 (want 1), intercept -0.19 WP pts (want 0),
+  MAE 1.44 vs 1.73 WP pts predict-zero = 17% better
+
+  pitcher                  starts  sim (mkt units)   market   WP points per start vs own rotation
+  Justin Verlander             17            +1.87    +1.04
+  Tyler Glasnow                21            +1.67    +5.45
+  Framber Valdez               28            +1.57    +2.30
+  Blake Snell                  19            +1.36    +3.59
+  Garrett Crochet              30            +1.23    +5.41
+  Chris Sale                   27            +1.17    +4.08
+  Max Fried                    29            +1.12    +1.33
+  Justin Steele                24            +1.08    +2.73
+  Logan Webb                   33            +1.08    +3.47
+  Zack Wheeler                 31            +1.03    +4.61
+  Bailey Falter                28            +1.03    -3.33
+  Jesús Luzardo                11            +1.03    +4.21
+  ...
+  Tobias Myers                 25            -1.74    -1.10
+  Cade Povich                  15            -1.86    -2.64
+  David Festa                  12            -1.88    -1.75
+  Shota Imanaga                28            -1.95    +4.31
+  Landon Knack                 12            -1.98    -4.43
+  Yariel Rodríguez             19            -2.12    -1.53
+  Spencer Arrighetti           28            -2.63    -1.07
+  Spencer Schwellenbach        18            -2.78    -2.07

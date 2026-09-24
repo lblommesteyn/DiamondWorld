@@ -1,0 +1,1 @@
+A20k_jcfg_hist (SVI, conditioned+raw, skill=mean, train<= 2023, test 2024, mle=False) | corr K 0.790 BB 0.688 Hit 0.385 HR 0.567 AVG 0.607 (np=382, rookies_injected=0, rookies_kept=0)

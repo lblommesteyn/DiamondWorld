@@ -89,12 +89,20 @@ def _cluster_boot(series, i, j, B=2000, seed=0):
 
 
 def main():
-    arr = "data/eval2/calib_v15-pregame-hook-r500_arrays.npz"
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--arrays", default="data/eval2/calib_v15-pregame-hook-r500_arrays.npz")
+    ap.add_argument("--tag", default=None,
+                    help="report suffix; the default keeps the original validation_stats.txt")
+    args = ap.parse_args()
+    arr = args.arrays
+    R = int(np.load(arr)["sim_home"].shape[1])
     series, n_games, n_teams = _series_pairs(arr, "data/eval2/odds_2023_2024.csv")
     n_series = len(series)
     gsz = np.array([len(s[0]) for s in series])
 
-    L = ["WITHIN-SERIES VALIDATION STATISTICS (2024, R=500, market forecast changes)", ""]
+    L = [f"WITHIN-SERIES VALIDATION STATISTICS (2024, R={R}, market forecast changes)",
+         f"  arrays: {arr}", ""]
     L.append(f"  {n_games} games in {n_series} series across {n_teams} teams; "
              f"games/series: mean {gsz.mean():.1f}, median {int(np.median(gsz))}, max {gsz.max()}")
     L.append("")
@@ -137,7 +145,8 @@ def main():
     rep = "\n".join(L)
     print(rep)
     Path("data/eval2").mkdir(parents=True, exist_ok=True)
-    Path("data/eval2/validation_stats.txt").write_text(rep + "\n")
+    out = f"data/eval2/validation_stats_{args.tag}.txt" if args.tag else "data/eval2/validation_stats.txt"
+    Path(out).write_text(rep + "\n")
 
 
 if __name__ == "__main__":
