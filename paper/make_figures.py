@@ -54,11 +54,10 @@ def _within_series_pairs(arrays, odds_csv):
     return np.array(ss), np.array(mm)
 
 
-# Game-level figures use the pooled leak-free simulator: every leak-free variant on the corrected
-# pipeline (build with the pooling step in diamondworldjax/scripts/pool_sims.py). The run-distribution
-# figures use the level-aligned pool, since the variants' run levels differ.
-ENS = "data/eval2/calib_ens_allpost_arrays.npz"
-ENS_ALIGNED = "data/eval2/calib_ens_allpost_aligned_arrays.npz"
+# Game-level figures use the locked model (v22, seed 42) simulated leak-free at R=500. The pooled
+# sixteen-variant arrays (diamondworldjax/scripts/pool_sims.py) are a robustness row in Table 3 only.
+ENS = "data/eval2/calib_v22L_s42-pregame-leakfree-r500_arrays.npz"
+ENS_ALIGNED = ENS
 
 
 def fig1():
@@ -112,8 +111,8 @@ def fig2():
 
 def fig3():
     levels = ["50%", "80%", "90%"]
-    # data/eval2/distributional_stats_ens_allpost_aligned.txt
-    sim = [0.575, 0.861, 0.937]; pois = [0.434, 0.682, 0.787]; nominal = [0.50, 0.80, 0.90]
+    # data/eval2/distributional_stats_v22L_r500.txt
+    sim = [0.557, 0.837, 0.921]; pois = [0.426, 0.674, 0.786]; nominal = [0.50, 0.80, 0.90]
     x = np.arange(3); w = 0.36
     fig, ax = plt.subplots(figsize=(4.6, 3.6))
     ax.bar(x - w / 2, sim, w, color=FIELD, label="DiamondWorld", zorder=3)
@@ -263,7 +262,7 @@ def fig8_series():
 def fig9_starters():
     """Per-start value of each starter: market-calibrated simulator vs market."""
     import json
-    d = np.load("data/eval2/starter_value_ens_allpost.npz")
+    d = np.load("data/eval2/starter_value_v22L_s42-pregame-leakfree-r500.npz")
     s = d["slope"] * d["sim"] * 100; m = d["mkt"] * 100
     names = {int(k): v for k, v in json.loads(
         Path("data/cache/projections/mlb_names.json").read_text()).items()}

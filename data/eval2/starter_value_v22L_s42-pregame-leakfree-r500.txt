@@ -1,0 +1,34 @@
+STARTER VALUE PER START: simulator vs market (v22L_s42-pregame-leakfree-r500)
+  175 starters with >= 10 starts (3976 starts); credit = within-series WP deviation, own-team view (top half = 'top')
+
+  in-sample   corr(sim value, market value)   0.640  95% CI [0.530, 0.740]
+  cross-fit   sim(half A) vs market(half B)    0.536  95% CI [0.421, 0.640]
+              sim(half B) vs market(half A)    0.513  95% CI [0.383, 0.633]
+  ceiling     market(half A) vs market(half B) 0.790  (market split-half agreement)
+
+  calibration fit on 87 pitchers: market = 0.555 x sim
+  frozen on the other 88: slope 0.863 (want 1), intercept -0.14 WP pts (want 0),
+  MAE 1.26 vs 1.73 WP pts predict-zero = 27% better
+
+  pitcher                  starts  sim (mkt units)   market   WP points per start vs own rotation
+  Tyler Glasnow                21            +4.33    +5.45
+  Blake Snell                  19            +4.17    +3.59
+  Justin Verlander             17            +3.87    +1.04
+  Zac Gallen                   27            +3.10    +3.37
+  Corbin Burnes                32            +3.05    +3.57
+  Jesús Luzardo                11            +2.98    +4.21
+  Framber Valdez               28            +2.69    +2.30
+  Zack Wheeler                 31            +2.65    +4.61
+  Gerrit Cole                  16            +2.58    +2.77
+  Garrett Crochet              30            +2.55    +5.41
+  Freddy Peralta               31            +2.53    +4.84
+  Kevin Gausman                31            +2.45    +2.18
+  ...
+  Emerson Hancock              11            -2.63    -5.65
+  Spencer Arrighetti           28            -2.75    -1.07
+  Hayden Birdsong              15            -2.83    -1.93
+  Cade Povich                  15            -2.83    -2.64
+  Spencer Schwellenbach        18            -2.92    -2.07
+  Erik Miller                  10            -3.14    -3.12
+  Landon Knack                 12            -3.16    -4.43
+  Albert Suárez                24            -3.47    -2.76
