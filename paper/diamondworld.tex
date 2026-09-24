@@ -61,7 +61,9 @@ period and evaluate the frozen calibration on a held-out one. Every simulated in
 bullpen, is selected from information available before first pitch. \textbf{Results.} Across 2{,}343
 within-series game changes (646 series, 30 teams, 2024), the simulator's and the market's forecast
 changes correlate r = 0.48 (95\% CI 0.43 to 0.53, cluster bootstrap by series; sign accuracy 0.67), on
-both pitching and hitting changes, and the calibration factor holds out-of-sample (frozen slope 0.98).
+both pitching and hitting changes, beating a starter-and-lineup rate baseline fit to the market itself
+(0.51 vs 0.42 on shared games, difference +0.09, 95\% CI 0.04 to 0.13), and the calibration factor
+holds out-of-sample (frozen slope 0.98).
 The same machinery values individual starting pitchers: the simulator's win probability added per start
 agrees with the market's pricing of 175 starters at r = 0.64, and at r = 0.51 to 0.54 when the two are
 measured on disjoint starts. Its per-game run distribution beats a summed model on proper scores (log
@@ -305,6 +307,17 @@ intercept $\approx0$: the calibration transfers rather than being refit on what 
 held-out mean absolute error is $14\%$ below a predict-zero baseline. The raw simulator overstates
 market-scale moves by about a factor of two, so a raw ``$+9.8$-point'' swing on a representative game
 becomes about $+4.4$ points in market-calibrated units.
+
+\textbf{The simulator beats a simple rate baseline.} Would a one-line index do as well? We build the
+natural baseline from the same player table the simulator reads: the difference in the two starters'
+allowed-run rates and in the two lineups' rate value, combined linearly with weights \emph{fit to the
+market} on one half of the series and scored on the other. The simulator is fit to nothing. On the
+1{,}690 game deviations where both are defined, the simulator correlates with the market's moves at
+$0.51$ $[0.44,0.57]$ and the baseline at $0.42$ $[0.35,0.48]$; the paired difference is $+0.09$
+$[+0.04,+0.13]$. The simulator also carries most of the signal: holding the baseline fixed, it still
+explains the market (partial $r{=}0.34$ $[0.28,0.41]$), while the baseline adds much less beyond the
+simulator (partial $0.15$ $[0.09,0.21]$). Playing the game out, with the actual park, bullpen hand-offs,
+and batter-by-batter matchups, is worth more than a sum of player rates.
 
 \textbf{Both pitching and hitting are priced.} Decomposing each within-series move into a pitching
 channel (starters' allowed-run rate) and a hitting channel (lineup rate value), both carry independent
