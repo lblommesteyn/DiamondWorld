@@ -1,0 +1,35 @@
+RUN-TOTAL DISTRIBUTION: PROPER SCORING & CONDITIONAL CALIBRATION (2429 games, R=800)
+
+  model                   log-score     CRPS
+  DiamondWorld                2.823    2.369
+  independent 2-Poisson       2.938    2.441
+  league neg-binomial         2.833    2.370
+  (lower is better; CRPS in runs)
+
+  paired score differences (DiamondWorld minus baseline; negative favors DiamondWorld):
+    log-score  vs independent 2-Poisson   -0.115  95% CI [-0.141, -0.090]
+         CRPS  vs independent 2-Poisson   -0.072  95% CI [-0.087, -0.057]
+    log-score  vs league neg-binomial     -0.010  95% CI [-0.022, +0.002]
+         CRPS  vs league neg-binomial     -0.001  95% CI [-0.022, +0.019]
+
+  tail-probability calibration  P(total >= k):  predicted vs empirical
+      k    real     sim  Poisson
+      8   0.554   0.565    0.625
+     10   0.366   0.390    0.366
+     12   0.229   0.247    0.170
+     14   0.129   0.145    0.064
+
+  interval coverage (bootstrap 95% CI over games):
+     level                  sim    Poisson
+       50%   0.575 [0.556, 0.595]        0.434
+       80%   0.861 [0.847, 0.875]        0.682
+       90%   0.937 [0.928, 0.946]        0.787
+
+  80% coverage conditional on pre-game expected total (the dependence check):
+    exp-total bin        n  sim cov  Poisson
+    [6.5,8.2)          606    0.878    0.703
+    [8.2,8.7)          607    0.870    0.684
+    [8.7,9.2)          607    0.842    0.679
+    [9.2,12.5)          609    0.856    0.662
+  Near-nominal coverage across expected-total bins indicates the dispersion is
+  game-conditional, not a single unconditional variance matched on average.

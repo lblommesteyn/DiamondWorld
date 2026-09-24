@@ -39,7 +39,13 @@ def cover(samples, y, lo, hi):
 
 
 def main():
-    d = np.load("data/eval2/calib_v15-pregame-hook-r500_arrays.npz")
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--arrays", default="data/eval2/calib_v15-pregame-hook-r500_arrays.npz")
+    ap.add_argument("--tag", default=None,
+                    help="report suffix; the default keeps the original distributional_stats.txt")
+    args = ap.parse_args()
+    d = np.load(args.arrays)
     sh, sa = d["sim_home"], d["sim_away"]
     st = d["sim_total"].astype(float); rt = d["real_total"].astype(float)
     n, R = st.shape
@@ -113,7 +119,9 @@ def main():
     rep = "\n".join(L)
     print(rep)
     Path("data/eval2").mkdir(parents=True, exist_ok=True)
-    Path("data/eval2/distributional_stats.txt").write_text(rep + "\n")
+    out = (f"data/eval2/distributional_stats_{args.tag}.txt" if args.tag
+           else "data/eval2/distributional_stats.txt")
+    Path(out).write_text(rep + "\n")
 
 
 if __name__ == "__main__":
