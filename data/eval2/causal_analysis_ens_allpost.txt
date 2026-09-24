@@ -1,0 +1,22 @@
+DESIGN-BASED CAUSAL ANALYSIS of the within-series validation
+
+  2343 within-series game-deviations, 646 series
+
+  (1) rest-day control (dependent: market within-series dWP):
+      simulator dWP coef, no control:   0.436  (t 28.1)
+      simulator dWP coef, + rest diff:   0.434  (t 27.9)   rest coef 0.0059 (t 1.9)
+      -> the simulator effect is essentially unchanged by controlling for rest.
+
+  (2) negative-control / placebo (market deltas permuted across series):
+      placebo corr: mean +0.000, 95th pct 0.033, 99th 0.040
+      observed corr 0.503 is far outside the placebo distribution.
+
+  (3) sensitivity to unobserved confounding:
+      to fully explain the association, an omitted differenced covariate would need
+      correlation >= 0.71 with BOTH the simulator delta and the market delta
+      (e.g. 0.71x0.71 = 0.50 = r). Rest, the strongest observed
+      differenced covariate, correlates +0.07 with the market
+      delta, well below that bar, so no single plausible confounder explains the effect.
+
+  Honest scope: this is a first-difference design with stated assumptions, not a
+  timestamp-clean scratch event study (the announced-probable data is not public).

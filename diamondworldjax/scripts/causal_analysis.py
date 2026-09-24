@@ -65,7 +65,13 @@ def rest_days_2024():
 
 
 def main():
-    d = np.load("data/eval2/calib_v15-pregame-hook-r500_arrays.npz")
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--arrays", default="data/eval2/calib_v15-pregame-hook-r500_arrays.npz")
+    ap.add_argument("--tag", default=None,
+                    help="report suffix; the default keeps the original causal_analysis.txt")
+    args = ap.parse_args()
+    d = np.load(args.arrays)
     sh, sa, pk = d["sim_home"], d["sim_away"], d["game_pk"].astype(int)
     _, pkt = team_rates_2024()
     keep = np.array([p in pkt for p in pk]); sh, sa, pk = sh[keep], sa[keep], pk[keep]
@@ -144,7 +150,8 @@ def main():
     rep = "\n".join(L)
     print(rep)
     Path("data/eval2").mkdir(parents=True, exist_ok=True)
-    Path("data/eval2/causal_analysis.txt").write_text(rep + "\n")
+    out = f"data/eval2/causal_analysis_{args.tag}.txt" if args.tag else "data/eval2/causal_analysis.txt"
+    Path(out).write_text(rep + "\n")
 
 
 if __name__ == "__main__":
