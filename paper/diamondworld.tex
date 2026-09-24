@@ -57,13 +57,18 @@ without realized outcomes. Within a series the two teams and home field are fixe
 change in an independent pregame market's implied win probability is driven by the starter and lineup.
 We test whether the simulator's within-series forecast changes agree with the market's, using no game
 outcomes and no look-ahead, and we calibrate the simulator's magnitudes to the market on an earlier
-period and evaluate the frozen calibration on a held-out one. \textbf{Results.} Across 2{,}343
+period and evaluate the frozen calibration on a held-out one. Every simulated input, including the
+bullpen, is selected from information available before first pitch. \textbf{Results.} Across 2{,}343
 within-series game changes (646 series, 30 teams, 2024), the simulator's and the market's forecast
-changes correlate r = 0.32 (95\% CI 0.27 to 0.38, cluster bootstrap by series; sign accuracy 0.62), on
-both pitching and hitting changes, and the calibration factor holds out-of-sample. Its per-game run
-distribution is well calibrated where a summed model is not (achieved 80\% interval coverage 0.83 vs
-0.66; log score 2.83 vs 2.93), including conditional on the pregame expected total. Point win probability is
-calibrated but not sharp, and the simulator is not intended to beat the market on generic prediction.
+changes correlate r = 0.50 (95\% CI 0.44 to 0.56, cluster bootstrap by series; sign accuracy 0.69), on
+both pitching and hitting changes, and the calibration factor holds out-of-sample (frozen slope 0.97).
+The same machinery values individual starting pitchers: the simulator's win probability added per start
+agrees with the market's pricing of 175 starters at r = 0.64, and at r = 0.51 to 0.55 when the two are
+measured on disjoint starts. Its per-game run distribution beats a summed model on proper scores (log
+score 2.82 vs 2.94) and matches a league negative binomial while conditioning on the matchup. Its player
+layer, averaged with a Marcel-style projection, is statistically level with Steamer (0.668 vs 0.671). Point
+win probability is calibrated but not sharp, and the simulator is not intended to beat the market on
+generic prediction.
 \textbf{Conclusion.} We externally validate the direction and calibrated scale of game-specific baseball
 counterfactuals against an independent forecaster, a check that has, to our knowledge, not been reported
 before.
@@ -124,7 +129,20 @@ each batter's own batted balls to a static per-batter feature (Fig.~\ref{fig:hea
 \emph{not} the current PA's launch measurements, so they are available before the PA; Table~\ref{tab:leak}
 lists every feature and its availability, and removing the contact-quality features reverts the model to
 its ablation ($0.624\!\to\!0.609$ cross-player correlation), a small change rather than a collapse,
-confirming they are an additive, leak-free lever.
+confirming they are an additive, leak-free lever. A code audit then found and fixed three data-path
+defects (an outcome-label mismatch, an attention mask that let the first position see later ones, and
+unknown players sharing an index with a real one); with per-stat shrinkage of the rate features and a
+season-to-season random-walk prior on the skill latent, this raises cross-player correlation to $0.644$
+(paired gain $+0.019$ $[+0.007,+0.031]$).
+
+\textbf{Model uncertainty.} We trained sixteen variants on the corrected pipeline. They differ in seed,
+in an optional sequence encoder over the game's earlier plate appearances (a GRU or a causal
+transformer), and in optional joint training with a pitch-level model. None of the variants we scored
+paired against the base model is distinguishable from it on player differentiation (differences from
+$-0.005$ to $+0.007$, none significant). We therefore do not pick one: game-level results pool the
+replicas of all sixteen, a deep ensemble that averages over model uncertainty rather than selecting on
+the evaluation metric. Every variant is individually significant on the validation of
+Sec.~\ref{sec:val}, and the pooled result is not driven by any subset (Table~\ref{tab:val}).
 
 The \textbf{empirical rules engine} maps an outcome sequence to runs and base-state transitions; ported
 from a validated Markov baseline~\cite{bukiet}, it reproduces test-season run totals to within half a
@@ -132,13 +150,12 @@ percent. The \textbf{game simulator} plays full nine-inning-plus-extras games wi
 bullpen, walk-offs, and the ghost-runner rule. Relievers follow a fitted \emph{hook model}, a logistic
 hazard for pulling the starter in batters faced, times through the order, and runs allowed (held-out
 AUC $0.889$), so the \emph{timing} of the hook is endogenous: it uses only pregame-fitted parameters
-and in-simulation state. We flag one limitation honestly. The \emph{identity and ordering} of the
-relievers a team uses, and the batting order, are taken from the completed game rather than selected
-from the roster, so the simulator is given information a genuine pre-game forecast would not have.
-Because managers' bullpen choices are endogenous to how a game unfolds, the game-level results in
-Sec.~\ref{sec:bench} carry an optimistic bias of unquantified size, and we report them as provisional
-pending a roster-based staff-selection model. The plate-appearance-level results are unaffected: they
-never invoke the game extractor. In-game state is generated recursively as the game is played. The model is
+and in-simulation state. \emph{Who} relieves is also chosen pre-game: reading the relievers off the
+completed game would leak the manager's in-game choices, which are endogenous to how the game went, so
+each team's bullpen is instead the pitchers who appeared alongside that game's starter in strictly
+earlier games, ordered by how often they did. The starter and the batting order are announced before
+first pitch and are used as announced. An earlier version of these results used the realized bullpen;
+every game-level number reported here is leak-free. In-game state is generated recursively as the game is played. The model is
 trained through 2023 (rate features through
 2024 for the later-season checks) and evaluated on 2024 unless stated. A held-out player-differentiation
 ablation of architectures is reported in Appendix~\ref{app:arch}; the short version is that on that
@@ -241,44 +258,52 @@ agreement partly non-independent. We therefore report it as forecast-change agre
 uncertainty carefully.
 
 \textbf{Statistics} (Table~\ref{tab:val}). On 2{,}343 within-series game deviations (646 series, 30
-teams), the simulator's and market's forecast changes correlate $r{=}0.32$, with a 95\% confidence
-interval of $[0.27,0.38]$ from a cluster bootstrap that resamples whole series (Spearman $\rho{=}0.34$;
-the logit scale gives the same). Sign accuracy is $0.62$ $[0.60,0.64]$, well above chance. The result is
-significant far beyond a permutation null (95th percentile $0.03$). The variance explained is modest
-($R^2{\approx}0.10$): the simulator captures a real but partial share of the market's game-specific
-revision, which is the honest reading.
+teams), the simulator's and market's forecast changes correlate $r{=}0.50$, with a 95\% confidence
+interval of $[0.44,0.56]$ from a cluster bootstrap that resamples whole series (Spearman $\rho{=}0.52$;
+the logit scale gives $0.49$). Sign accuracy is $0.69$ $[0.67,0.71]$, well above chance. The result is
+significant far beyond a permutation null (95th percentile $0.03$). The simulator explains a quarter of
+the market's game-specific revision ($R^2{=}0.25$): a real but partial share, which is the honest
+reading. The result does not depend on which variants are pooled. Each of the sixteen is significant
+alone ($r$ from $0.31$ to $0.38$ for those run at $R{=}100$ replicas per game, lower for those run at
+$R{=}20$, where replica noise attenuates it), a pre-specified six-variant subset gives $0.49$
+$[0.43,0.54]$, and two seeds of a single architecture give $0.35$ to $0.42$.
 
 \begin{table}[t]
 \centering\footnotesize
 \setlength{\tabcolsep}{3.6pt}
-\caption{Within-series validation, cluster-bootstrap 95\% CIs by series. Direction agrees with the
-market and the calibration holds out-of-sample; the effect is real but partial ($R^2\approx0.10$).}
+\caption{Within-series validation, 2{,}343 game deviations in 646 series, leak-free staff,
+cluster-bootstrap 95\% CIs by series. Direction agrees with the market and the calibration holds
+out-of-sample; the effect is real but partial ($R^2=0.25$). $R$ is replicas per game.}
 \label{tab:val}
-\begin{tabular}{@{}lcccc@{}}
+\begin{tabular}{@{}lccc@{}}
 \toprule
-& \textbf{Games} & \textbf{Series} & \textbf{$r$ [95\% CI]} & \textbf{Sign} \\
+\textbf{Simulator} & \textbf{$R$} & \textbf{$r$ [95\% CI]} & \textbf{Sign} \\
 \midrule
-Probability scale & 2343 & 646 & 0.32 [.27,.38] & 0.62 \\
-Logit scale & 2343 & 646 & 0.31 [.25,.37] & 0.62 \\
+All 16 variants, probability scale & 800 & \textbf{0.50} [.44,.56] & 0.69 \\
+All 16 variants, logit scale & 800 & 0.49 [.43,.55] & 0.69 \\
+Pre-specified 6-variant subset & 600 & 0.49 [.43,.54] & 0.67 \\
+One architecture, 2 seeds & 200 & 0.42 [.37,.47] & 0.64 \\
+One variant, one seed & 100 & 0.31 [.26,.37] & 0.61 \\
 \midrule
-\multicolumn{5}{@{}l}{OLS slope 0.27 [.23,.31], intercept $\approx0$, MAE 0.029}\\
-\multicolumn{5}{@{}l}{pitching / hitting channel $t$: $-17.6$ / $+7.3$ (both priced)}\\
-\multicolumn{5}{@{}l}{\emph{calibration fit on half series, frozen}: held-out slope 0.28, corr 0.32,}\\
-\multicolumn{5}{@{}l}{\;\;sign 0.63, MAE 7\% $<$ predict-zero; frozen-cal slope 1.07 (want 1), int.\ $\approx0$}\\
+\multicolumn{4}{@{}p{\linewidth}@{}}{All 16: OLS slope 0.44 [.40,.47], intercept $\approx0$, MAE 0.026.
+Pitching / hitting channel $t$: $-17.6$ / $+7.3$ (both priced). \emph{Calibration fit on half the
+series, frozen}: held-out slope 0.43, corr 0.48, sign 0.68, MAE 16\% below predict-zero;
+frozen-calibrated slope 0.97 (want 1), intercept $\approx0$.}\\
 \bottomrule
 \end{tabular}
 \end{table}
 
 \textbf{Calibration separated from evaluation, and the magnitude holds out-of-sample.} The
-magnitude-calibration slope ($0.27$ raw, $0.33$ after correcting for the simulator's replica-sampling
-noise, reliability $0.80$ at $R{=}500$) is fit on one random half of the series and evaluated, frozen, on
-the held-out half. The held-out half is not only directionally right (sign accuracy $0.63$); its
-magnitude matches. Its own OLS slope is $0.28$ (essentially the $0.26$ fit on the other half) with
-intercept $\approx0$ and correlation $0.32$, and the decisive check is that regressing the held-out
-market change on the \emph{frozen-calibrated} simulator change gives slope $1.07$ (target $1$) and
+magnitude-calibration slope ($0.44$ raw, $0.50$ after correcting for the simulator's replica-sampling
+noise, reliability $0.87$ at $R{=}800$) is fit on one random half of the series and evaluated, frozen, on
+the held-out half. The held-out half is not only directionally right (sign accuracy $0.68$); its
+magnitude matches. Its own OLS slope is $0.43$ (essentially the $0.44$ fit on the other half) with
+intercept $\approx0$ and correlation $0.48$, and the decisive check is that regressing the held-out
+market change on the \emph{frozen-calibrated} simulator change gives slope $0.97$ (target $1$) and
 intercept $\approx0$: the calibration transfers rather than being refit on what it is evaluated on. The
-held-out mean absolute error is $7\%$ below a predict-zero baseline. So a raw ``$+9.8$-point'' swing on a
-representative game becomes about $+3.3$ points in market-calibrated units.
+held-out mean absolute error is $16\%$ below a predict-zero baseline. The raw simulator overstates
+market-scale moves by about a factor of two, so a raw ``$+9.8$-point'' swing on a representative game
+becomes about $+4.9$ points in market-calibrated units.
 
 \textbf{Both pitching and hitting are priced.} Decomposing each within-series move into a pitching
 channel (starters' allowed-run rate) and a hitting channel (lineup rate value), both carry independent
@@ -330,8 +355,8 @@ inputs. The validation measures whether the simulator's move (green) tracks the 
 \centering
 \includegraphics[width=\linewidth]{figs/fig1_validation.pdf}
 \caption{Simulator vs.\ market within-series win-probability deltas, 2{,}343 game-deviations
-($R{=}500$). Team strength and home field are differenced out. $r{=}0.32$, leak-free; the slope gives
-the magnitude calibration.}
+(sixteen pooled variants, $R{=}800$, leak-free staff). Team strength and home field are differenced
+out. $r{=}0.50$; the slope gives the magnitude calibration.}
 \label{fig:val}
 \end{figure}
 
@@ -343,11 +368,11 @@ potential-outcomes reading~\cite{imbens}, for an ordered series we compare the s
 $do(\text{swap game }t\text{'s roster for game }t{+}1\text{'s})$ estimate against the market's
 differenced forecast, and we stress the identifying assumption three ways. \emph{(i) Rest
 control.} Adding the within-series difference in days of rest leaves the simulator coefficient
-essentially unchanged ($0.267\!\to\!0.266$, $t{=}16$), so the effect is not a rest confound.
+essentially unchanged ($0.436\!\to\!0.434$, $t{=}28$), so the effect is not a rest confound.
 \emph{(ii) Negative-control placebo.} Pairing each simulator delta with a market delta from a
-random other series gives mean correlation $0.00$ (99th percentile $0.05$); the observed $0.32$
+random other series gives mean correlation $0.00$ (99th percentile $0.04$); the observed $0.50$
 is far outside that distribution. \emph{(iii) Sensitivity to unobserved confounding.} An omitted
-differenced covariate would have to correlate at least $0.57$ with \emph{both} the simulator and
+differenced covariate would have to correlate at least $0.71$ with \emph{both} the simulator and
 market deltas to explain the association; rest, the strongest observed such covariate, manages
 only $0.07$. So no single plausible confounder accounts for the effect. We are explicit that
 this is a design-based identification with stated assumptions, not a timestamp-clean starter-
@@ -362,30 +387,41 @@ A validated counterfactual engine is only useful if its raw outputs are realisti
 and report where the simulator trails (Table~\ref{tab:bench}).
 
 \textbf{Run-total distribution.} Against an independent two-Poisson model with the identical per-game
-means (only the shape differs), the simulator matches reality's spread and covers near nominal rates
-(achieved 80\% interval coverage $0.83$ $[0.81,0.84]$ vs Poisson $0.66$; nominal $0.80$), with strictly
-better proper scores (log score $2.83$ vs $2.93$, paired difference $-0.099$ $[-0.123,-0.077]$; CRPS
-$2.39$ vs $2.45$, paired difference $-0.062$ $[-0.077,-0.048]$~\cite{gneiting,czado}; negative favors the
-simulator) and better tail probabilities (Fig.~\ref{fig:rundist}). Crucially, coverage stays near-nominal
-\emph{conditional on the pregame expected total} (Fig.~\ref{fig:cov} inset values about $0.83$ across
-quartiles vs Poisson $0.66$--$0.68$), so the dispersion is game-conditional, not a single unconditional
-variance matched on average. We do not claim to beat every baseline: a marginal league negative-binomial
-matches the simulator on aggregate proper scores (log-score difference $-0.002$ $[-0.018,+0.014]$, CRPS
-difference $+0.017$ $[-0.007,+0.042]$, both straddling zero), but it assigns every matchup the identical
-distribution, which the simulator's game-specific conditional distributions do not.
+means (only the shape differs), the simulator matches reality's spread (within-game total variance
+$2.14\times$ the Poisson value, real $2.11\times$), with strictly better proper scores (log score $2.82$
+vs $2.94$, paired difference $-0.115$ $[-0.141,-0.090]$; CRPS $2.37$ vs $2.44$, paired difference
+$-0.072$ $[-0.087,-0.057]$~\cite{gneiting,czado}; negative favors the simulator) and better tail
+probabilities (Fig.~\ref{fig:rundist}). Its intervals are slightly conservative (achieved 80\% coverage
+$0.86$ $[0.85,0.88]$, nominal $0.80$) where Poisson's badly under-cover ($0.68$), and this holds
+\emph{conditional on the pregame expected total} ($0.84$ to $0.88$ across quartiles vs Poisson $0.66$ to
+$0.70$), so the dispersion is game-conditional, not a single unconditional variance matched on average.
+The variants' run levels differ (8.4 to 10.0 per game), so each is centred on the pooled level before
+pooling; without that step the pooled distribution is too wide. We do not claim to beat every baseline:
+a marginal league negative-binomial matches the simulator on aggregate proper scores (log-score
+difference $-0.010$ $[-0.022,+0.002]$, CRPS difference $-0.001$ $[-0.022,+0.019]$, both straddling
+zero), but it assigns every matchup the identical distribution, which the simulator's game-specific
+conditional distributions do not.
 
 \textbf{Win probability.} Point win probability is honestly not the simulator's edge: it is calibrated
-(ECE $0.034$) but less sharp than a one-line team-strength baseline (AUC $0.57$ vs Log5 $0.62$). A
-per-PA process washes team talent toward a coin flip, and DiamondWorld is not intended to beat a market
-on generic prediction; its value is the conditional distribution and the validated counterfactuals.
+(ECE $0.022$) and beats the home-field base rate (log loss $0.680$ vs $0.692$), but it is less sharp
+than a one-line team-strength baseline (AUC $0.59$ vs Log5 $0.62$). A per-PA process washes team talent
+toward a coin flip, and DiamondWorld is not intended to beat a market on generic prediction; its value
+is the conditional distribution and the validated counterfactuals.
 
-\textbf{Player realism.} The players are on par with a standard baseline: cross-player rate correlation
-$0.61$, versus Marcel $0.63$ and Steamer's real preseason release $0.67$ (Fig.~\ref{fig:players}). The
-simulator need not out-project a dedicated system; it needs realistic players, which these are.
+\textbf{Player realism.} On 376 batters with at least 150 PA in 2024, the corrected model's cross-player
+rate correlation is $0.648$, level with a Marcel projection augmented with the same contact-quality
+feature ($0.651$) and below Steamer's real preseason release ($0.671$). The two are complementary: a
+parameter-free average of their standardized predictions reaches $0.668$, statistically level with
+Steamer (paired difference $-0.002$ $[-0.021,+0.016]$) and matching it on home runs ($0.654$ vs
+$0.651$), while beating each of its parents ($+0.020$ $[+0.009,+0.032]$ over DiamondWorld alone,
+$+0.017$ $[+0.005,+0.029]$ over Marcel). A fitted blend does worse ($0.660$), because least squares
+targets squared error rather than correlation, so we report the unfitted average, which cannot
+overfit (Fig.~\ref{fig:players}). The simulator itself consumes the model's rates, not the blend; the
+blend shows that the model's player layer carries information a Marcel-style projection lacks.
 
 \begin{table*}[t]
 \centering\footnotesize
-\setlength{\tabcolsep}{9pt}
+\setlength{\tabcolsep}{6.5pt}
 \caption{Benchmarks. The simulator beats the game-independent two-Poisson baseline on the run-total
 distribution and matches the marginal negative-binomial on aggregate proper scores while providing
 game-specific conditional distributions the marginal cannot; it trails a one-line team-strength baseline
@@ -396,19 +432,21 @@ marked when a difference is within noise). Bracketed values are 95\% bootstrap C
 \toprule
 \textbf{Metric} & \textbf{DiamondWorld} & \textbf{Independent / summed} & \textbf{Team-strength} & \textbf{Reference} \\
 \midrule
-Run-total log score (lower better) & \textbf{2.83} & 2.93 (2-Poisson) & & \textbf{2.83} (marginal NB)\\
-Run-total CRPS (lower better) & 2.39 & 2.45 (2-Poisson) & & \textbf{2.37} (marginal NB)\\
-Run-total 80\% coverage & \textbf{0.83} [.81,.84] & 0.66 (2-Poisson) & & 0.80 (nominal)\\
-\;\;conditional on expected total & \textbf{$\approx$0.83} & 0.66--0.68 (2-Poisson) & & 0.80 (nominal)\\
-Win probability AUC & 0.57 & & \textbf{0.62} (Log5) & 0.61 (market)\\
-Player rate corr.\ (avg) & 0.61 & & 0.63 (Marcel) & \textbf{0.67} (Steamer)\\
+Run-total log score (lower better) & \textbf{2.82} & 2.94 (2-Poisson) & & \textbf{2.83} (marginal NB)\\
+Run-total CRPS (lower better) & \textbf{2.37} & 2.44 (2-Poisson) & & \textbf{2.37} (marginal NB)\\
+Run-total 80\% coverage & \textbf{0.86} [.85,.88] & 0.68 (2-Poisson) & & 0.80 (nominal)\\
+\;\;conditional on expected total & \textbf{0.84--0.88} & 0.66--0.70 (2-Poisson) & & 0.80 (nominal)\\
+Win probability AUC & 0.59 & & \textbf{0.62} (Log5) & 0.61 (market)\\
+Player rate corr.\ (avg) & 0.648 & & 0.651 (Marcel+CQ) & \textbf{0.671} (Steamer)\\
+\;\;averaged with Marcel+CQ & \textbf{0.668} & & & \textbf{0.671} (Steamer)\\
 \bottomrule
 \end{tabular}
 
 \vspace{2pt}
 {\footnotesize Paired score differences (DiamondWorld minus baseline, negative favors DiamondWorld):
-vs 2-Poisson, log score $-0.099$ $[-0.123,-0.077]$ and CRPS $-0.062$ $[-0.077,-0.048]$; vs marginal NB,
-log score $-0.002$ $[-0.018,+0.014]$ and CRPS $+0.017$ $[-0.007,+0.042]$ (both straddle zero).}
+vs 2-Poisson, log score $-0.115$ $[-0.141,-0.090]$ and CRPS $-0.072$ $[-0.087,-0.057]$; vs marginal NB,
+log score $-0.010$ $[-0.022,+0.002]$ and CRPS $-0.001$ $[-0.022,+0.019]$ (both straddle zero). Averaged
+player layer minus Steamer: $-0.002$ $[-0.021,+0.016]$.}
 \end{table*}
 
 \begin{figure}[t]
@@ -423,21 +461,61 @@ blowout tail; an independent-Poisson model with the same mean (dashed) is too pe
 \centering
 \includegraphics[width=0.92\linewidth]{figs/fig3_coverage.pdf}
 \caption{Interval coverage over 2{,}376 games (bootstrap CIs in Table~\ref{tab:bench}). The simulator is
-near-nominal and stays so conditional on the pregame expected total; the summed model under-covers.}
+slightly conservative and stays so conditional on the pregame expected total; the summed model
+badly under-covers.}
 \label{fig:cov}
 \end{figure}
 
 \begin{figure}[t]
 \centering
 \includegraphics[width=\linewidth]{figs/fig4_players.pdf}
-\caption{Players are as realistic as a standard baseline (Marcel) and within a few points of a
-professional system (Steamer).}
+\caption{Cross-player rate correlation on 376 batters, 2024. DiamondWorld alone is level with a
+Marcel projection given the same contact-quality feature; the unfitted average of the two is
+statistically level with Steamer ($0.668$ vs $0.671$).}
 \label{fig:players}
 \end{figure}
 
-\section{A decision study: lineup construction}
+\section{Decision studies}
 \label{sec:decision}
-To move past a hypothetical, we run one out-of-sample decision study on the lineup lever, with the
+The game-level validation says the simulator's forecast \emph{changes} are right in direction and, once
+calibrated, in scale. A front office acts on a different object: the value of a specific player. We run
+two decision studies, one on a lever the market prices and one on a lever it does not.
+
+\textbf{What is a starter worth per start?} Rotation order, skipping a start, and above all trading
+for a starter turn on one number: how much win probability a pitcher adds when he takes the ball,
+relative to the alternatives on his own staff. The simulator answers it directly, and the within-series
+design gives it an external check. In each series we express every game's forecast as a deviation from
+the series mean, which removes both teams and home field; we credit the home starter with the deviation
+and the away starter with its negative, so each credit is from the pitcher's own team's point of view; a
+pitcher's value is his mean credit, computed separately from the simulator and from the market. Across
+the 175 starters with at least ten 2024 starts (3{,}976 starts), the simulator's values agree with the
+market's at $r{=}0.64$ $[0.52,0.74]$ (Fig.~\ref{fig:starters}). Because both are averages over the same
+games, the stricter test measures them on disjoint starts: the simulator's value from a random half of a
+pitcher's starts predicts the market's value from the other half at $r{=}0.55$ $[0.45,0.65]$ and, with
+the halves swapped, $0.51$ $[0.38,0.63]$. The market agrees with itself across halves only at $0.79$,
+so the simulator recovers most of what is recoverable. A calibration factor fit on half the pitchers and
+frozen on the other half has slope $0.89$ (target 1) and intercept $-0.15$ points, and cuts the error of
+a predict-zero baseline by $28\%$. In calibrated units the top of the 2024 list is what a front office
+would expect (Burnes $+3.3$ points per start against the market's $+3.6$, Webb $+2.6$ vs $+3.5$, Wheeler
+$+2.6$ vs $+4.6$), and over a 32-start season $+3$ points per start is about one win above the rest of
+the pitcher's own rotation. The misses are informative rather than random. Seven of the eight largest
+overvaluations are veterans aged 31 or older whose prior-season rates had not yet caught up with their
+decline (the model has no aging curve). Four of the eight largest undervaluations had little or no
+major-league history before 2024: rookies Skenes and Jones, and the Japanese signings Yamamoto and
+Imanaga, whom the model sees only through a league-average prior; two more are breakouts (Skubal, and
+Crochet in his first season as a starter). Aging and pre-MLB evaluation are precisely the inputs a team
+supplies from its own scouting, and the calibrated simulator is the layer that turns them into wins.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{figs/fig9_starters.pdf}
+\caption{Win probability added per start relative to the pitcher's own rotation, simulator
+(market-calibrated, $x$) vs market ($y$), for 175 starters with at least ten 2024 starts. $r=0.64$;
+$r=0.51$ to $0.55$ when the two are measured on disjoint starts.}
+\label{fig:starters}
+\end{figure}
+
+\textbf{Lineup construction.} Our second study takes a lever the market does not price, with the
 winner's curse controlled. For each 2024 game we generate candidate batting orders of the home nine,
 \emph{select} the order maximizing expected runs on one set of replica seeds, then \emph{evaluate} the
 selected, actual, and a random order on an \emph{independent} set of seeds. The selection/evaluation
@@ -458,29 +536,38 @@ selection/evaluation seed split we would have reported a large, entirely illusor
 batting-order optimization is a near-null lever at this granularity, consistent with the sabermetric
 consensus that lineup order is worth at most a few runs across a full season. The methodological point of
 the study is not that the simulator wins a decision, but that the same discipline used for the market
-validation prevents it from manufacturing one.
+validation prevents it from manufacturing one. Together the two studies mark the boundary of use: the
+simulator is trustworthy on levers the market can check, such as who pitches, and on levers it cannot
+check it should be trusted only as far as a winner's-curse-controlled estimate allows. (This study was
+run on the earlier single-model simulator.)
 
 \section{Limitations}
 We are explicit about the boundaries. (1) The market is an external forecaster, not causal ground truth;
 its move can reflect other same-day changes and it may share public inputs with the simulator, so the
-$r{=}0.32$ is forecast-change agreement, not an identified causal effect. (2) $R^2{\approx}0.10$: the
+$r{=}0.50$ is forecast-change agreement, not an identified causal effect. (2) $R^2{=}0.25$: the
 agreement is real but partial. (3) The 2025 and 2026 checks use the model's rate features rather than a
-full re-simulation of those seasons (we lack processed play-by-play for them), and the 2026 slice is a
-stale-input stress test on an incomplete season. (4) Raw counterfactual magnitudes overstate by about
-$3\times$ and must be market-calibrated. (5) Point win probability is less sharp than a one-line
-baseline. (6) The simulator's mean runs about $0.4$ high, a recalibration-scale artifact. (7) Model
-specification was chosen on held-out player differentiation, documented in the repository; the reported
-metrics are for a single locked specification.
+full re-simulation of those seasons, and the 2026 slice is a stale-input stress test on an incomplete
+season. (4) Raw counterfactual magnitudes overstate by about $2\times$ and must be market-calibrated.
+(5) Point win probability is less sharp than a one-line baseline. (6) The simulator's mean runs total
+is off by $-0.2$ to $+1.4$ runs per game depending on the variant ($+0.6$ pooled), which the run-distribution scores remove by
+centring and which largely cancels in within-series differences. (7) Game-level results pool sixteen variants
+rather than one locked specification; the pooling is pre-specified by the rule ``every leak-free variant
+on the corrected pipeline'', and a pre-specified subset and single seeds are reported alongside.
+(8) The starter valuations inherit the model's blind spots: no aging curve, and only a league-average
+prior for pitchers new to the major leagues.
 
 \section{Discussion}
 The contribution is a way to \emph{externally validate the direction and calibrated scale of
 game-specific baseball counterfactuals} when the counterfactual outcome cannot be observed, together with
-a conditional run distribution that beats an independent baseline on proper scores and stays calibrated
-conditional on expected runs. To our knowledge, we did not find prior work that validates game-specific
+a conditional run distribution that beats an independent baseline on proper scores and keeps its
+coverage conditional on expected runs. To our knowledge, we did not find prior work that validates game-specific
 baseball counterfactual sensitivities against independent pregame market forecast changes. For a front
-office the implication is that the simulator's market-calibrated what-ifs (acquisition impact, lineup and
-rest, leverage under the true run distribution) rest on a validated engine, with an honest account of
-what the validation does and does not establish. All code and data-join pipelines are released
+office the implication is concrete: the simulator's market-calibrated value of a starting pitcher per
+start agrees with how the market prices him, on starts it did not see, so acquisition and rotation
+what-ifs rest on a validated engine, while levers the market does not price, such as batting order,
+come with a winner's-curse-controlled estimate and no more. Its player layer is Steamer-grade when
+averaged with a simple projection, and the known gaps (aging, pitchers new to the major leagues) are
+exactly the inputs a team's own scouting supplies. All code and data-join pipelines are released
 (Appendix~\ref{app:repro}).
 
 \appendix

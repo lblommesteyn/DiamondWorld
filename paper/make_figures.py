@@ -54,9 +54,15 @@ def _within_series_pairs(arrays, odds_csv):
     return np.array(ss), np.array(mm)
 
 
+# Game-level figures use the pooled leak-free simulator: every leak-free variant on the corrected
+# pipeline (build with the pooling step in diamondworldjax/scripts/pool_sims.py). The run-distribution
+# figures use the level-aligned pool, since the variants' run levels differ.
+ENS = "data/eval2/calib_ens_allpost_arrays.npz"
+ENS_ALIGNED = "data/eval2/calib_ens_allpost_aligned_arrays.npz"
+
+
 def fig1():
-    ss, mm = _within_series_pairs("data/eval2/calib_v15-pregame-hook-r500_arrays.npz",
-                                  "data/eval2/odds_2023_2024.csv")
+    ss, mm = _within_series_pairs(ENS, "data/eval2/odds_2023_2024.csv")
     r = np.corrcoef(ss, mm)[0, 1]
     fig, ax = plt.subplots(figsize=(5.0, 4.0))
     ax.scatter(ss * 100, mm * 100, s=9, alpha=0.20, color=STEEL, edgecolors="none", zorder=2)
@@ -80,7 +86,8 @@ def fig1():
     ax.set_title(f"Simulator counterfactuals versus market forecast changes\n$r={r:.2f}$, leak-free, "
                  f"{len(ss)} game-deviations", fontsize=9.5)
     ax.legend(frameon=False, fontsize=8, loc="upper left")
-    ax.set_xlim(-22, 22); ax.set_ylim(-9, 9)
+    lim = float(np.ceil(np.percentile(np.abs(ss), 99.5) * 100))
+    ax.set_xlim(-lim, lim); ax.set_ylim(-9, 9)
     fig.tight_layout(); fig.savefig(FIG / "fig1_validation.pdf"); plt.close(fig)
     print(f"fig1 r={r:.3f} slope={b1:.3f} n={len(ss)}")
 
@@ -105,7 +112,8 @@ def fig2():
 
 def fig3():
     levels = ["50%", "80%", "90%"]
-    sim = [0.538, 0.821, 0.903]; pois = [0.416, 0.657, 0.767]; nominal = [0.50, 0.80, 0.90]
+    # data/eval2/distributional_stats_ens_allpost_aligned.txt
+    sim = [0.575, 0.861, 0.937]; pois = [0.434, 0.682, 0.787]; nominal = [0.50, 0.80, 0.90]
     x = np.arange(3); w = 0.36
     fig, ax = plt.subplots(figsize=(4.6, 3.6))
     ax.bar(x - w / 2, sim, w, color=FIELD, label="DiamondWorld", zorder=3)
@@ -123,19 +131,22 @@ def fig3():
 
 def fig4():
     stats = ["K%", "BB%", "Hit%", "HR%", "Avg"]
-    marcel = [0.790, 0.685, 0.420, 0.609, 0.626]
+    # data/eval2/blend_v22_s42.txt: 376 batters with >= 150 PA in 2024
+    marcel = [0.793, 0.674, 0.497, 0.641, 0.651]
+    dw = [0.803, 0.665, 0.495, 0.628, 0.648]
+    blend = [0.806, 0.682, 0.531, 0.654, 0.668]
     steamer = [0.820, 0.702, 0.510, 0.651, 0.671]
-    dw = [0.769, 0.645, 0.422, 0.607, 0.611]
-    x = np.arange(5); w = 0.26
+    x = np.arange(5); w = 0.2
     fig, ax = plt.subplots(figsize=(5.4, 3.5))
-    ax.bar(x - w, marcel, w, color=MUTE, label="Marcel", zorder=3)
-    ax.bar(x, steamer, w, color=STEEL, label="Steamer", zorder=3)
-    ax.bar(x + w, dw, w, color=FIELD, label="DiamondWorld (locked spec.)", zorder=3)
+    ax.bar(x - 1.5 * w, marcel, w, color=MUTE, label="Marcel + CQ", zorder=3)
+    ax.bar(x - 0.5 * w, dw, w, color="#8FB8A2", label="DiamondWorld", zorder=3)
+    ax.bar(x + 0.5 * w, blend, w, color=FIELD, label="average of the two", zorder=3)
+    ax.bar(x + 1.5 * w, steamer, w, color=STEEL, label="Steamer", zorder=3)
     ax.set_xticks(x); ax.set_xticklabels(stats)
     ax.set_ylabel("cross-player rate correlation (2024)")
-    ax.set_ylim(0, 0.9)
-    ax.set_title("Player realism vs public and pro baselines", fontsize=9.5)
-    ax.legend(frameon=False, fontsize=8, ncol=3, loc="upper center")
+    ax.set_ylim(0, 0.95)
+    ax.set_title("Player realism: the averaged player layer is level with Steamer", fontsize=9.5)
+    ax.legend(frameon=False, fontsize=7.5, ncol=4, loc="upper center")
     fig.tight_layout(); fig.savefig(FIG / "fig4_players.pdf"); plt.close(fig)
     print("fig4 done")
 
@@ -202,7 +213,7 @@ def fig6_heatmap():
 
 def fig7_rundist():
     """Simulated vs real game-total distribution and an independent-Poisson reference."""
-    d = np.load("data/eval2/calib_v15-pregame-hook-r500_arrays.npz")
+    d = np.load(ENS_ALIGNED)
     st = d["sim_total"].reshape(-1).astype(float); rt = d["real_total"].astype(float)
     shift = rt.mean() - st.mean(); st = st + shift          # mean-match (shape comparison)
     from scipy.stats import poisson as _po
@@ -249,8 +260,40 @@ def fig8_series():
     print("fig8 series done")
 
 
+def fig9_starters():
+    """Per-start value of each starter: market-calibrated simulator vs market."""
+    import json
+    d = np.load("data/eval2/starter_value_ens_allpost.npz")
+    s = d["slope"] * d["sim"] * 100; m = d["mkt"] * 100
+    names = {int(k): v for k, v in json.loads(
+        Path("data/cache/projections/mlb_names.json").read_text()).items()}
+    r = np.corrcoef(s, m)[0, 1]
+    fig, ax = plt.subplots(figsize=(5.0, 4.0))
+    ax.scatter(s, m, s=6 + d["n"] * 0.8, alpha=0.45, color=STEEL, edgecolors="none", zorder=2)
+    ax.plot([-5, 5], [-5, 5], color=MUTE, lw=0.8, ls="--", zorder=1)
+    ax.text(4.9, 4.2, "$y=x$", fontsize=7.5, color=MUTE, ha="right")
+    # label offsets in points, chosen so neighbouring names do not collide
+    label = {"Paul Skenes": (4, -3), "Tarik Skubal": (4, 2), "Corbin Burnes": (4, -9),
+             "Justin Verlander": (4, 2), "Logan Webb": (-24, 5), "Yoshinobu Yamamoto": (4, 2),
+             "Kenta Maeda": (4, -3), "Zack Wheeler": (4, 2), "Shota Imanaga": (4, 2)}
+    for k in range(len(s)):
+        nm = names.get(int(d["ids"][k]), "")
+        if nm in label:
+            ax.annotate(nm.split()[-1], (s[k], m[k]), textcoords="offset points", xytext=label[nm],
+                        fontsize=7, color=INK)
+    ax.axhline(0, color=MUTE, lw=0.5); ax.axvline(0, color=MUTE, lw=0.5)
+    ax.set_xlim(-5, 5); ax.set_ylim(-7, 9)
+    ax.set_xlabel("simulator, market-calibrated (WP points per start)")
+    ax.set_ylabel("market (WP points per start)")
+    ax.set_title(f"What a starter is worth per start, vs his own rotation\n"
+                 f"$r={r:.2f}$, {len(s)} starters with $\\geq$10 starts, 2024", fontsize=9.5)
+    fig.tight_layout(); fig.savefig(FIG / "fig9_starters.pdf"); plt.close(fig)
+    print(f"fig9 starters r={r:.3f}")
+
+
 PALETTE_paper = "#F3F5F1"
 
 if __name__ == "__main__":
     fig1(); fig2(); fig3(); fig4(); fig5(); fig6_heatmap(); fig7_rundist(); fig8_series()
+    fig9_starters()
     print("all figures ->", FIG)
