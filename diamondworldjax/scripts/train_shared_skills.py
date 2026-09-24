@@ -67,6 +67,8 @@ def main() -> None:
                         help="xBA-style stat columns 5-6 (see train_pa). Eval must match.")
     parser.add_argument("--recency-halflife", type=float, default=None,
                         help="Recency half-life in seasons for the player-table rates.")
+    parser.add_argument("--per-stat-shrink", action="store_true",
+                        help="Per-stat shrinkage in the player table (v22). Eval must match.")
     parser.add_argument("--fatigue", action="store_true",
                         help="Pitcher fatigue proxy in the PA head (v9+). Eval assumes it.")
     parser.add_argument("--outcome-only", action="store_true",
@@ -85,7 +87,8 @@ def main() -> None:
     print(f"Loading training seasons {train_seasons}...", flush=True)
     pitches = load_seasons(train_seasons, data_root=processed_root())
     player_table_np = _build_player_table(pitches, recency_halflife=args.recency_halflife,
-                                          contact_quality=args.contact_quality)
+                                          contact_quality=args.contact_quality,
+                                          per_stat_shrink=args.per_stat_shrink)
     park_map = _build_park_index(pitches)
     pa_rows = apply_park_idx(pitches.filter(pl.col("pa_terminal")), park_map)
     game_ids = pa_rows["game_pk"].unique().to_numpy()

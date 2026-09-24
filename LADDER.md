@@ -61,11 +61,11 @@ Cheap, CPU only, minutes. Turns the point estimates into verdicts.
 
     python -m diamondworldjax.scripts.prod_playercorr \
       --ckpt checkpoints/dwjax_pa_v22/dwjax_step_0050000.pkl \
-      --contact-quality --train-end 2023 --test-seasons 2024 --tag v22
+      --contact-quality --per-stat-shrink --skill-prior walk       --train-end 2023 --test-seasons 2024 --tag v22
 
     python -m diamondworldjax.scripts.prod_playercorr \
       --ckpt checkpoints/dwjax_pa_v22pf/dwjax_step_0050000.pkl \
-      --contact-quality --train-end 2023 --test-seasons 2024 --tag v22pf
+      --contact-quality --per-stat-shrink --skill-prior walk --pitchformer       --train-end 2023 --test-seasons 2024 --tag v22pf
 
     python -m diamondworldjax.scripts.bootstrap_playercorr \
       --rates data/eval2/prod_rates_v16.npz \
@@ -85,11 +85,11 @@ and rerunning the same command resumes.
 
     python -m diamondworldjax.scripts.run_pregame_sim --pregame-staff --r 100 \
       --ckpt checkpoints/dwjax_pa_v22/dwjax_step_0050000.pkl \
-      --contact-quality --tag v22-pregame-leakfree
+      --contact-quality --per-stat-shrink --recal data/eval2/v22_cal_params.npz       --tag v22-pregame-leakfree
 
     python -m diamondworldjax.scripts.run_pregame_sim --pregame-staff --r 100 \
       --ckpt checkpoints/dwjax_pa_v22pf/dwjax_step_0050000.pkl \
-      --contact-quality --pitchformer --tag v22pf-pregame-leakfree
+      --contact-quality --per-stat-shrink --pitchformer       --recal data/eval2/v22pf_cal_params.npz --tag v22pf-pregame-leakfree
 
     python -m diamondworldjax.scripts.simulator_benchmarks \
       --arrays data/eval2/calib_v22-pregame-leakfree_arrays.npz
@@ -132,6 +132,38 @@ dropping each:
   `prod_playercorr` weights it (its default is 2.0). Input distribution shift.
 
 `scripts/ladder_train.sh <rung> <seed>` bakes the recipe in; prefer it over typing flags.
+
+## What v22 actually is, and what the eval tools must be told
+
+Jaden's v22pf_s42 command:
+
+    train_pa --train-end 2023 --seed 42 --steps 50000 --tag v22pf_s42       --outcome-only --fatigue --recency-halflife 2.0       --contact-quality --per-stat-shrink --skill-prior walk --pitchformer
+
+So the full v16 recipe is on (outcome-only is not the run-inflation cause), but v22 adds
+`--per-stat-shrink` and `--skill-prior walk` on top of the bug fixes. R1 is therefore
+"v16 + bug fixes + per-stat shrink + seasonal random-walk skills", three changes. If
+the rung is meant to isolate the bug fixes, those two flags come off; otherwise
+relabel R1 honestly.
+
+Every eval tool must be told all of these, and before this commit most could not be:
+
+- `run_pregame_sim` / `Sim` had no `--per-stat-shrink`, so the sim read a player table
+  built differently from training. Fixed: `--per-stat-shrink`.
+- `simulate_games` substituted a walk checkpoint's `player_mu` (P, seasons, D) into the
+  iso site, which the encoder rejects. Fixed: for a held-out season it now takes the
+  last trained season, which is exactly what the model's own clamp does.
+- The sim always applied v13's recalibration vector. A recal vector is a per-outcome
+  logit shift fit to one checkpoint; on another checkpoint it shifts the outcome mix
+  arbitrarily, and run totals move with it. This is the first suspect for the 10.1 vs
+  8.63 run mean. Fixed: `--recal`. Build one per checkpoint:
+
+      python -m diamondworldjax.scripts.diag_outcomes --ckpt <ckpt> --outcome-only         --fatigue --use-park --recency-halflife 2.0 --skill-mode mean         --train-end 2023 --contact-quality --per-stat-shrink [--pitchformer]         --dump-logits data/eval2/<tag>_logits.npz
+      python -m diamondworldjax.scripts.fit_calibration         --logits data/eval2/<tag>_logits.npz --out data/eval2/<tag>_cal.txt
+
+  then pass the resulting `<tag>_cal_params.npz` to `run_pregame_sim --recal`.
+- `prod_playercorr` had no `--pitchformer`, so a v22pf checkpoint was scored with its
+  attention parameters ignored. Fixed. Any v22pf PA-gate number from before this
+  commit should be rerun.
 
 ## Step 3: seeds
 

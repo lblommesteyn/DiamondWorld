@@ -50,8 +50,21 @@ def main() -> None:
     parser.add_argument("--dump-logits", type=Path, default=None,
                         help="Save per-PA (logits, real_outcome) over valid PAs to npz for "
                              "learned calibration (fit_calibration.py).")
+    # Everything below must match how the checkpoint was trained, or the recal
+    # vector is fit to a model with the wrong inputs. Defaults reproduce v13.
+    parser.add_argument("--train-end", type=int, default=2022,
+                        help="Last trained season; the test set becomes the next season.")
+    parser.add_argument("--contact-quality", action="store_true")
+    parser.add_argument("--per-stat-shrink", action="store_true")
+    parser.add_argument("--pitchformer", action="store_true")
     args = parser.parse_args()
+    global TRAIN, TEST
+    if args.train_end != 2022:
+        TRAIN = list(range(2015, args.train_end + 1))
+        TEST = [args.train_end + 1]
     mkw = {}
+    if args.pitchformer:
+        mkw["pitchformer"] = True
     if args.outcome_only:
         mkw["outcome_only"] = True
     if args.fatigue:
@@ -63,10 +76,15 @@ def main() -> None:
     with open(args.ckpt, "rb") as f:
         params = pickle.load(f)["params"]
     if getattr(args, "skill_mode", "prior") == "mean" and "player_mu" in params:
-        params = {**params, "player_skills": params["player_mu"]}
+        mu = np.asarray(params["player_mu"])
+        if mu.ndim == 3:   # --skill-prior walk: held-out season reads the last trained one
+            mu = mu[:, -1, :]
+        params = {**params, "player_skills": jnp.asarray(mu)}
 
     train_pitches = load_seasons(TRAIN, data_root=processed_root())
-    ptab = _build_player_table(train_pitches, recency_halflife=args.recency_halflife)
+    ptab = _build_player_table(train_pitches, recency_halflife=args.recency_halflife,
+                               contact_quality=args.contact_quality,
+                               per_stat_shrink=args.per_stat_shrink)
     # Rebuild the park_id -> park_idx map from the training seasons. The processed
     # test parquet has no park_idx column, so build_pa_batch would otherwise fill 0
     # for every PA -- and park index 0 ("unknown park") is out-of-distribution for

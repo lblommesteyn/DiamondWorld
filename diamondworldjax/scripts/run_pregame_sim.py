@@ -57,6 +57,11 @@ def main():
                     help="must match how the checkpoint was trained (v16+, v22+)")
     ap.add_argument("--pitchformer", action="store_true",
                     help="must match: checkpoint trained with --pitchformer")
+    ap.add_argument("--per-stat-shrink", action="store_true",
+                    help="must match: checkpoint trained with --per-stat-shrink")
+    ap.add_argument("--recal", default=None,
+                    help="recalibration .npz; default is v13's, which is the wrong "
+                         "scale for any other checkpoint (build one with diag_outcomes)")
     ap.add_argument("--train-end", type=int, default=2023)
     ap.add_argument("--pregame-staff", action="store_true",
                     help="select relievers from prior games only, removing the "
@@ -64,11 +69,15 @@ def main():
     args = ap.parse_args()
 
     sim_kw = dict(hook_model=True, train_end=args.train_end,
-                  contact_quality=args.contact_quality, pitchformer=args.pitchformer)
+                  contact_quality=args.contact_quality, pitchformer=args.pitchformer,
+                  per_stat_shrink=args.per_stat_shrink)
+    if args.recal:
+        sim_kw["recal"] = args.recal
     if args.ckpt:
         sim_kw["ckpt"] = args.ckpt
     print(f"model: {sim_kw.get('ckpt', 'V15 default')}  contact_quality={args.contact_quality}"
-          f"  pitchformer={args.pitchformer}", flush=True)
+          f"  pitchformer={args.pitchformer}  per_stat_shrink={args.per_stat_shrink}"
+          f"  recal={sim_kw.get('recal', 'v13 default')}", flush=True)
     s = Sim(**sim_kw)
     outcomes = real_runs(2024)
     games = [g for g in s.real_games(2024, limit=10000, pregame_staff=args.pregame_staff)

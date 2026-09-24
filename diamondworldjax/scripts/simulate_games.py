@@ -140,6 +140,12 @@ def simulate(
         if skill_mode == "sample":
             sig = np.asarray(params.get("player_sigma", np.ones_like(mu)))
             mu = mu + sig * np.random.default_rng(seed).standard_normal(mu.shape)
+        if mu.ndim == 3:
+            # --skill-prior walk checkpoint: player_mu is (P, seasons, D). The model
+            # clamps any season past training to the last trained one, so for a
+            # held-out season that is exactly mu[:, -1]; the 2-D fusion path uses
+            # the same module as the seasonal one, so the result is identical.
+            mu = mu[:, -1, :]
         params["player_skills"] = jnp.asarray(mu)
 
     G = len(games)

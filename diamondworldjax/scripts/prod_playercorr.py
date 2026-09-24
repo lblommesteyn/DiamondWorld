@@ -37,6 +37,9 @@ def main():
                     help="Must match the checkpoint's --nested (v17+).")
     ap.add_argument("--skill-prior", choices=["iso", "learned", "lkj", "walk"], default="iso",
                     help="Must match the checkpoint's --skill-prior (v17+).")
+    ap.add_argument("--pitchformer", action="store_true",
+                    help="Must match the checkpoint's --pitchformer (v22pf). Without it "
+                         "the attention params are silently ignored.")
     ap.add_argument("--per-stat-shrink", action="store_true",
                     help="Must match the checkpoint's --per-stat-shrink.")
     ap.add_argument("--tag", default="v12")
@@ -108,7 +111,8 @@ def main():
         _walk_kw = {"season_base": TRAIN[0], "n_seasons": len(TRAIN)}
     model_fn = partial(pa_model, outcome_only=True, fatigue=True,
                        bilinear_rank=args.bilinear_rank, nested=args.nested,
-                       skill_prior=args.skill_prior, **_walk_kw)
+                       skill_prior=args.skill_prior, pitchformer=args.pitchformer,
+                       **_walk_kw)
     gids = te["game_pk"].unique().to_numpy()
 
     # per-batter accumulators
