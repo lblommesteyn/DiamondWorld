@@ -551,20 +551,22 @@ about what is validated by what: the market evidence in \S\ref{sec:val} validate
 counterfactual machinery, whereas the lineup number below is an application produced by that machinery
 and is not itself market-validated. The two claims are kept separate.
 
-Across 50 held-out 2024 games with 12 candidate orders each, the naive gain measured on the selection
-seeds is $+0.47$ runs per game, which annualizes to an implausible $+76$ runs per season. Scored on
-independent evaluation seeds, that gain collapses to $-0.03$ runs per game (95\% cluster CI $[-0.12,
-+0.06]$), with only half of games improved and the selected order beating a random order by $+0.003$
-versus the actual order's $+0.032$. The corrected estimate is statistically indistinguishable from zero.
-We read this as two findings. First, the winner's-curse correction is doing real work: without the
-selection/evaluation seed split we would have reported a large, entirely illusory improvement. Second,
-batting-order optimization is a near-null lever at this granularity, consistent with the sabermetric
-consensus that lineup order is worth at most a few runs across a full season. The methodological point of
+Using the locked model with leak-free staff, across 500 held-out 2024 games with 24 candidate orders each
+(the actual order, two rate heuristics, and random permutations; $500$ replicas to select, $2{,}000$ to
+evaluate), the naive gain measured on the selection seeds is $+0.24$ runs per game, which annualizes
+to an implausible $+39$ runs per season. Scored on independent evaluation seeds, the selected order is
+slightly \emph{worse} than the manager's: $-0.019$ runs per game ($[-0.028,-0.010]$), better in only
+$43\%$ of games. The size of the lever explains why. The actual order beats a random ordering of the
+same nine hitters by only $+0.029$ runs per game (about five runs a season), so the differences among
+candidate orders are smaller than the selection noise, and picking the best-looking candidate picks
+noise. We read this as two findings. First, the winner's-curse correction is doing real work: without
+the selection/evaluation seed split we would have reported a large, entirely illusory improvement.
+Second, batting order is a near-null lever that managers already exploit, consistent with the
+sabermetric consensus that it is worth a few runs across a full season. The methodological point of
 the study is not that the simulator wins a decision, but that the same discipline used for the market
 validation prevents it from manufacturing one. Together the two studies mark the boundary of use: the
 simulator is trustworthy on levers the market can check, such as who pitches, and on levers it cannot
-check it should be trusted only as far as a winner's-curse-controlled estimate allows. (The lineup
-study was run on an earlier version of the simulator.)
+check it should be trusted only as far as a winner's-curse-controlled estimate allows.
 
 \section{Limitations}
 We are explicit about the boundaries. (1) The market is an external forecaster, not causal ground truth;
