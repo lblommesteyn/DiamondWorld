@@ -44,6 +44,10 @@ def main():
     ap.add_argument("--min-after", type=int, default=5)
     ap.add_argument("--min-rot", type=int, default=3,
                     help="post-deadline starts needed to count as one of the new team's regulars")
+    ap.add_argument("--ratings-through", default=None,
+                    help="ISO date: rebuild player ratings from training seasons plus every 2024 game "
+                         "BEFORE this date (e.g. 2024-07-30, the trade deadline), as run_inseason_sim "
+                         "does, and run the counterfactuals with them. Default: frozen training ratings.")
     ap.add_argument("--tag", default="v22L")
     args = ap.parse_args()
 
@@ -67,6 +71,31 @@ def main():
             movers.append((pid, teams[0], new, dates[post[0][0]], pre, post))
 
     s = Sim(ckpt=args.ckpt, hook_model=True)
+    if args.ratings_through:
+        # Decision-time ratings: what a front office knew on the cutoff date, nothing later.
+        import pickle
+        import polars as pl
+        from diamondworldjax.data.pipeline import load_seasons
+        from diamondworldjax.paths import processed_root
+        from diamondworldjax.scripts.run_inseason_sim import extend_table, install
+        from diamondworldjax.scripts.train_pa import _build_player_table
+        meta = pickle.load(open(args.ckpt, "rb"))["pa_metadata"]
+        cfg = meta["config"]
+        train = load_seasons(list(meta["train_seasons"]), data_root=processed_root())
+        te = load_seasons([2024], data_root=processed_root())
+        before_pks = [p for p, d in dates.items() if d < args.ratings_through]
+        before = te.filter(pl.col("game_pk").is_in(before_pks))
+        fresh = _build_player_table(
+            pl.concat([train, before], how="diagonal_relaxed"),
+            recency_halflife=cfg.get("recency_halflife"),
+            contact_quality=cfg.get("contact_quality", False),
+            per_stat_shrink=cfg.get("per_stat_shrink", False),
+            shrink_contact_quality=cfg.get("shrink_contact_quality", False),
+            pitcher_rates=cfg.get("pitcher_rates", False))
+        table, n_extra = extend_table(s.ptab, fresh)
+        install(s, table, dict(s.params), n_extra)
+        print(f"ratings through {args.ratings_through} (exclusive): {len(before):,} 2024 pitches, "
+              f"{n_extra} players added", flush=True)
     games = {int(g["game_pk"]): g for g in s.real_games(2024, limit=10000, pregame_staff=True)}
     id2i = s.id2i
 
@@ -121,6 +150,8 @@ def main():
             cf_wins=args.cal * deltas.sum()))
 
     L = ["TRADE-DEADLINE DECISION STUDY (2024), win probability in market-calibrated points",
+         f"  ratings: {'through ' + args.ratings_through + ' (exclusive)' if args.ratings_through else 'frozen at end of training'}; "
+         f"per-start credits from {args.arrays}",
          f"  simulator: {args.ckpt}, R={args.r} per counterfactual, calibration slope {args.cal}",
          "  at deadline = sim value per start from PRE-trade starts only;",
          "  counterfactual = post-trade starts re-simulated with him vs each new-team regular;",
