@@ -17,7 +17,7 @@ from pathlib import Path
 import numpy as np
 import polars as pl
 
-from diamondworldjax.scripts.simulator_benchmarks import team_rates_2024, american_implied
+from diamondworldjax.scripts.simulator_benchmarks import ODDS, team_rates_2024, american_implied
 
 
 def logit(p):
@@ -25,10 +25,10 @@ def logit(p):
     return np.log(p / (1 - p))
 
 
-def _series_pairs(arrays, odds_csv):
+def _series_pairs(arrays, odds_csv, season=2024):
     d = np.load(arrays)
     sh, sa, pk = d["sim_home"], d["sim_away"], d["game_pk"].astype(int)
-    _, pkt = team_rates_2024()
+    _, pkt = team_rates_2024(season)
     keep = np.array([p in pkt for p in pk]); sh, sa, pk = sh[keep], sa[keep], pk[keep]
     sim = (sh > sa).mean(1)
     od = pl.read_csv(odds_csv)
@@ -94,14 +94,15 @@ def main():
     ap.add_argument("--arrays", default="data/eval2/calib_v15-pregame-hook-r500_arrays.npz")
     ap.add_argument("--tag", default=None,
                     help="report suffix; the default keeps the original validation_stats.txt")
+    ap.add_argument("--season", type=int, default=2024, choices=sorted(ODDS))
     args = ap.parse_args()
     arr = args.arrays
     R = int(np.load(arr)["sim_home"].shape[1])
-    series, n_games, n_teams = _series_pairs(arr, "data/eval2/odds_2023_2024.csv")
+    series, n_games, n_teams = _series_pairs(arr, ODDS[args.season], args.season)
     n_series = len(series)
     gsz = np.array([len(s[0]) for s in series])
 
-    L = [f"WITHIN-SERIES VALIDATION STATISTICS (2024, R={R}, market forecast changes)",
+    L = [f"WITHIN-SERIES VALIDATION STATISTICS ({args.season}, R={R}, market forecast changes)",
          f"  arrays: {arr}", ""]
     L.append(f"  {n_games} games in {n_series} series across {n_teams} teams; "
              f"games/series: mean {gsz.mean():.1f}, median {int(np.median(gsz))}, max {gsz.max()}")

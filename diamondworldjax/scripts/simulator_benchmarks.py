@@ -40,12 +40,22 @@ def american_implied(ml):
     return np.where(ml > 0, 100.0 / (ml + 100.0), -ml / (-ml + 100.0))
 
 
-def team_rates_2024():
-    """Per-team runs scored / allowed / games from the MLB schedule, for Log5."""
+ODDS = {2024: "data/eval2/odds_2023_2024.csv", 2025: "data/eval2/odds_2025.csv"}
+
+
+def team_rates_2024(season=2024):
+    """Per-team runs scored / allowed / games from the MLB schedule, for Log5.
+
+    Named for its original season; `season` selects another. The schedule is read from
+    data/cache, then from data/cache/market where season_market_validation caches it.
+    """
     CACHE.mkdir(parents=True, exist_ok=True)
-    p = CACHE / "sched_2024.json"
+    p = CACHE / f"sched_{season}.json"
+    alt = CACHE / "market" / f"sched_{season}.json"
+    if (not p.exists() or p.stat().st_size < 1000) and alt.exists():
+        p = alt
     if not p.exists() or p.stat().st_size < 1000:
-        url = "https://statsapi.mlb.com/api/v1/schedule?sportId=1&season=2024&gameType=R"
+        url = f"https://statsapi.mlb.com/api/v1/schedule?sportId=1&season={season}&gameType=R"
         p.write_bytes(urllib.request.urlopen(url, timeout=60).read())
     sched = json.loads(p.read_text())
     rs, ra, w, g = {}, {}, {}, {}
@@ -108,7 +118,8 @@ def main():
     # arrays filename keeps the output named after its own input.
     ap.add_argument("--tag", default=None)
     ap.add_argument("--season-2024-only", action="store_true", default=True,
-                    help="Keep only 2024 game_pks (the test season).")
+                    help="Keep only game_pks of --season (the test season).")
+    ap.add_argument("--season", type=int, default=2024, choices=sorted(ODDS))
     args = ap.parse_args()
     if args.tag is None:
         stem = Path(args.arrays).name
@@ -123,7 +134,7 @@ def main():
     rh, ra_, rt = d["real_home"], d["real_away"], d["real_total"]
     pk = d["game_pk"].astype(int)
 
-    pyth, pk_teams = team_rates_2024()
+    pyth, pk_teams = team_rates_2024(args.season)
     in2024 = np.array([p in pk_teams for p in pk])
     if args.season_2024_only:
         sh, sa, st, rh, ra_, rt, pk = (x[in2024] for x in (sh, sa, st, rh, ra_, rt, pk))
@@ -141,7 +152,7 @@ def main():
         if hid in pyth and aid in pyth:
             base = log5(pyth[hid], pyth[aid])
             log5_wp[i] = 1 / (1 + np.exp(-(np.log(base / (1 - base + 1e-9) + 1e-12) + HFA)))
-    odds = pl.read_csv("data/eval2/odds_2023_2024.csv")
+    odds = pl.read_csv(ODDS[args.season])
     om = {int(r["game_pk"]): (r["ml_home"], r["ml_away"]) for r in odds.iter_rows(named=True)
           if r["ml_home"] is not None and r["ml_away"] is not None}
     mkt_wp = np.full(n, np.nan)

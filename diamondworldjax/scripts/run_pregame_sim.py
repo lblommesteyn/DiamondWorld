@@ -49,6 +49,8 @@ def main():
     ap.add_argument("--r", type=int, default=100)
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--chunk", type=int, default=250)
+    ap.add_argument("--season", type=int, default=2024,
+                    help="season to simulate; must be after the checkpoint's train_end")
     # Which model to simulate with. Without these the script silently loaded v15
     # regardless of what the --tag claimed, which is how a sweep labelled v16 came
     # to have been run on v15. Now the checkpoint is explicit.
@@ -104,8 +106,11 @@ def main():
           f"train_end={s.train_end} recency_halflife={s.recency_hl} "
           f"contact_quality={s.contact_quality} per_stat_shrink={s.per_stat_shrink} "
           f"skill_prior={s.skill_prior} pitchformer={s.pitchformer}", flush=True)
-    outcomes = real_runs(2024)
-    games = [g for g in s.real_games(2024, limit=10000, pregame_staff=args.pregame_staff)
+    if args.season <= s.train_end:
+        raise SystemExit(f"--season {args.season} is inside the checkpoint's training range "
+                         f"(train_end={s.train_end}); the test season must be held out")
+    outcomes = real_runs(args.season)
+    games = [g for g in s.real_games(args.season, limit=10000, pregame_staff=args.pregame_staff)
              if g["park"] != 0 and int(g["game_pk"]) in outcomes]
     if args.limit:
         games = games[:args.limit]
@@ -136,6 +141,7 @@ def main():
     # together merely because they cover the same game ids.
     cache_config = json.dumps({
         "ckpt": args.ckpt,
+        "season": args.season,
         "r": args.r,
         "train_end": args.train_end,
         "contact_quality": args.contact_quality,

@@ -1,0 +1,18 @@
+SIMULATOR vs RATE BASELINES on market within-series moves (v22L_s42-pregame-leakfree-r2000_steamer)
+  457 series, 1341 game-deviations (games where Steamer covers both starters and >= 8 batters a side)
+  baselines = starter allowed-run index diff + lineup rate-value diff, linear, fit to the
+  market on the other half of series (cross-fit); the simulator is fit to nothing
+
+  r(simulator, market)               +0.503  95% CI [+0.412, +0.585]
+  r(own baseline, market)            +0.411  95% CI [+0.335, +0.490]
+  simulator - own                    +0.092  95% CI [+0.044, +0.143]
+  sim partial | own                  +0.339  95% CI [+0.257, +0.425]
+  own partial | sim                  +0.123  95% CI [+0.055, +0.197]
+  r(steamer baseline, market)        +0.543  95% CI [+0.464, +0.619]
+  simulator - steamer                -0.040  95% CI [-0.085, +0.006]
+  sim partial | steamer              +0.292  95% CI [+0.200, +0.384]
+  steamer partial | sim              +0.369  95% CI [+0.304, +0.447]
+  r(own+steamer baseline, market)    +0.561  95% CI [+0.477, +0.643]
+  simulator - own+steamer            -0.058  95% CI [-0.097, -0.017]
+  sim partial | own+steamer          +0.229  95% CI [+0.146, +0.315]
+  own+steamer partial | sim          +0.361  95% CI [+0.297, +0.443]

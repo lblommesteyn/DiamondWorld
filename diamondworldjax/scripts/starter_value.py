@@ -35,12 +35,12 @@ import polars as pl
 
 from diamondworldjax.data.pipeline import load_seasons
 from diamondworldjax.paths import processed_root
-from diamondworldjax.scripts.simulator_benchmarks import american_implied, team_rates_2024
+from diamondworldjax.scripts.simulator_benchmarks import ODDS, american_implied, team_rates_2024
 
 
-def starters_2024():
+def starters_2024(season=2024):
     """game_pk -> {half: starting pitcher id}: the first pitcher of each half."""
-    df = load_seasons([2024], data_root=processed_root()).filter(pl.col("pa_terminal"))
+    df = load_seasons([season], data_root=processed_root()).filter(pl.col("pa_terminal"))
     first = (df.sort(["game_pk", "at_bat_number"])
                .group_by(["game_pk", "half"], maintain_order=True)
                .agg(pl.col("pitcher_id").first()))
@@ -61,28 +61,21 @@ def _corr_ci(x, y, B=4000, seed=0):
     return float(np.corrcoef(x, y)[0, 1]), np.percentile(rs, [2.5, 97.5])
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--arrays", default="data/eval2/calib_ens_post6_arrays.npz")
-    ap.add_argument("--odds", default="data/eval2/odds_2023_2024.csv")
-    ap.add_argument("--min-starts", type=int, default=10)
-    ap.add_argument("--top-half", default=None,
-                    help="value of the `half` column for the top of an inning (home pitches); "
-                         "auto-detected when omitted")
-    ap.add_argument("--tag", default=None)
-    args = ap.parse_args()
-    tag = args.tag or Path(args.arrays).stem.removeprefix("calib_").removesuffix("_arrays")
+def starter_credits(arrays, odds=None, top_half=None, season=2024):
+    """pitcher id -> [(game_pk, sim credit, market credit)], one entry per start.
 
-    d = np.load(args.arrays)
+    Credit is the within-series win-probability deviation from the starter's own team's view.
+    """
+    d = np.load(arrays)
     sh, sa, pk = d["sim_home"], d["sim_away"], d["game_pk"].astype(int)
     sim = (sh > sa).mean(1)
-    _, pkt = team_rates_2024()
-    od = pl.read_csv(args.odds)
+    _, pkt = team_rates_2024(season)
+    od = pl.read_csv(odds or ODDS[season])
     om = {int(r["game_pk"]): (r["ml_home"], r["ml_away"]) for r in od.iter_rows(named=True)
           if r["ml_home"] is not None and r["ml_away"] is not None}
-    st = starters_2024()
+    st = starters_2024(season)
     halves = sorted({h for v in st.values() for h in v})
-    top = args.top_half
+    top = top_half
     if top is None:
         top = next((h for h in halves if str(h).lower() in ("top", "t", "0")), halves[0])
     bot = [h for h in halves if h != top][0]
@@ -108,6 +101,22 @@ def main():
         for r, ds, dm in zip(ser, s, m):
             credit[r[3]].append((r[0], ds, dm))        # home starter
             credit[r[4]].append((r[0], -ds, -dm))      # away starter, own-team view
+    return credit, top
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--arrays", default="data/eval2/calib_ens_post6_arrays.npz")
+    ap.add_argument("--odds", default=None, help="defaults to the --season odds file")
+    ap.add_argument("--season", type=int, default=2024, choices=sorted(ODDS))
+    ap.add_argument("--min-starts", type=int, default=10)
+    ap.add_argument("--top-half", default=None,
+                    help="value of the `half` column for the top of an inning (home pitches); "
+                         "auto-detected when omitted")
+    ap.add_argument("--tag", default=None)
+    args = ap.parse_args()
+    tag = args.tag or Path(args.arrays).stem.removeprefix("calib_").removesuffix("_arrays")
+    credit, top = starter_credits(args.arrays, args.odds, args.top_half, args.season)
 
     names = {}
     nf = Path("data/cache/projections/mlb_names.json")

@@ -318,8 +318,19 @@ market} on one half of the series and scored on the other. The simulator is fit 
 $0.53$ $[0.45,0.60]$ and the baseline at $0.42$ $[0.35,0.48]$; the paired difference is $+0.12$
 $[+0.07,+0.16]$. The simulator also carries most of the signal: holding the baseline fixed, it still
 explains the market (partial $r{=}0.38$ $[0.30,0.45]$), while the baseline adds little beyond the
-simulator (partial $0.10$ $[0.04,0.16]$). Playing the game out, with the actual park, bullpen hand-offs,
-and batter-by-batter matchups, is worth more than a sum of player rates.
+simulator (partial $0.10$ $[0.04,0.16]$). Given the same player ratings, playing the game out is worth
+more than summing them.
+
+\textbf{Against Steamer-based pricing.} The market is partly built from public projections, so we
+repeat the test with the same index built from Steamer's preseason projections instead of our own
+ratings (1{,}341 deviations where Steamer covers both starters and at least eight batters a side).
+Here the result is a tie: Steamer's index, again fit to the market, reaches $0.54$ against the
+simulator's $0.50$ (difference $-0.04$ $[-0.09,+0.01]$). The two are complementary rather than
+redundant: the simulator still explains the market with Steamer's index held fixed (partial $r{=}0.29$
+$[0.20,0.38]$), and Steamer's index does with the simulator held fixed (partial $0.37$). Read together
+with the previous paragraph, the simulator's engine adds value and its player ratings are what trail,
+consistent with Sec.~\ref{sec:bench}, where our player layer is below Steamer's alone and level with it
+only when averaged with a projection.
 
 \textbf{Both pitching and hitting are priced.} Decomposing each within-series move into a pitching
 channel (starters' allowed-run rate) and a hitting channel (lineup rate value), both carry independent

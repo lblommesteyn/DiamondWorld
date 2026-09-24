@@ -127,10 +127,50 @@ def shrink_toward_league(rates, n, reg):
     return out.astype(np.float32)
 
 
+# Pitcher allowed-rate columns (hit, walk+HBP, strikeout, home run per batter faced) and the
+# weighted batters-faced count. Before these existed, a pitcher's row carried only his own BATTING
+# rates, which are empty in the universal-DH era, so pitcher quality reached the model solely
+# through the learned skill latent and any pitcher without training data sat at league average.
+PITCHER_RATE_COLS = (7, 8, 9, 10)
+PITCHER_BF_COL = 11
+# Stabilisation points in batters faced, from the public sabermetric literature (Carleton):
+# K ~70, BB ~170, HR ~1300, and hits on balls in play far slower. Not tuned on our data.
+PITCHER_SHRINK_REG = (2000.0, 170.0, 70.0, 1300.0)
+
+
+def _pitcher_allowed_rates(terminal, pitcher_col, id_to_idx, P, recency_halflife, max_season):
+    """(P, 4) shrunk allowed rates and (P,) weighted batters faced, recency-weighted like batting."""
+    import polars as pl
+    t = terminal.filter(pl.col("pa_outcome").is_not_null())
+    if recency_halflife and "season" in t.columns:
+        w = (0.5 ** ((max_season - pl.col("season")) / recency_halflife))
+    else:
+        w = pl.lit(1.0)
+    oc = pl.col("pa_outcome")
+    g = (t.with_columns(w.alias("_w"))
+          .group_by(pitcher_col)
+          .agg([(pl.col("_w") * oc.is_in(["1B", "2B", "3B", "HR"])).sum().alias("h"),
+                (pl.col("_w") * oc.is_in(["BB", "HBP"])).sum().alias("bb"),
+                (pl.col("_w") * (oc == "K")).sum().alias("k"),
+                (pl.col("_w") * (oc == "HR")).sum().alias("hr"),
+                pl.col("_w").sum().alias("bf")]))
+    counts = np.zeros((P, 4), dtype=np.float64)
+    bf = np.zeros((P, 1), dtype=np.float64)
+    for row in g.iter_rows(named=True):
+        i = id_to_idx.get(int(row[pitcher_col]))
+        if i is None:
+            continue
+        counts[i] = (row["h"], row["bb"], row["k"], row["hr"])
+        bf[i, 0] = row["bf"]
+    rates = counts / np.maximum(bf, 1.0)
+    return shrink_toward_league(rates, bf, np.array(PITCHER_SHRINK_REG)), bf[:, 0].astype(np.float32)
+
+
 def _build_player_table(pitches, recency_halflife: float | None = None,
                         contact_quality: bool = False,
                         per_stat_shrink: bool = False,
-                        shrink_contact_quality: bool = False) -> dict:
+                        shrink_contact_quality: bool = False,
+                        pitcher_rates: bool = False) -> dict:
     """Build the per-player stat/handedness table.
 
     recency_halflife (seasons): if set, each PA's contribution to a player's rate
@@ -248,6 +288,14 @@ def _build_player_table(pitches, recency_halflife: float | None = None,
                 # make it WORSE than raw (0.614 against 0.630).
                 stats[:, 5:7] = shrink_toward_league(
                     stats[:, 5:7], stats[:, 4:5], np.array(CQ_SHRINK_REG))
+
+    if pitcher_rates:
+        # Columns 7..11 were unused (zeros). Rows of non-pitchers get the league rate, which is
+        # inert once the model learns the batters-faced column says "no evidence".
+        prates, bf = _pitcher_allowed_rates(terminal, pitcher_col, id_to_idx, P,
+                                            recency_halflife, max_season)
+        stats[:, list(PITCHER_RATE_COLS)] = prates
+        stats[:, PITCHER_BF_COL] = bf
 
     # Per-player modal handedness for the simulator + the hand embedding.
     # bat_hand: modal batting side (stand); pit_hand: modal throw hand (p_throws).
@@ -451,6 +499,11 @@ def main() -> None:
     parser.add_argument("--pa-arch", type=str, default="transformer",
                         choices=["transformer", "gru", "gru_skip"],
                         help="PA sequence model architecture (requires --pitchformer).")
+    parser.add_argument("--pitcher-rates", action="store_true",
+                        help="Fill player-table columns 7-11 with each pitcher's shrunk allowed "
+                             "hit/BB/K/HR rates per batter faced and his batters-faced count. "
+                             "Without it a pitcher's row holds only his own batting rates. "
+                             "Fresh train; the table is stored in the checkpoint.")
     parser.add_argument("--tag", type=str, default=None,
                         help="Checkpoint/log dir tag override (e.g. v6).")
     parser.add_argument("--train-end", type=int, default=2022,
@@ -488,7 +541,8 @@ def main() -> None:
     player_table_np = _build_player_table(pitches, recency_halflife=args.recency_halflife,
                                           contact_quality=args.contact_quality,
                                           per_stat_shrink=args.per_stat_shrink,
-                                          shrink_contact_quality=args.shrink_contact_quality)
+                                          shrink_contact_quality=args.shrink_contact_quality,
+                                          pitcher_rates=args.pitcher_rates)
     print(f"  {len(player_table_np['all_ids']):,} unique players.", flush=True)
 
     print("Filtering to PA-terminal rows...", flush=True)
@@ -551,7 +605,7 @@ def main() -> None:
         "version": 1, "train_seasons": TRAIN_SEASONS,
         "config": {name: getattr(args, name) for name in (*MODEL_FIELDS,
             "train_end", "recency_halflife", "contact_quality", "per_stat_shrink",
-            "shrink_contact_quality")},
+            "shrink_contact_quality", "pitcher_rates")},
         "player_table": player_table_np, "park_map": park_map,
     }}
     svi_state, guide, losses = train(

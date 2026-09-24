@@ -33,14 +33,20 @@ def main():
     ap.add_argument("--r-sel", type=int, default=150)
     ap.add_argument("--r-eval", type=int, default=300)
     ap.add_argument("--chunk-games", type=int, default=8)
+    ap.add_argument("--ckpt", default=None,
+                    help="checkpoint .pkl; default is Sim's legacy V15. New checkpoints restore "
+                         "their own feature table and config.")
+    ap.add_argument("--pregame-staff", action="store_true",
+                    help="bullpen from prior games only (leak-free), as in run_pregame_sim")
+    ap.add_argument("--tag", default=None, help="report suffix; default keeps lineup_backtest.txt")
     args = ap.parse_args()
 
-    s = Sim()
+    s = Sim(ckpt=args.ckpt, hook_model=True) if args.ckpt else Sim()
     unknown = s.unknown_idx
     bstat = s.stats
     bq = bstat[:, 0] + 1.8 * bstat[:, 3] + 0.7 * bstat[:, 1] - 0.3 * bstat[:, 2]     # wOBA-ish
     obp = bstat[:, 0] + 0.7 * bstat[:, 1]
-    games = [g for g in s.real_games(2024, limit=1500)
+    games = [g for g in s.real_games(2024, limit=1500, pregame_staff=args.pregame_staff)
              if g["park"] != 0 and g["home_staff"] and g["home_staff"][0] != unknown
              and g["away_staff"] and g["away_staff"][0] != unknown
              and sum(1 for x in g["home_lineup"] if x != unknown) == 9][:args.games]
@@ -122,7 +128,8 @@ def main():
     rep = "\n".join(L)
     print(rep)
     Path("data/eval2").mkdir(parents=True, exist_ok=True)
-    Path("data/eval2/lineup_backtest.txt").write_text(rep + "\n")
+    out = f"data/eval2/lineup_backtest_{args.tag}.txt" if args.tag else "data/eval2/lineup_backtest.txt"
+    Path(out).write_text(rep + "\n")
 
 
 if __name__ == "__main__":
