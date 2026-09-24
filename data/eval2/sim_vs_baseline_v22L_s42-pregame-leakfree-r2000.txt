@@ -1,0 +1,11 @@
+SIMULATOR vs RATE BASELINE on market within-series moves (v22L_s42-pregame-leakfree-r2000)
+  555 series, 1690 game-deviations (games with a known starter and >= 8 known batters)
+  baseline = starter allowed-run index diff + lineup rate-value diff, linear, fit to the
+  market on the other half of series; simulator is not fit to the market at all
+
+  r(simulator, market)               +0.534  95% CI [+0.454, +0.601]
+  r(baseline, market)  [cross-fit]   +0.417  95% CI [+0.349, +0.480]
+  simulator - baseline               +0.117  95% CI [+0.074, +0.163]
+  sim partial | baseline             +0.378  95% CI [+0.299, +0.449]
+  baseline partial | sim             +0.097  95% CI [+0.039, +0.157]
+  r(sim + baseline, market)          +0.540  95% CI [+0.462, +0.607]
