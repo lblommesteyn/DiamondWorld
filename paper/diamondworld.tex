@@ -527,8 +527,8 @@ of the pitcher's own rotation. The misses are informative rather than random. Fi
 overvaluations are veterans aged 31 or older whose prior-season rates had not yet caught up with their
 decline (Paxton, Maeda, P\'erez, Walker, Verlander; the model has no aging curve). Four of the eight
 largest undervaluations had little or no major-league history before 2024: rookies Skenes and Jones,
-and the Japanese signings Yamamoto and Imanaga, whom the model sees only through a league-average
-prior; two more are breakouts (Skubal and Ragans). Aging and pre-MLB evaluation are precisely the inputs a team
+and the Japanese signings Yamamoto and Imanaga, whom the model cannot tell apart from any other
+unknown player (they share one neutral placeholder); two more are breakouts (Skubal and Ragans). Aging and pre-MLB evaluation are precisely the inputs a team
 supplies from its own scouting, and the calibrated simulator is the layer that turns them into wins.
 
 \begin{figure}[t]
@@ -578,7 +578,7 @@ $0.45$ runs per game high ($9.08$ vs $8.63$); the proper-score comparisons mean-
 so they test shape, and the offset largely cancels in within-series differences. (7) The replica count
 matters: at $R{=}100$ the same kind of model scores $0.31$ to $0.38$, so the headline requires
 simulating enough replicas per game ($R{=}2{,}000$ takes under ten minutes for a full season on one consumer GPU). (8) The starter valuations inherit the model's blind spots: no
-aging curve, and only a league-average prior for pitchers new to the major leagues.
+aging curve, and no information at all about pitchers new to the major leagues.
 
 \section{Discussion}
 The contribution is a way to \emph{externally validate the direction and calibrated scale of
