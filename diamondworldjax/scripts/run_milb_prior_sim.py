@@ -1,21 +1,33 @@
-"""Season simulation where rookie hitters get a translated minor-league prior instead of the blank.
+"""Season simulation where players new to MLB get a translated prior instead of the blank placeholder.
 
-The locked model maps every player absent from its training table to one shared placeholder (a zero
-embedding), so a rookie with a strong AAA season is simulated exactly like one with a weak one. This
-appends a row for each such hitter who appears in a test-season lineup, filled from his prior-season
-AAA/AA lines translated with MLE factors (milb_translation.py; fit on MLB seasons before the test
-season) and shrunk toward the league with the model's per-stat constants. Column 4 carries the
-effective minor-league PA, as the batting-PA column does for major leaguers. The new rows get a zero
-skill vector (the prior mean); nothing else about the model changes, and nothing from the test season
-is used except each player's batting side, which is known before the game.
+The model maps every player absent from its training table to one shared placeholder (a zero
+embedding), so a rookie or an import with a strong record elsewhere is simulated exactly like one with
+a weak record. This appends a row for each such player who appears in a test-season game, filled from
+his prior-season lines in other leagues, translated to MLB scale with MLE-style factors and shrunk
+toward the league with the model's per-stat constants.
 
-Pitchers are not given priors: the locked model has no pitcher rate features.
+  hitters   AAA/AA (always) and NPB (--npb) batting lines -> batting columns 0..4
+  pitchers  AAA/AA and NPB pitching lines -> pitcher allowed-rate columns 7..11 (--pitchers; needs a
+            checkpoint trained with --pitcher-rates, since the locked model has no pitcher columns)
 
-  python -m diamondworldjax.scripts.run_milb_prior_sim --ckpt <ckpt> --season 2024 --r 2000 --tag X
+Factors are fit on players seen in the source league in season t and in MLB in t+1, with t+1 before
+the test season, so the test season never informs its own factors. Prior lines come from the two
+seasons before the test season (the later one at full weight, the earlier at half). New rows get a
+zero skill vector (the prior mean); the model itself is unchanged, and nothing from the test season is
+used except each player's handedness, which is known before the game.
+
+  python -m diamondworldjax.scripts.run_milb_prior_sim --ckpt <ckpt> --season 2024 --r 2000 --tag X \
+      [--pitchers] [--npb]
 """
 from __future__ import annotations
 
 import argparse
+import json
+import pickle
+import re
+import unicodedata
+import urllib.request
+from pathlib import Path
 
 import numpy as np
 import polars as pl
@@ -26,22 +38,107 @@ from diamondworldjax.scripts.milb_translation import SHRINK, STATS, milb_rates, 
 from diamondworldjax.scripts.run_inseason_sim import install
 from diamondworldjax.scripts.run_pregame_sim import real_runs
 from diamondworldjax.scripts.scenario_sim import Sim
+from diamondworldjax.scripts.train_pa import PITCHER_BF_COL, PITCHER_RATE_COLS, PITCHER_SHRINK_REG
 
 RATE = {"hit": "hit", "bb": "bb_rate", "k": "k", "hr": "hr_rate"}
 COUNT = {"hit": "n_hit", "bb": "n_bb", "k": "n_k", "hr": "n_hr"}
+PSHRINK = dict(zip(STATS, PITCHER_SHRINK_REG))
 
 
-def fit_factors(milb, mlb, T, min_milb=200, min_mlb=100):
-    pairs = (milb.filter(pl.col("pa") >= min_milb).with_columns((pl.col("season") + 1).alias("next"))
+def with_rates(df):
+    return df.with_columns([(pl.col("h") / pl.col("pa")).alias("hit"),
+                            ((pl.col("bb") + pl.col("hbp")) / pl.col("pa")).alias("bb_rate"),
+                            (pl.col("so") / pl.col("pa")).alias("k"),
+                            (pl.col("hr") / pl.col("pa")).alias("hr_rate")])
+
+
+def milb_pitching(path="data/cache/milb/milb_pitching.csv"):
+    m = pl.read_csv(path).group_by(["player_id", "season", "level"]).agg(
+        [pl.col(c).sum() for c in ("pa", "h", "bb", "hbp", "so", "hr")])
+    return with_rates(m)
+
+
+def mlb_pitching(seasons):
+    t = (load_seasons(seasons, data_root=processed_root())
+         .filter(pl.col("pa_terminal") & pl.col("pa_outcome").is_not_null())
+         .select(["pitcher_id", "season", "pa_outcome"]))
+    o = pl.col("pa_outcome")
+    return (t.group_by(["pitcher_id", "season"]).agg([
+        pl.len().alias("pa"),
+        o.is_in(["1B", "2B", "3B", "HR"]).sum().alias("n_hit"),
+        o.is_in(["BB", "HBP"]).sum().alias("n_bb"),
+        (o == "K").sum().alias("n_k"),
+        (o == "HR").sum().alias("n_hr")]).rename({"pitcher_id": "player_id"}))
+
+
+# ---------------- NPB name matching ----------------
+def norm(name):
+    """Order-free, accent-free, romanization-tolerant key: 'Otani, Shohei' == 'Shohei Ohtani'."""
+    s = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode().lower()
+    s = re.sub(r"[^a-z ,]", "", s)
+    toks = [t for t in re.split(r"[ ,]+", s) if t]
+    fix = []
+    for t in toks:
+        for a, b in (("ou", "o"), ("oo", "o"), ("uu", "u"), ("oh", "o")):
+            t = t.replace(a, b)
+        fix.append(t)
+    return " ".join(sorted(fix))
+
+
+def mlb_people(seasons):
+    """MLBAM id -> full name for every MLB player in the given seasons (cached)."""
+    cache = Path("data/cache/npb/mlb_people.json")
+    known = json.loads(cache.read_text()) if cache.exists() else {}
+    for s in seasons:
+        if str(s) in known.get("_seasons", []):
+            continue
+        d = json.load(urllib.request.urlopen(
+            f"https://statsapi.mlb.com/api/v1/sports/1/players?season={s}", timeout=60))
+        for p in d.get("people", []):
+            known[str(p["id"])] = p["fullName"]
+        known.setdefault("_seasons", []).append(str(s))
+    cache.write_text(json.dumps(known))
+    return {int(k): v for k, v in known.items() if k != "_seasons"}
+
+
+def npb_with_ids(group, people):
+    """NPB lines with an MLB id, where the romanized name matches exactly one MLB player."""
+    path = Path(f"data/cache/npb/npb_{group}.csv")
+    if not path.exists():
+        return None
+    by_key = {}
+    for pid, nm in people.items():
+        by_key.setdefault(norm(nm), []).append(pid)
+    npb = pl.read_csv(path).with_columns(
+        pl.col("name").map_elements(lambda n: (lambda ids: ids[0] if len(ids) == 1 else None)(
+            by_key.get(norm(n), [])), return_dtype=pl.Int64).alias("player_id"))
+    npb = npb.filter(pl.col("player_id").is_not_null())
+    npb = npb.group_by(["player_id", "season"]).agg([pl.col(c).sum() for c in ("pa", "h", "bb", "hbp", "so", "hr")])
+    return with_rates(npb.with_columns(pl.lit("NPB").alias("level")))
+
+
+def fit_factors(src, mlb, T, levels, min_src=150, min_mlb=100):
+    pairs = (src.filter(pl.col("pa") >= min_src).with_columns((pl.col("season") + 1).alias("next"))
              .join(mlb.filter(pl.col("pa") >= min_mlb), left_on=["player_id", "next"],
                    right_on=["player_id", "season"], suffix="_mlb")
              .filter(pl.col("next") < T))
     out = {}
-    for lvl in ("AAA", "AA"):
+    for lvl in levels:
         p = pairs.filter(pl.col("level") == lvl)
-        out[lvl] = {s: float(p[COUNT[s]].sum() / max((p["pa_mlb"] * p[RATE[s]]).sum(), 1e-9))
-                    for s in STATS}
+        out[lvl] = {s: float(p[COUNT[s]].sum() / max((p["pa_mlb"] * p[RATE[s]]).sum(), 1e-9)) for s in STATS}
+        out[lvl]["n"] = len(p)
     return out
+
+
+def translate(lines, factors, league, shrink, T):
+    pa_eff, acc = 0.0, dict.fromkeys(STATS, 0.0)
+    for ln in lines.iter_rows(named=True):
+        w = 1.0 if ln["season"] == T - 1 else 0.5
+        f = factors[ln["level"]]
+        for k in STATS:
+            acc[k] += w * ln["pa"] * ln[RATE[k]] * f[k]
+        pa_eff += w * ln["pa"]
+    return [(acc[k] + shrink[k] * league[k]) / (pa_eff + shrink[k]) for k in STATS], pa_eff
 
 
 def main():
@@ -51,60 +148,118 @@ def main():
     ap.add_argument("--r", type=int, default=2000)
     ap.add_argument("--chunk", type=int, default=60)
     ap.add_argument("--limit", type=int, default=None)
+    ap.add_argument("--pitchers", action="store_true", help="also give new pitchers priors (needs --pitcher-rates checkpoint)")
+    ap.add_argument("--npb", action="store_true", help="also use NPB lines (imports)")
+    ap.add_argument("--no-hitters", action="store_true")
     ap.add_argument("--tag", required=True)
     args = ap.parse_args()
     T = args.season
 
+    cfg = pickle.load(open(args.ckpt, "rb"))["pa_metadata"]["config"]
+    if args.pitchers and not cfg.get("pitcher_rates"):
+        raise SystemExit("--pitchers needs a checkpoint trained with --pitcher-rates")
     s = Sim(ckpt=args.ckpt, hook_model=True)
     if T <= s.train_end:
         raise SystemExit(f"--season {T} is inside training (train_end={s.train_end})")
     base = s.ptab
-    milb = milb_rates()
-    mlb = mlb_rates(list(range(2015, T + 1)))
-    factors = fit_factors(milb, mlb, T)
-    prev = mlb.filter(pl.col("season") < T)
-    league = {k: float(prev[COUNT[k]].sum() / prev["pa"].sum()) for k in STATS}
-
-    te = load_seasons([T], data_root=processed_root()).filter(pl.col("pa_terminal"))
-    known = base["id_to_idx"]
-    hitters = (te.filter(~pl.col("batter_id").is_in(list(known)))
-                 .group_by("batter_id").agg((pl.col("batter_hand") == "R").mean().alias("r")))
-    mm = milb.filter(pl.col("season").is_in([T - 1, T - 2]))
-    new_ids, rows, bat_hand = [], [], []
     stats = np.asarray(base["stats"])
-    for r in hitters.iter_rows(named=True):
-        lines = mm.filter(pl.col("player_id") == r["batter_id"])
-        if len(lines) == 0:
-            continue
-        pa_eff, acc = 0.0, dict.fromkeys(STATS, 0.0)
-        for ln in lines.iter_rows(named=True):
-            w = 1.0 if ln["season"] == T - 1 else 0.5
-            for k in STATS:
-                acc[k] += w * ln["pa"] * ln[RATE[k]] * factors[ln["level"]][k]
-            pa_eff += w * ln["pa"]
-        row = np.zeros(stats.shape[1], dtype=stats.dtype)
-        row[:4] = [(acc[k] + SHRINK[k] * league[k]) / (pa_eff + SHRINK[k]) for k in STATS]
-        row[4] = pa_eff
-        # contact-quality columns: league value, since there is no MLB batted-ball data
-        seen = stats[:, 4] > 0
-        row[5:7] = np.average(stats[seen, 5:7], axis=0, weights=stats[seen, 4])
-        new_ids.append(int(r["batter_id"]))
-        rows.append(row)
-        bat_hand.append(1.0 if (r["r"] or 0) >= 0.5 else 0.0)
+    known = base["id_to_idx"]
+    people = mlb_people(range(2015, T + 1)) if args.npb else {}
+    te = load_seasons([T], data_root=processed_root()).filter(pl.col("pa_terminal"))
+    log = []
+
+    # ---- sources and factors ----
+    bat_src = milb_rates().select(["player_id", "season", "level", "pa", "hit", "bb_rate", "k", "hr_rate"])
+    bat_levels = ["AAA", "AA"]
+    if args.npb:
+        nb = npb_with_ids("batting", people)
+        if nb is not None:
+            bat_src = pl.concat([bat_src, nb.select(bat_src.columns)])
+            bat_levels.append("NPB")
+    mlb_b = mlb_rates(list(range(2015, T + 1)))
+    fb = fit_factors(bat_src, mlb_b, T, bat_levels)
+    prev = mlb_b.filter(pl.col("season") < T)
+    lg_b = {k: float(prev[COUNT[k]].sum() / prev["pa"].sum()) for k in STATS}
+    log.append(f"batting factors {json.dumps(fb)}")
+
+    if args.pitchers:
+        pit_src = milb_pitching().select(bat_src.columns)
+        pit_levels = ["AAA", "AA"]
+        if args.npb:
+            npit = npb_with_ids("pitching", people)
+            if npit is not None:
+                pit_src = pl.concat([pit_src, npit.select(pit_src.columns)])
+                pit_levels.append("NPB")
+        mlb_p = mlb_pitching(list(range(2015, T + 1)))
+        fp = fit_factors(pit_src, mlb_p, T, pit_levels)
+        prevp = mlb_p.filter(pl.col("season") < T)
+        lg_p = {k: float(prevp[COUNT[k]].sum() / prevp["pa"].sum()) for k in STATS}
+        log.append(f"pitching factors {json.dumps(fp)}")
+
+    # template rows: what an MLB-table pitcher looks like in the batting columns, and vice versa
+    bf_col = stats[:, PITCHER_BF_COL] if cfg.get("pitcher_rates") else np.zeros(len(stats))
+    pitcher_like = (stats[:, 4] == 0) & (bf_col > 0)
+    hitter_like = (stats[:, 4] > 0) & (bf_col == 0)
+    tmpl_p = stats[pitcher_like].mean(0) if pitcher_like.any() else stats.mean(0)
+    tmpl_h = stats[hitter_like].mean(0) if hitter_like.any() else stats.mean(0)
+
+    new_ids, rows, bat_hand, pit_hand = [], [], [], []
+    names = []
+    if not args.no_hitters:
+        hs = (te.filter(~pl.col("batter_id").is_in(list(known)))
+                .group_by("batter_id").agg((pl.col("batter_hand") == "R").mean().alias("r")))
+        src = bat_src.filter(pl.col("season").is_in([T - 1, T - 2]))
+        for r in hs.iter_rows(named=True):
+            lines = src.filter(pl.col("player_id") == r["batter_id"])
+            if len(lines) == 0:
+                continue
+            rates, pa_eff = translate(lines, fb, lg_b, SHRINK, T)
+            row = tmpl_h.copy()
+            row[:4] = rates
+            row[4] = pa_eff
+            new_ids.append(int(r["batter_id"])); rows.append(row)
+            bat_hand.append(1.0 if (r["r"] or 0) >= 0.5 else 0.0); pit_hand.append(0.5)
+            names.append(("H", int(r["batter_id"]), sorted(set(lines["level"].to_list()))))
+    if args.pitchers:
+        taken = set(new_ids)
+        ps = (te.filter(~pl.col("pitcher_id").is_in(list(known)))
+                .group_by("pitcher_id").agg((pl.col("pitcher_hand") == "R").mean().alias("r")))
+        src = pit_src.filter(pl.col("season").is_in([T - 1, T - 2]))
+        bf_log = cfg.get("pitcher_bf_log", False)
+        for r in ps.iter_rows(named=True):
+            if int(r["pitcher_id"]) in taken:
+                continue
+            lines = src.filter(pl.col("player_id") == r["pitcher_id"])
+            if len(lines) == 0:
+                continue
+            rates, bf = translate(lines, fp, lg_p, PSHRINK, T)
+            row = tmpl_p.copy()
+            row[list(PITCHER_RATE_COLS)] = rates
+            row[PITCHER_BF_COL] = np.log1p(bf) / np.log1p(2500.0) if bf_log else bf
+            new_ids.append(int(r["pitcher_id"])); rows.append(row)
+            bat_hand.append(0.5); pit_hand.append(1.0 if (r["r"] or 0) >= 0.5 else 0.0)
+            names.append(("P", int(r["pitcher_id"]), sorted(set(lines["level"].to_list()))))
 
     n = len(new_ids)
     table = {k: np.asarray(base[k]) for k in ("stats", "league", "hand", "bat_hand", "pit_hand")}
-    table["stats"] = np.concatenate([table["stats"], np.array(rows).reshape(n, -1)], 0)
+    table["stats"] = np.concatenate([table["stats"], np.array(rows, dtype=stats.dtype).reshape(n, -1)], 0)
     table["league"] = np.concatenate([table["league"], np.zeros(n, table["league"].dtype)])
-    bh = np.array(bat_hand, dtype=np.float32)
+    bh, ph = np.array(bat_hand, np.float32), np.array(pit_hand, np.float32)
     table["bat_hand"] = np.concatenate([table["bat_hand"], bh])
-    table["pit_hand"] = np.concatenate([table["pit_hand"], np.full(n, 0.5, np.float32)])
-    table["hand"] = np.concatenate([table["hand"], (bh >= 0.5).astype(table["hand"].dtype)])
+    table["pit_hand"] = np.concatenate([table["pit_hand"], ph])
+    hand = np.where(ph != 0.5, ph, bh)
+    table["hand"] = np.concatenate([table["hand"], (hand >= 0.5).astype(table["hand"].dtype)])
     all_ids = np.concatenate([np.asarray(base["all_ids"], dtype=np.int64), np.array(new_ids, np.int64)])
     table.update(all_ids=all_ids, id_to_idx={int(p): i for i, p in enumerate(all_ids)},
                  unknown_index=len(all_ids))
     install(s, table, dict(s.params), n)
-    print(f"factors {factors}; {n} rookie hitters given translated priors", flush=True)
+    npb_n = sum(1 for _, _, lv in names if "NPB" in lv)
+    log.append(f"{n} new players given priors: {sum(1 for t, _, _ in names if t == 'H')} hitters, "
+               f"{sum(1 for t, _, _ in names if t == 'P')} pitchers, {npb_n} with NPB lines")
+    if args.npb:
+        log.append("NPB-sourced: " + ", ".join(people.get(i, str(i)) for _, i, lv in names if "NPB" in lv))
+    for line in log:
+        print(line, flush=True)
 
     outcomes = real_runs(T)
     games = [g for g in s.real_games(T, limit=100000, pregame_staff=True)
@@ -122,6 +277,7 @@ def main():
     out = f"data/eval2/calib_{args.tag}_arrays.npz"
     np.savez(out, sim_home=sh, sim_away=sa, sim_total=sh + sa,
              real_home=rh, real_away=ra, real_total=rh + ra, game_pk=pk)
+    Path(f"data/eval2/priors_{args.tag}.txt").write_text("\n".join(log) + "\n")
     print(f"saved -> {out}  ({len(pk)} games, sim mean total {(sh + sa).mean():.2f}, real {(rh + ra).mean():.2f})")
 
 
