@@ -142,7 +142,8 @@ def main():
             contact_quality=cfg.get("contact_quality", False),
             per_stat_shrink=cfg.get("per_stat_shrink", False),
             shrink_contact_quality=cfg.get("shrink_contact_quality", False),
-            pitcher_rates=cfg.get("pitcher_rates", False))
+            pitcher_rates=cfg.get("pitcher_rates", False),
+            pitcher_bf_log=cfg.get("pitcher_bf_log", False))
         table, n_extra = extend_table(base_table, fresh)
         install(s, table, base_params, n_extra)
         want = set(months[m])

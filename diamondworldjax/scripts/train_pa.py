@@ -170,7 +170,8 @@ def _build_player_table(pitches, recency_halflife: float | None = None,
                         contact_quality: bool = False,
                         per_stat_shrink: bool = False,
                         shrink_contact_quality: bool = False,
-                        pitcher_rates: bool = False) -> dict:
+                        pitcher_rates: bool = False,
+                        pitcher_bf_log: bool = False) -> dict:
     """Build the per-player stat/handedness table.
 
     recency_halflife (seasons): if set, each PA's contribution to a player's rate
@@ -295,7 +296,9 @@ def _build_player_table(pitches, recency_halflife: float | None = None,
         prates, bf = _pitcher_allowed_rates(terminal, pitcher_col, id_to_idx, P,
                                             recency_halflife, max_season)
         stats[:, list(PITCHER_RATE_COLS)] = prates
-        stats[:, PITCHER_BF_COL] = bf
+        # The raw weighted count runs to ~2,400 beside rates near 0.2. pitcher_bf_log puts it on
+        # a [0, ~1] scale instead (v22P used the raw count and regressed at the game level).
+        stats[:, PITCHER_BF_COL] = np.log1p(bf) / np.log1p(2500.0) if pitcher_bf_log else bf
 
     # Per-player modal handedness for the simulator + the hand embedding.
     # bat_hand: modal batting side (stand); pit_hand: modal throw hand (p_throws).
@@ -499,6 +502,8 @@ def main() -> None:
     parser.add_argument("--pa-arch", type=str, default="transformer",
                         choices=["transformer", "gru", "gru_skip"],
                         help="PA sequence model architecture (requires --pitchformer).")
+    parser.add_argument("--pitcher-bf-log", action="store_true",
+                        help="With --pitcher-rates: log-scale the batters-faced column to ~[0,1].")
     parser.add_argument("--pitcher-rates", action="store_true",
                         help="Fill player-table columns 7-11 with each pitcher's shrunk allowed "
                              "hit/BB/K/HR rates per batter faced and his batters-faced count. "
@@ -542,7 +547,8 @@ def main() -> None:
                                           contact_quality=args.contact_quality,
                                           per_stat_shrink=args.per_stat_shrink,
                                           shrink_contact_quality=args.shrink_contact_quality,
-                                          pitcher_rates=args.pitcher_rates)
+                                          pitcher_rates=args.pitcher_rates,
+                                          pitcher_bf_log=args.pitcher_bf_log)
     print(f"  {len(player_table_np['all_ids']):,} unique players.", flush=True)
 
     print("Filtering to PA-terminal rows...", flush=True)
@@ -605,7 +611,7 @@ def main() -> None:
         "version": 1, "train_seasons": TRAIN_SEASONS,
         "config": {name: getattr(args, name) for name in (*MODEL_FIELDS,
             "train_end", "recency_halflife", "contact_quality", "per_stat_shrink",
-            "shrink_contact_quality", "pitcher_rates")},
+            "shrink_contact_quality", "pitcher_rates", "pitcher_bf_log")},
         "player_table": player_table_np, "park_map": park_map,
     }}
     svi_state, guide, losses = train(

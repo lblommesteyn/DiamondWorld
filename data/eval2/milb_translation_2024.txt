@@ -1,0 +1,14 @@
+MINOR-LEAGUE TRANSLATION (hitters), factors fit on MLB seasons < 2024
+
+  AAA: 630 player-season pairs   hit x0.89  bb x0.85  k x1.21  hr x0.95
+  AA: 258 player-season pairs   hit x0.91  bb x0.79  k x1.25  hr x0.94
+  (factor = MLB rate next season / minor-league rate; <1 means the stat shrinks in MLB)
+
+  test season 2024: 57 rookie hitters (<= 130 career MLB PA before, >= 150 PA in 2024); 56 have AAA/AA lines in 2022-2023
+
+  stat    corr(translated prior, realized)  league-average baseline
+  hit                                0.099            0 (no spread)
+  bb                                 0.417            0 (no spread)
+  k                                  0.656            0 (no spread)
+  hr                                 0.624            0 (no spread)
+  AVG                                0.449
