@@ -1,0 +1,10 @@
+SIMULATOR vs RATE BASELINES on market within-series moves (v22L_te2024-2025-pregame-leakfree-r2000)
+  477 series, 1361 game-deviations (games with a known starter and >= 8 known batters)
+  baselines = starter allowed-run index diff + lineup rate-value diff, linear, fit to the
+  market on the other half of series (cross-fit); the simulator is fit to nothing
+
+  r(simulator, market)               +0.593  95% CI [+0.542, +0.642]
+  r(own baseline, market)            +0.458  95% CI [+0.404, +0.510]
+  simulator - own                    +0.134  95% CI [+0.090, +0.183]
+  sim partial | own                  +0.436  95% CI [+0.374, +0.495]
+  own partial | sim                  +0.117  95% CI [+0.055, +0.176]

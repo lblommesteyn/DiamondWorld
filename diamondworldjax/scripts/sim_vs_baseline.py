@@ -34,7 +34,7 @@ import polars as pl
 from diamondworldjax.data.pipeline import load_seasons
 from diamondworldjax.paths import processed_root
 from diamondworldjax.scripts.seq_models import pitcher_rates
-from diamondworldjax.scripts.simulator_benchmarks import american_implied, team_rates_2024
+from diamondworldjax.scripts.simulator_benchmarks import ODDS, american_implied, team_rates_2024
 from diamondworldjax.scripts.train_pa import _build_park_index, _build_player_table, apply_park_idx
 from diamondworldjax.scripts.whatif_channels import allowed_idx, woba_bat
 from diamondworldjax.sim.game_extract import extract_games
@@ -65,29 +65,33 @@ def main():
     ap.add_argument("--arrays", default="data/eval2/calib_v22L_s42-pregame-leakfree-r2000_arrays.npz")
     ap.add_argument("--steamer", action="store_true",
                     help="add Steamer-built baselines and restrict to games Steamer covers")
+    ap.add_argument("--season", type=int, default=2024, choices=sorted(ODDS),
+                    help="test season; the baseline's ratings use every season before it")
     ap.add_argument("--tag", default=None)
     ap.add_argument("--reps", type=int, default=4000)
     args = ap.parse_args()
+    if args.steamer and args.season != 2024:
+        ap.error("only 2024 Steamer projections are cached")
     tag = args.tag or Path(args.arrays).stem.removeprefix("calib_").removesuffix("_arrays")
     if args.steamer:
         tag += "_steamer"
 
-    train = load_seasons(list(range(2015, 2024)), data_root=processed_root())
+    train = load_seasons(list(range(2015, args.season)), data_root=processed_root())
     ptab = _build_player_table(train, recency_halflife=2.0, contact_quality=True)
     park_map = _build_park_index(train)
     pit = pitcher_rates(train.filter(pl.col("pa_terminal")), ptab["id_to_idx"], len(ptab["hand"]))
     stats, unknown = ptab["stats"], ptab["unknown_index"]
     idx2id = {i: pid for pid, i in ptab["id_to_idx"].items()}
     del train
-    te = apply_park_idx(load_seasons([2024], data_root=processed_root()).filter(pl.col("pa_terminal")),
-                        park_map)
+    te = apply_park_idx(load_seasons([args.season], data_root=processed_root())
+                        .filter(pl.col("pa_terminal")), park_map)
     games = extract_games(te, ptab["id_to_idx"], park_map=park_map, unknown_idx=unknown)
     st_bat, st_pit = steamer_tables() if args.steamer else ({}, {})
 
     d = np.load(args.arrays)
     simwp = dict(zip(d["game_pk"].astype(int), (d["sim_home"] > d["sim_away"]).mean(1)))
-    _, pkt = team_rates_2024()
-    odds = pl.read_csv("data/eval2/odds_2023_2024.csv")
+    _, pkt = team_rates_2024(args.season)
+    odds = pl.read_csv(ODDS[args.season])
     om = {int(r["game_pk"]): (r["ml_home"], r["ml_away"]) for r in odds.iter_rows(named=True)
           if r["ml_home"] is not None and r["ml_away"] is not None}
 
