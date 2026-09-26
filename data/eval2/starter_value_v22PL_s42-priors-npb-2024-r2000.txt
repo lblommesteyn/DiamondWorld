@@ -1,0 +1,34 @@
+STARTER VALUE PER START: simulator vs market (v22PL_s42-priors-npb-2024-r2000)
+  175 starters with >= 10 starts (3976 starts); credit = within-series WP deviation, own-team view (top half = 'top')
+
+  in-sample   corr(sim value, market value)   0.535  95% CI [0.322, 0.693]
+  cross-fit   sim(half A) vs market(half B)    0.480  95% CI [0.308, 0.616]
+              sim(half B) vs market(half A)    0.413  95% CI [0.209, 0.576]
+  ceiling     market(half A) vs market(half B) 0.790  (market split-half agreement)
+
+  calibration fit on 87 pitchers: market = 0.369 x sim
+  frozen on the other 88: slope 1.002 (want 1), intercept -0.09 WP pts (want 0),
+  MAE 1.36 vs 1.73 WP pts predict-zero = 21% better
+
+  pitcher                  starts  sim (mkt units)   market   WP points per start vs own rotation
+  Justin Verlander             17            +2.48    +1.04
+  Jesús Luzardo                11            +2.21    +4.21
+  Zac Gallen                   27            +2.09    +3.37
+  Chris Sale                   27            +2.05    +4.08
+  Logan Webb                   33            +1.97    +3.47
+  Tyler Glasnow                21            +1.90    +5.45
+  Blake Snell                  19            +1.90    +3.59
+  Joe Ryan                     22            +1.82    +1.52
+  Zack Wheeler                 31            +1.77    +4.61
+  Trevor Rogers                25            +1.76    +1.39
+  Corbin Burnes                32            +1.73    +3.57
+  Gerrit Cole                  16            +1.71    +2.77
+  ...
+  Max Meyer                    11            -2.54    +0.21
+  Gavin Stone                  24            -2.66    -0.80
+  Carson Spiers                10            -2.70    -2.88
+  Simeon Woods Richardson      27            -2.86    -2.20
+  Paul Skenes                  22            -3.34    +8.37
+  Albert Suárez                24            -3.83    -2.76
+  Emerson Hancock              11            -4.12    -5.65
+  Spencer Schwellenbach        18            -4.76    -2.07

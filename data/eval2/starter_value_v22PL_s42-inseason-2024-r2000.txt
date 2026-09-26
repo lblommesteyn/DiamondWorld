@@ -1,0 +1,34 @@
+STARTER VALUE PER START: simulator vs market (v22PL_s42-inseason-2024-r2000)
+  175 starters with >= 10 starts (3976 starts); credit = within-series WP deviation, own-team view (top half = 'top')
+
+  in-sample   corr(sim value, market value)   0.723  95% CI [0.647, 0.787]
+  cross-fit   sim(half A) vs market(half B)    0.548  95% CI [0.439, 0.650]
+              sim(half B) vs market(half A)    0.492  95% CI [0.379, 0.595]
+  ceiling     market(half A) vs market(half B) 0.756  (market split-half agreement)
+
+  calibration fit on 87 pitchers: market = 0.555 x sim
+  frozen on the other 88: slope 1.048 (want 1), intercept +0.00 WP pts (want 0),
+  MAE 1.30 vs 1.90 WP pts predict-zero = 31% better
+
+  pitcher                  starts  sim (mkt units)   market   WP points per start vs own rotation
+  Tyler Glasnow                21            +4.75    +5.45
+  Justin Verlander             17            +4.01    +1.04
+  Garrett Crochet              30            +3.88    +5.41
+  Zac Gallen                   27            +3.65    +3.37
+  Blake Snell                  19            +3.34    +3.59
+  Jesús Luzardo                11            +3.01    +4.21
+  Grayson Rodriguez            20            +2.67    +3.03
+  MacKenzie Gore               32            +2.64    +3.47
+  Joe Musgrove                 18            +2.61    +1.41
+  Zack Wheeler                 31            +2.56    +4.61
+  Freddy Peralta               31            +2.51    +4.84
+  Trevor Rogers                25            +2.48    +1.39
+  ...
+  Cooper Criswell              18            -3.07    -3.33
+  Spencer Arrighetti           28            -3.07    -1.07
+  Albert Suárez                24            -3.11    -2.76
+  Yariel Rodríguez             19            -3.20    -1.53
+  Jack Kochanowicz             11            -3.58    -2.26
+  Cade Povich                  15            -4.25    -2.64
+  Landon Knack                 12            -4.37    -4.43
+  Emerson Hancock              11            -5.50    -5.65
