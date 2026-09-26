@@ -1,0 +1,34 @@
+STARTER VALUE PER START: simulator vs market (v22L_te2024-2025-pregame-leakfree-r2000)
+  146 starters with >= 10 starts (2695 starts); credit = within-series WP deviation, own-team view (top half = 'top')
+
+  in-sample   corr(sim value, market value)   0.654  95% CI [0.560, 0.737]
+  cross-fit   sim(half A) vs market(half B)    0.553  95% CI [0.428, 0.657]
+              sim(half B) vs market(half A)    0.472  95% CI [0.344, 0.594]
+  ceiling     market(half A) vs market(half B) 0.749  (market split-half agreement)
+
+  calibration fit on 73 pitchers: market = 0.456 x sim
+  frozen on the other 73: slope 0.909 (want 1), intercept +0.09 WP pts (want 0),
+  MAE 1.35 vs 1.75 WP pts predict-zero = 23% better
+
+  pitcher                  starts  sim (mkt units)   market   WP points per start vs own rotation
+  Jacob deGrom                 21            +4.90    +6.71
+  Spencer Strider              14            +3.57    +1.01
+  Paul Skenes                  24            +3.27    +6.60
+  Tyler Glasnow                11            +3.18    +3.02
+  Trevor Rogers                10            +3.08    +2.42
+  Corbin Burnes                11            +3.07    +3.89
+  Tarik Skubal                 21            +2.99    +9.58
+  Garrett Crochet              24            +2.84    +7.11
+  Zach Eflin                   13            +2.81    +0.92
+  Chris Sale                   14            +2.78    +3.94
+  Framber Valdez               23            +2.50    +3.20
+  Freddy Peralta               23            +2.40    +3.40
+  ...
+  801403                       13            -2.70    -0.36
+  687473                       12            -2.81    -0.25
+  694477                       17            -2.93    -1.87
+  676467                       11            -3.02    -3.67
+  690990                       15            -3.79    -2.06
+  608372                       19            -3.84    -1.26
+  688138                       14            -4.50    -4.24
+  702070                       15            -4.76    -0.87

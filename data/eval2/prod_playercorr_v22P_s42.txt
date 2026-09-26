@@ -1,0 +1,1 @@
+v22P_s42 (SVI, conditioned+raw, skill=mean, train<= 2023, test 2024, mle=False) | corr K 0.792 BB 0.688 Hit 0.465 HR 0.616 AVG 0.640 (np=382, rookies_injected=0, rookies_kept=0)

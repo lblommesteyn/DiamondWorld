@@ -63,7 +63,8 @@ within-series game changes (646 series, 30 teams, 2024), the simulator's and the
 changes correlate r = 0.51 (95\% CI 0.45 to 0.56, cluster bootstrap by series; sign accuracy 0.69), on
 both pitching and hitting changes, beating a starter-and-lineup rate baseline fit to the market itself
 (0.53 vs 0.42 on shared games, difference +0.12, 95\% CI 0.07 to 0.16), and the calibration factor
-holds out-of-sample (frozen slope 0.96).
+holds out-of-sample (frozen slope 0.96). On 2025, a season the retrained model never saw, the
+agreement is r = 0.58 (95\% CI 0.54 to 0.62).
 The same machinery values individual starting pitchers: the simulator's win probability added per start
 agrees with the market's pricing of 175 starters at r = 0.65, and at r = 0.52 to 0.56 when the two are
 measured on disjoint starts. Its per-game run distribution beats a summed model on proper scores (log
@@ -337,32 +338,39 @@ channel (starters' allowed-run rate) and a hitting channel (lineup rate value), 
 signal the market responds to (pitching $t{=}{-}17.6$, hitting $t{=}{+}7.3$), so the validation is not
 pitcher-only.
 
-\textbf{A later season, and a stale-input stress test.} Freezing the rate features and repeating the
-within-series test on the 2025 sportsbook consensus, a season the features predate, gives $r{=}0.33$
-(channel-level, using the model's inputs rather than a full re-simulation; see Limitations). As a
+\textbf{A second, fully out-of-sample season.} We retrained the locked specification once more with
+2024 added (the same recipe and seed) and simulated every 2025 game end to end, leak-free, at
+$R{=}2{,}000$, against the 2025 sportsbook consensus. Nothing from 2025 enters the model. On 1{,}643
+within-series game deviations (502 series) the simulator's and the market's forecast changes correlate
+$r{=}0.58$ $[0.54,0.62]$, sign accuracy $0.69$, $R^2{=}0.33$, and a calibration fit on half the series
+and frozen transfers to the other half (slope $0.93$). The per-start starter values agree with the
+market at $0.65$ across 146 starters ($0.47$ to $0.55$ on disjoint starts), and the run distribution
+again beats independent Poisson (log-score difference $-0.18$ $[-0.21,-0.15]$) and ties the league
+negative binomial. The validation therefore holds, and is if anything stronger, on a season the model
+never saw. Point win probability is again weak: in 2025 it is marginally worse than the home-field
+base rate (log loss $0.692$ vs $0.690$), consistent with Sec.~\ref{sec:bench}. As a
 deliberate stress test we also run 2026-to-date against a \emph{prediction market} (Kalshi), a
 different market mechanism, with rates now $2.5$ years stale (only about six of nine batters and half
 the starters known): agreement attenuates to $r{=}0.12$, as expected. We do not claim this as clean
 generalization; it shows the signal is real, appears across a sportsbook and a prediction market, and
 degrades with stale inputs. A second prediction market (Polymarket) carries the same game markets but
 its price histories did not pin cleanly to a single game's first pitch for a bulk pregame harvest, so
-we report it as assessed rather than as a third estimate (see Reproducibility). These three evaluations
-are not the same test and we keep them separate (Table~\ref{tab:evaltypes}): only 2024 is a full
-end-to-end simulation; 2025 replays the frozen model's input sensitivities without re-simulating the
-season, and 2026 is a stale-input stress test.
+we report it as assessed rather than as a third estimate (see Reproducibility). These evaluations are
+not the same test and we keep them separate (Table~\ref{tab:evaltypes}): 2024 and 2025 are full
+end-to-end simulations, and 2026 is a stale-input stress test.
 
 \begin{table}[t]
 \centering\footnotesize
 \setlength{\tabcolsep}{4pt}
-\caption{The three evaluations differ in what is actually exercised; only the 2024 result is a full
-end-to-end simulation.}
+\caption{The evaluations differ in what is actually exercised; 2024 and 2025 are full end-to-end
+simulations, each with the model trained only on earlier seasons.}
 \label{tab:evaltypes}
 \begin{tabular}{@{}>{\raggedright\arraybackslash}p{2.5cm}c>{\raggedright\arraybackslash}p{3.5cm}@{}}
 \toprule
 \textbf{Evaluation} & \textbf{Season} & \textbf{What is tested} \\
 \midrule
 End-to-end simulator & 2024 & full simulation counterfactuals ($r{=}0.51$) \\
-Channel replay & 2025 & frozen-model input sensitivities ($r{=}0.33$) \\
+End-to-end simulator & 2025 & full simulation, trained through 2024 ($r{=}0.58$) \\
 Stale-input stress & 2026 & input sensitivity with $2.5$-yr-stale rates ($r{=}0.12$) \\
 \bottomrule
 \end{tabular}
@@ -572,9 +580,8 @@ check it should be trusted only as far as a winner's-curse-controlled estimate a
 We are explicit about the boundaries. (1) The market is an external forecaster, not causal ground truth;
 its move can reflect other same-day changes and it may share public inputs with the simulator, so the
 $r{=}0.51$ is forecast-change agreement, not an identified causal effect. (2) $R^2{=}0.26$: the
-agreement is real but partial. (3) The 2025 and 2026 checks use the model's rate features rather than a
-full re-simulation of those seasons, and the 2026 slice is a stale-input stress test on an incomplete
-season. (4) Raw counterfactual magnitudes overstate by about $2\times$ and must be market-calibrated.
+agreement is real but partial. (3) The 2026 check uses the model's rate features rather than a full
+re-simulation, and is a stale-input stress test on an incomplete season. (4) Raw counterfactual magnitudes overstate by about $2\times$ and must be market-calibrated.
 (5) Point win probability is less sharp than a one-line baseline. (6) The simulator's mean total is
 $0.45$ runs per game high ($9.08$ vs $8.63$); the proper-score comparisons mean-match before scoring,
 so they test shape, and the offset largely cancels in within-series differences. (7) The replica count
