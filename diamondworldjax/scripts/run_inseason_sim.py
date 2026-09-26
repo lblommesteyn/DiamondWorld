@@ -103,6 +103,11 @@ def main():
     ap.add_argument("--r", type=int, default=2000)
     ap.add_argument("--chunk", type=int, default=60)
     ap.add_argument("--limit", type=int, default=None, help="games per month, for smoke tests")
+    ap.add_argument("--priors", action="store_true",
+                    help="players still absent from the month's table get translated minor-league "
+                         "(and with --npb, NPB) priors; pitchers too when the checkpoint has "
+                         "pitcher rate columns. See run_milb_prior_sim.")
+    ap.add_argument("--npb", action="store_true")
     ap.add_argument("--tag", required=True)
     args = ap.parse_args()
 
@@ -121,6 +126,14 @@ def main():
     test = test.with_columns(pl.col("game_pk").map_elements(
         lambda p: dates.get(int(p), "9999-99-99"), return_dtype=pl.Utf8).alias("_date"))
     outcomes = real_runs(args.season)
+    ctx = None
+    if args.priors:
+        # imported here: run_milb_prior_sim imports install() from this module
+        from diamondworldjax.scripts.run_milb_prior_sim import append_priors, describe, prepare_priors
+        ctx = prepare_priors(args.season, npb=args.npb, pitchers=bool(cfg.get("pitcher_rates")))
+        for line in ctx["log"]:
+            print(line, flush=True)
+    terminal = test.filter(pl.col("pa_terminal"))
 
     months = defaultdict(list)
     for pk, d in dates.items():
@@ -145,8 +158,16 @@ def main():
             pitcher_rates=cfg.get("pitcher_rates", False),
             pitcher_bf_log=cfg.get("pitcher_bf_log", False))
         table, n_extra = extend_table(base_table, fresh)
-        install(s, table, base_params, n_extra)
         want = set(months[m])
+        n_prior = 0
+        if ctx is not None:
+            # priors only for players with no MLB rows yet (not yet in this month's table) who
+            # appear in this month's games; debuted players are rated from their MLB data
+            month_rows = terminal.filter(pl.col("game_pk").is_in(list(want)))
+            table, n_prior, names = append_priors(table, month_rows, ctx, cfg, hitters=True,
+                                                  pitchers=bool(cfg.get("pitcher_rates")))
+            print(f"  {m} priors: " + "; ".join(describe(names, ctx)), flush=True)
+        install(s, table, base_params, n_extra + n_prior)
         games = [g for g in s.real_games(args.season, limit=100000, pregame_staff=True)
                  if int(g["game_pk"]) in want and g["park"] != 0]
         if args.limit:

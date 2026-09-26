@@ -141,6 +141,119 @@ def translate(lines, factors, league, shrink, T):
     return [(acc[k] + shrink[k] * league[k]) / (pa_eff + shrink[k]) for k in STATS], pa_eff
 
 
+def prepare_priors(T, npb=False, pitchers=False):
+    """Source lines, translation factors and league rates for test season T (all pre-T)."""
+    log = []
+    people = mlb_people(range(2015, T + 1)) if npb else {}
+    bat_src = milb_rates().select(["player_id", "season", "level", "pa", "hit", "bb_rate", "k", "hr_rate"])
+    bat_levels = ["AAA", "AA"]
+    if npb:
+        nb = npb_with_ids("batting", people)
+        if nb is not None:
+            bat_src = pl.concat([bat_src, nb.select(bat_src.columns)])
+            bat_levels.append("NPB")
+    mlb_b = mlb_rates(list(range(2015, T + 1)))
+    fb = fit_factors(bat_src, mlb_b, T, bat_levels)
+    prev = mlb_b.filter(pl.col("season") < T)
+    ctx = dict(T=T, people=people, bat_src=bat_src.filter(pl.col("season").is_in([T - 1, T - 2])),
+               fb=fb, lg_b={k: float(prev[COUNT[k]].sum() / prev["pa"].sum()) for k in STATS}, log=log)
+    log.append(f"batting factors {json.dumps(fb)}")
+    if pitchers:
+        pit_src = milb_pitching().select(bat_src.columns)
+        pit_levels = ["AAA", "AA"]
+        if npb:
+            npit = npb_with_ids("pitching", people)
+            if npit is not None:
+                pit_src = pl.concat([pit_src, npit.select(pit_src.columns)])
+                pit_levels.append("NPB")
+        mlb_p = mlb_pitching(list(range(2015, T + 1)))
+        fp = fit_factors(pit_src, mlb_p, T, pit_levels)
+        prevp = mlb_p.filter(pl.col("season") < T)
+        ctx.update(pit_src=pit_src.filter(pl.col("season").is_in([T - 1, T - 2])), fp=fp,
+                   lg_p={k: float(prevp[COUNT[k]].sum() / prevp["pa"].sum()) for k in STATS})
+        log.append(f"pitching factors {json.dumps(fp)}")
+    return ctx
+
+
+def append_priors(base, te, ctx, cfg, hitters=True, pitchers=False):
+    """Append a translated-prior row for every player in `te` who is absent from `base`.
+
+    Returns (table, n_new, names). `base` keeps its rows and order, so the checkpoint's skill
+    vectors still line up; install() pads the skill posterior for the n_new appended rows.
+    """
+    T = ctx["T"]
+    stats = np.asarray(base["stats"])
+    known = base["id_to_idx"]
+    # template rows: what a table pitcher looks like in the batting columns, and vice versa
+    bf_col = stats[:, PITCHER_BF_COL] if cfg.get("pitcher_rates") else np.zeros(len(stats))
+    pitcher_like = (stats[:, 4] == 0) & (bf_col > 0)
+    hitter_like = (stats[:, 4] > 0) & (bf_col == 0)
+    tmpl_p = stats[pitcher_like].mean(0) if pitcher_like.any() else stats.mean(0)
+    tmpl_h = stats[hitter_like].mean(0) if hitter_like.any() else stats.mean(0)
+
+    new_ids, rows, bat_hand, pit_hand, names = [], [], [], [], []
+    if hitters:
+        hs = (te.filter(~pl.col("batter_id").is_in(list(known)))
+                .group_by("batter_id").agg((pl.col("batter_hand") == "R").mean().alias("r")))
+        for r in hs.iter_rows(named=True):
+            lines = ctx["bat_src"].filter(pl.col("player_id") == r["batter_id"])
+            if len(lines) == 0:
+                continue
+            rates, pa_eff = translate(lines, ctx["fb"], ctx["lg_b"], SHRINK, T)
+            row = tmpl_h.copy()
+            row[:4] = rates
+            row[4] = pa_eff
+            new_ids.append(int(r["batter_id"])); rows.append(row)
+            bat_hand.append(1.0 if (r["r"] or 0) >= 0.5 else 0.0); pit_hand.append(0.5)
+            names.append(("H", int(r["batter_id"]), sorted(set(lines["level"].to_list()))))
+    if pitchers:
+        taken = set(new_ids)
+        ps = (te.filter(~pl.col("pitcher_id").is_in(list(known)))
+                .group_by("pitcher_id").agg((pl.col("pitcher_hand") == "R").mean().alias("r")))
+        bf_log = cfg.get("pitcher_bf_log", False)
+        for r in ps.iter_rows(named=True):
+            if int(r["pitcher_id"]) in taken:
+                continue
+            lines = ctx["pit_src"].filter(pl.col("player_id") == r["pitcher_id"])
+            if len(lines) == 0:
+                continue
+            rates, bf = translate(lines, ctx["fp"], ctx["lg_p"], PSHRINK, T)
+            row = tmpl_p.copy()
+            row[list(PITCHER_RATE_COLS)] = rates
+            row[PITCHER_BF_COL] = np.log1p(bf) / np.log1p(2500.0) if bf_log else bf
+            new_ids.append(int(r["pitcher_id"])); rows.append(row)
+            bat_hand.append(0.5); pit_hand.append(1.0 if (r["r"] or 0) >= 0.5 else 0.0)
+            names.append(("P", int(r["pitcher_id"]), sorted(set(lines["level"].to_list()))))
+
+    n = len(new_ids)
+    table = {k: np.asarray(base[k]) for k in ("stats", "league", "hand", "bat_hand", "pit_hand")}
+    if n == 0:
+        table.update(all_ids=np.asarray(base["all_ids"]), id_to_idx=dict(known),
+                     unknown_index=base["unknown_index"])
+        return table, 0, names
+    table["stats"] = np.concatenate([table["stats"], np.array(rows, dtype=stats.dtype).reshape(n, -1)], 0)
+    table["league"] = np.concatenate([table["league"], np.zeros(n, table["league"].dtype)])
+    bh, ph = np.array(bat_hand, np.float32), np.array(pit_hand, np.float32)
+    table["bat_hand"] = np.concatenate([table["bat_hand"], bh])
+    table["pit_hand"] = np.concatenate([table["pit_hand"], ph])
+    hand = np.where(ph != 0.5, ph, bh)
+    table["hand"] = np.concatenate([table["hand"], (hand >= 0.5).astype(table["hand"].dtype)])
+    all_ids = np.concatenate([np.asarray(base["all_ids"], dtype=np.int64), np.array(new_ids, np.int64)])
+    table.update(all_ids=all_ids, id_to_idx={int(p): i for i, p in enumerate(all_ids)},
+                 unknown_index=len(all_ids))
+    return table, n, names
+
+
+def describe(names, ctx):
+    out = [f"{len(names)} new players given priors: {sum(1 for t, _, _ in names if t == 'H')} hitters, "
+           f"{sum(1 for t, _, _ in names if t == 'P')} pitchers, "
+           f"{sum(1 for _, _, lv in names if 'NPB' in lv)} with NPB lines"]
+    if ctx["people"]:
+        out.append("NPB-sourced: " + ", ".join(ctx["people"].get(i, str(i))
+                                               for _, i, lv in names if "NPB" in lv))
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--ckpt", required=True)
@@ -161,103 +274,12 @@ def main():
     s = Sim(ckpt=args.ckpt, hook_model=True)
     if T <= s.train_end:
         raise SystemExit(f"--season {T} is inside training (train_end={s.train_end})")
-    base = s.ptab
-    stats = np.asarray(base["stats"])
-    known = base["id_to_idx"]
-    people = mlb_people(range(2015, T + 1)) if args.npb else {}
     te = load_seasons([T], data_root=processed_root()).filter(pl.col("pa_terminal"))
-    log = []
-
-    # ---- sources and factors ----
-    bat_src = milb_rates().select(["player_id", "season", "level", "pa", "hit", "bb_rate", "k", "hr_rate"])
-    bat_levels = ["AAA", "AA"]
-    if args.npb:
-        nb = npb_with_ids("batting", people)
-        if nb is not None:
-            bat_src = pl.concat([bat_src, nb.select(bat_src.columns)])
-            bat_levels.append("NPB")
-    mlb_b = mlb_rates(list(range(2015, T + 1)))
-    fb = fit_factors(bat_src, mlb_b, T, bat_levels)
-    prev = mlb_b.filter(pl.col("season") < T)
-    lg_b = {k: float(prev[COUNT[k]].sum() / prev["pa"].sum()) for k in STATS}
-    log.append(f"batting factors {json.dumps(fb)}")
-
-    if args.pitchers:
-        pit_src = milb_pitching().select(bat_src.columns)
-        pit_levels = ["AAA", "AA"]
-        if args.npb:
-            npit = npb_with_ids("pitching", people)
-            if npit is not None:
-                pit_src = pl.concat([pit_src, npit.select(pit_src.columns)])
-                pit_levels.append("NPB")
-        mlb_p = mlb_pitching(list(range(2015, T + 1)))
-        fp = fit_factors(pit_src, mlb_p, T, pit_levels)
-        prevp = mlb_p.filter(pl.col("season") < T)
-        lg_p = {k: float(prevp[COUNT[k]].sum() / prevp["pa"].sum()) for k in STATS}
-        log.append(f"pitching factors {json.dumps(fp)}")
-
-    # template rows: what an MLB-table pitcher looks like in the batting columns, and vice versa
-    bf_col = stats[:, PITCHER_BF_COL] if cfg.get("pitcher_rates") else np.zeros(len(stats))
-    pitcher_like = (stats[:, 4] == 0) & (bf_col > 0)
-    hitter_like = (stats[:, 4] > 0) & (bf_col == 0)
-    tmpl_p = stats[pitcher_like].mean(0) if pitcher_like.any() else stats.mean(0)
-    tmpl_h = stats[hitter_like].mean(0) if hitter_like.any() else stats.mean(0)
-
-    new_ids, rows, bat_hand, pit_hand = [], [], [], []
-    names = []
-    if not args.no_hitters:
-        hs = (te.filter(~pl.col("batter_id").is_in(list(known)))
-                .group_by("batter_id").agg((pl.col("batter_hand") == "R").mean().alias("r")))
-        src = bat_src.filter(pl.col("season").is_in([T - 1, T - 2]))
-        for r in hs.iter_rows(named=True):
-            lines = src.filter(pl.col("player_id") == r["batter_id"])
-            if len(lines) == 0:
-                continue
-            rates, pa_eff = translate(lines, fb, lg_b, SHRINK, T)
-            row = tmpl_h.copy()
-            row[:4] = rates
-            row[4] = pa_eff
-            new_ids.append(int(r["batter_id"])); rows.append(row)
-            bat_hand.append(1.0 if (r["r"] or 0) >= 0.5 else 0.0); pit_hand.append(0.5)
-            names.append(("H", int(r["batter_id"]), sorted(set(lines["level"].to_list()))))
-    if args.pitchers:
-        taken = set(new_ids)
-        ps = (te.filter(~pl.col("pitcher_id").is_in(list(known)))
-                .group_by("pitcher_id").agg((pl.col("pitcher_hand") == "R").mean().alias("r")))
-        src = pit_src.filter(pl.col("season").is_in([T - 1, T - 2]))
-        bf_log = cfg.get("pitcher_bf_log", False)
-        for r in ps.iter_rows(named=True):
-            if int(r["pitcher_id"]) in taken:
-                continue
-            lines = src.filter(pl.col("player_id") == r["pitcher_id"])
-            if len(lines) == 0:
-                continue
-            rates, bf = translate(lines, fp, lg_p, PSHRINK, T)
-            row = tmpl_p.copy()
-            row[list(PITCHER_RATE_COLS)] = rates
-            row[PITCHER_BF_COL] = np.log1p(bf) / np.log1p(2500.0) if bf_log else bf
-            new_ids.append(int(r["pitcher_id"])); rows.append(row)
-            bat_hand.append(0.5); pit_hand.append(1.0 if (r["r"] or 0) >= 0.5 else 0.0)
-            names.append(("P", int(r["pitcher_id"]), sorted(set(lines["level"].to_list()))))
-
-    n = len(new_ids)
-    table = {k: np.asarray(base[k]) for k in ("stats", "league", "hand", "bat_hand", "pit_hand")}
-    table["stats"] = np.concatenate([table["stats"], np.array(rows, dtype=stats.dtype).reshape(n, -1)], 0)
-    table["league"] = np.concatenate([table["league"], np.zeros(n, table["league"].dtype)])
-    bh, ph = np.array(bat_hand, np.float32), np.array(pit_hand, np.float32)
-    table["bat_hand"] = np.concatenate([table["bat_hand"], bh])
-    table["pit_hand"] = np.concatenate([table["pit_hand"], ph])
-    hand = np.where(ph != 0.5, ph, bh)
-    table["hand"] = np.concatenate([table["hand"], (hand >= 0.5).astype(table["hand"].dtype)])
-    all_ids = np.concatenate([np.asarray(base["all_ids"], dtype=np.int64), np.array(new_ids, np.int64)])
-    table.update(all_ids=all_ids, id_to_idx={int(p): i for i, p in enumerate(all_ids)},
-                 unknown_index=len(all_ids))
+    ctx = prepare_priors(T, npb=args.npb, pitchers=args.pitchers)
+    table, n, names = append_priors(s.ptab, te, ctx, cfg, hitters=not args.no_hitters,
+                                    pitchers=args.pitchers)
     install(s, table, dict(s.params), n)
-    npb_n = sum(1 for _, _, lv in names if "NPB" in lv)
-    log.append(f"{n} new players given priors: {sum(1 for t, _, _ in names if t == 'H')} hitters, "
-               f"{sum(1 for t, _, _ in names if t == 'P')} pitchers, {npb_n} with NPB lines")
-    if args.npb:
-        log.append("NPB-sourced: " + ", ".join(people.get(i, str(i)) for _, i, lv in names if "NPB" in lv))
+    log = list(ctx["log"]) + describe(names, ctx)
     for line in log:
         print(line, flush=True)
 
