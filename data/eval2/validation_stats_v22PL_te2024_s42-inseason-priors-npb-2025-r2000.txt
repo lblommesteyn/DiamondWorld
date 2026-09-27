@@ -1,0 +1,26 @@
+WITHIN-SERIES VALIDATION STATISTICS (2025, R=2000, market forecast changes)
+  arrays: data/eval2/calib_v22PL_te2024_s42-inseason-priors-npb-2025-r2000_arrays.npz
+
+  1643 games in 502 series across 29 teams; games/series: mean 3.3, median 3, max 7
+
+  [probability scale]  n_dev=1643
+    Pearson r     0.598  95% CI [0.552, 0.642]  (cluster bootstrap by series)
+    Spearman rho  0.603
+    OLS slope     0.461  95% CI [0.420, 0.499]   intercept +0.0000
+    R^2           0.357
+    sign accuracy 0.709  95% CI [0.685, 0.734]
+    MAE of forecast change (residual) 0.0266
+
+  [logit scale]  n_dev=1643
+    Pearson r     0.581  95% CI [0.527, 0.632]  (cluster bootstrap by series)
+    Spearman rho  0.601
+    OLS slope     0.444  95% CI [0.402, 0.484]   intercept -0.0000
+    R^2           0.337
+    sign accuracy 0.708  95% CI [0.684, 0.733]
+    MAE of forecast change (residual) 0.1113
+
+  CALIBRATION / EVALUATION SPLIT (fit slope on a random half of series, freeze, eval on rest):
+    slope fit on 251 series = 0.443
+    held-out 251 series own OLS: slope 0.480, intercept +0.0000, corr 0.595, sign acc 0.711
+    held-out MAE 0.0270 vs 0.0341 (predict-zero) = 21% better
+    frozen-calibration check (market on frozen-calibrated sim): slope 1.082 (want ~1), intercept +0.0000 (want ~0)
