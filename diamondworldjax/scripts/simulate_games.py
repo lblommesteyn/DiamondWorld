@@ -170,6 +170,26 @@ def simulate(
     home_lineup = np.array([g["home_lineup"] for g in games], dtype=np.int64)
     P = int(np.asarray(pt["stats"]).shape[0])
     unknown_idx = int(pt.get("unknown_index", P))
+    # Reliever scenarios: optional "home_relief_plan" / "away_relief_plan" per game, a list
+    # of (inning, pitcher_idx). At the first PA of that inning the planned arm replaces
+    # whoever is pitching, works the whole inning (no hook inside it), and is lifted at the
+    # start of the next inning unless the plan brings in someone else. Planned arms are
+    # removed from the automatic staff so they cannot also appear by default.
+    plans = {}
+    for side in ("home", "away"):
+        raw = [sorted(g.get(f"{side}_relief_plan") or []) for g in games]
+        if any(raw):
+            planned = [{int(p) for _, p in r} for r in raw]
+            games = [dict(g, **{f"{side}_staff": [g[f"{side}_staff"][0]] +
+                                [p for p in g[f"{side}_staff"][1:] if int(p) not in pl]})
+                     if pl else g for g, pl in zip(games, planned)]
+            K = max(len(r) for r in raw)
+            inn = np.full((len(games), K), 10**6, dtype=np.int64)
+            pid = np.full((len(games), K), -1, dtype=np.int64)
+            for i, r in enumerate(raw):
+                for k, (n, p) in enumerate(r):
+                    inn[i, k], pid[i, k] = int(n), int(p)
+            plans[side] = (inn, pid)
     home_staff, home_staff_len = pad_staffs(games, "home_staff", unknown_idx)  # pitches top halves
     away_staff, away_staff_len = pad_staffs(games, "away_staff", unknown_idx)  # pitches bottom halves
     park = np.array([g["park"] for g in games], dtype=np.int64)
@@ -269,6 +289,8 @@ def simulate(
             "pa": np.zeros(G, dtype=np.float64),
             "ra": np.zeros(G, dtype=np.float64),   # runs allowed by the current pitcher
             "hook": hook0,
+            "lock": np.zeros(G, dtype=np.int64),   # inning a planned reliever owns (0 = none)
+            "plan_ptr": np.zeros(G, dtype=np.int64),
         }
 
     home_ps = _staff_state()  # home staff state (faces away lineup)
@@ -311,6 +333,9 @@ def simulate(
     occ_on = 0.0
     occ_n = 0.0
     pcounts = np.zeros((P, 9), dtype=np.float64)
+    # PAs faced per (fielding side: 0 home / 1 away, inning 1..12+, pitcher index), summed
+    # over games and replicas. Cheap, and it is how a reliever scenario reports usage.
+    pitcher_inning_pa = np.zeros((2, 13, P + 1), dtype=np.float64)
     runs_by_inning = np.zeros(9)   # innings 1-9 (shape test); extras tracked apart
     extra_runs = 0.0
     n_walkoffs = 0
@@ -346,10 +371,48 @@ def simulate(
                 break
             idx = np.where(active)[0]
 
+            plan = plans.get("home" if half == 0 else "away")
+            if pa_number == 1 and not no_bullpen:
+                # A planned reliever's inning is over: lift him (a new plan entry below
+                # may bring in the next planned arm instead).
+                done = idx[(ps["lock"][idx] > 0) & (ps["lock"][idx] < inning)]
+                if len(done):
+                    ps["lock"][done] = 0
+                    nxt = done[ps["cur"][done] + 1 < staff_len[done]]
+                    ps["cur"][nxt] += 1
+                    ps["pa"][nxt] = 0.0
+                    ps["ra"][nxt] = 0.0
+                    ps["hook"][nxt] = (np.array([hook_rng[g].choice(reliever_pas) for g in nxt])
+                                       if crn else rng_np.choice(reliever_pas, size=len(nxt)))
+                    cyc[nxt, :] = 0
+                if plan is not None:
+                    inn_p, pid_p = plan
+                    K = inn_p.shape[1]
+                    for g in idx:
+                        k = ps["plan_ptr"][g]
+                        if k >= K or inn_p[g, k] > inning:
+                            continue
+                        pos = ps["cur"][g] + 1          # insert right after the current arm
+                        if pos >= staff.shape[1]:
+                            ps["plan_ptr"][g] = K
+                            continue
+                        s = list(staff[g, :staff_len[g]])
+                        s = (s[:pos] + [int(pid_p[g, k])] + s[pos:])[:staff.shape[1]]
+                        staff_len[g] = len(s)
+                        staff[g, :len(s)] = s
+                        staff[g, len(s):] = s[-1]
+                        ps["cur"][g] = pos
+                        ps["pa"][g] = 0.0
+                        ps["ra"][g] = 0.0
+                        ps["hook"][g] = np.inf
+                        ps["lock"][g] = inning
+                        ps["plan_ptr"][g] = k + 1
+                        cyc[g, :] = 0
+
             # Pitching change: decide who is pulled, then bring in a fresh arm.
             if not no_bullpen:
                 a = idx
-                can = ps["cur"][a] + 1 < staff_len[a]
+                can = (ps["cur"][a] + 1 < staff_len[a]) & (ps["lock"][a] != inning)
                 if hook_model is not None:
                     # Starter governed by the fitted state hazard; relievers keep the
                     # sampled PAs threshold. TTO proxied from PAs faced (~9 per turn).
@@ -377,6 +440,7 @@ def simulate(
             slot = ptr[idx]
             batter = lineup[idx, slot]
             pitcher = staff[idx, ps["cur"][idx]]
+            np.add.at(pitcher_inning_pa, (half, min(inning, 12), np.minimum(pitcher, P)), 1.0)
             cyc[idx, slot] += 1
             tto = np.minimum(cyc[idx, slot], 3)
 
@@ -708,6 +772,7 @@ def simulate(
         "home9": home9,
         "occ": occ_on / max(occ_n, 1),
         "pcounts": pcounts,
+        "pitcher_inning_pa": pitcher_inning_pa,
         "runs_by_inning": runs_by_inning,
         "extra_runs": extra_runs,
         "n_extra_games": n_extra_games,

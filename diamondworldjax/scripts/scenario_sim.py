@@ -149,7 +149,8 @@ class Sim:
             pass
         return self._mean_inference, self._mean_seq_inference
 
-    def run(self, specs, R=200, seed=0, skill_mode=None, no_bullpen=False, crn=True):
+    def run(self, specs, R=200, seed=0, skill_mode=None, no_bullpen=False, crn=True,
+            return_raw=False):
         """Return home (n,R), away (n,R) run totals.
 
         crn (default True): pair the random stream by replica index across
@@ -174,6 +175,8 @@ class Sim:
                        simulation_season=2024, cached_inference=cached_inference,
                        cached_seq_inference=cached_seq_inference)
         n = len(specs)
+        if return_raw:   # full simulate() output too, e.g. pitcher_inning_pa for scenarios
+            return res["home"].reshape(n, R), res["away"].reshape(n, R), res
         return res["home"].reshape(n, R), res["away"].reshape(n, R)
 
     # ---- real games as specs ----
