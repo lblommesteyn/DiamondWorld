@@ -78,6 +78,12 @@ def main():
                     help="Multiplier for the calibration vector (default: 0.18).")
     ap.add_argument("--no-recal", action="store_true",
                     help="Sample raw outcome logits without a calibration vector.")
+    ap.add_argument("--staff-by-date", action="store_true",
+                    help="order the leak-free staff history by date, not game_pk (which is "
+                         "not chronological); same-day games never see each other")
+    ap.add_argument("--bullpen-fatigue", action="store_true",
+                    help="with --pregame-staff: relievers tired from recent days go to the "
+                         "back of the bullpen (public availability rules; implies by-date)")
     ap.add_argument("--pregame-staff", action="store_true",
                     help="select relievers from prior games only, removing the "
                          "realized-bullpen leak described above")
@@ -110,7 +116,9 @@ def main():
         raise SystemExit(f"--season {args.season} is inside the checkpoint's training range "
                          f"(train_end={s.train_end}); the test season must be held out")
     outcomes = real_runs(args.season)
-    games = [g for g in s.real_games(args.season, limit=10000, pregame_staff=args.pregame_staff)
+    games = [g for g in s.real_games(args.season, limit=10000, pregame_staff=args.pregame_staff,
+                                staff_by_date=args.staff_by_date,
+                                bullpen_fatigue=args.bullpen_fatigue)
              if g["park"] != 0 and int(g["game_pk"]) in outcomes]
     if args.limit:
         games = games[:args.limit]
@@ -142,6 +150,8 @@ def main():
     cache_config = json.dumps({
         "ckpt": args.ckpt,
         "season": args.season,
+        "staff_by_date": args.staff_by_date or args.bullpen_fatigue,
+        "bullpen_fatigue": args.bullpen_fatigue,
         "r": args.r,
         "train_end": args.train_end,
         "contact_quality": args.contact_quality,

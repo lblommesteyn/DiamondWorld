@@ -29,6 +29,20 @@ likely to be used, which is the honest stand-in for the realized order.
 
 Games are ordered by game_pk, which increases with date within a season. That is the
 only time key the processed data carries.
+
+CORRECTION (Oct 2026): game_pk is NOT chronological. A postponed game keeps its original,
+low game_pk and is played weeks later, so under game_pk order its relievers were folded
+into the "prior" history of games actually played before it: a small look-ahead. Passing
+`dates` (game_pk -> ISO date, from the schedule) orders by date and only lets a game see
+games from strictly earlier DAYS. Off by default so earlier results reproduce.
+
+BULLPEN FATIGUE (opt-in). Whether a reliever is available is public before first pitch:
+it follows from who pitched, and how much, on the previous days. With `fatigue=True` a
+reliever is moved to the back of the pool if, before this game's date, he
+  (a) pitched on each of the two previous days, or
+  (b) threw >= 30 pitches the previous day, or
+  (c) threw >= 50 pitches over the previous three days.
+These are the common public availability heuristics, not tuned. Requires `dates`.
 """
 from __future__ import annotations
 
@@ -62,15 +76,44 @@ def build_prior_cooccurrence(pa: pl.DataFrame) -> dict:
     return {"order": order}
 
 
+FATIGUE_YESTERDAY_PITCHES = 30
+FATIGUE_THREE_DAY_PITCHES = 50
+
+
+def _pitches_by_game(pa: pl.DataFrame) -> dict:
+    """(game_pk, pitcher_id) -> pitches thrown (max cumulative in-game count)."""
+    pcol = "pitcher_id" if "pitcher_id" in pa.columns else "pitcher_idx"
+    if "pitch_count_game" not in pa.columns:
+        return {}
+    g = pa.group_by(["game_pk", pcol]).agg(pl.col("pitch_count_game").max().alias("pc"))
+    return {(int(a), int(b)): float(c or 0) for a, b, c in g.iter_rows()}
+
+
+def _tired(log, day, ordinal):
+    """Public availability heuristics from a reliever's log of (day ordinal, pitches)."""
+    d1 = sum(p for d, p in log if d == ordinal - 1)
+    d2 = any(d == ordinal - 2 for d, _ in log)
+    three = sum(p for d, p in log if ordinal - 3 <= d <= ordinal - 1)
+    return (d1 > 0 and d2) or d1 >= FATIGUE_YESTERDAY_PITCHES or three >= FATIGUE_THREE_DAY_PITCHES
+
+
 def pregame_staffs(
-    pa: pl.DataFrame, id_to_idx: dict, unknown_idx: int | None = None
+    pa: pl.DataFrame, id_to_idx: dict, unknown_idx: int | None = None,
+    dates: dict | None = None, fatigue: bool = False, stats: dict | None = None,
 ) -> dict:
     """(game_pk, half_bin) -> staff of player INDICES, leak-free.
 
     The staff is [starter] + relievers ranked by how often they have followed this
     starter in strictly earlier games. Counts are accumulated as we sweep forward, so
     a game's pool never sees its own outcome or any later game.
+
+    dates: game_pk -> ISO date. When given, games are ordered by date and history is
+    folded in only after each DAY, so same-day games (doubleheaders) never see each other.
+    fatigue: needs dates; tired relievers (see module docstring) go to the back of the pool.
+    stats: optional dict, filled with counts of how often fatigue changed a staff.
     """
+    if fatigue and dates is None:
+        raise ValueError("fatigue=True needs dates")
     if unknown_idx is None:
         unknown_idx = max(id_to_idx.values(), default=-1) + 1
     co = build_prior_cooccurrence(pa)
@@ -78,10 +121,19 @@ def pregame_staffs(
     hist: dict[int, dict[int, int]] = {}
     # league-wide reliever usage so far, the fallback for an unseen starter
     league: dict[int, int] = {}
+    pitches = _pitches_by_game(pa) if fatigue else {}
+    usage: dict[int, list] = {}            # pitcher -> [(day ordinal, pitches)]
 
-    out: dict[tuple[int, int], list[int]] = {}
-    for gp, hb, starter, relievers in co["order"]:
-        # --- select using ONLY what has accumulated from earlier games ---
+    order = co["order"]
+    if dates is not None:
+        from datetime import date as _date
+        day = {gp: _date.fromisoformat(dates[gp]).toordinal() if gp in dates else 10**9
+               for gp, _, _, _ in order}
+        order = sorted(order, key=lambda t: (day[t[0]], t[0], t[1]))
+    else:
+        day = None
+
+    def select(gp, hb, starter):
         prior = hist.get(starter, {})
         ranked = sorted(prior.items(), key=lambda kv: (-kv[1], kv[0]))
         pool = [p for p, _ in ranked]
@@ -94,14 +146,47 @@ def pregame_staffs(
                     pool.append(p)
                 if len(pool) >= MAX_STAFF - 1:
                     break
+        if fatigue:
+            o = day[gp]
+            fresh = [p for p in pool if not _tired(usage.get(p, ()), None, o)]
+            tired = [p for p in pool if _tired(usage.get(p, ()), None, o)]
+            if stats is not None:
+                top = pool[:3]
+                stats["halves"] = stats.get("halves", 0) + 1
+                stats["top3_tired"] = stats.get("top3_tired", 0) + sum(p in tired for p in top)
+                stats["changed"] = stats.get("changed", 0) + int(fresh + tired != pool)
+            pool = fresh + tired
         staff_ids = [starter] + pool[: MAX_STAFF - 1]
-        out[(gp, hb)] = [id_to_idx.get(int(p), unknown_idx) for p in staff_ids]
+        return [id_to_idx.get(int(p), unknown_idx) for p in staff_ids]
 
-        # --- only now fold this game into the history ---
+    def fold(gp, starter, relievers):
         d = hist.setdefault(starter, {})
         for r in relievers:
             d[r] = d.get(r, 0) + 1
             league[r] = league.get(r, 0) + 1
+        if fatigue:
+            for p in [starter] + list(relievers):
+                usage.setdefault(p, []).append((day[gp], pitches.get((gp, p), 15.0)))
+
+    out: dict[tuple[int, int], list[int]] = {}
+    if day is None:
+        for gp, hb, starter, relievers in order:
+            # --- select using ONLY what has accumulated from earlier games ---
+            out[(gp, hb)] = select(gp, hb, starter)
+            # --- only now fold this game into the history ---
+            fold(gp, starter, relievers)
+        return out
+
+    i = 0
+    while i < len(order):
+        j = i
+        while j < len(order) and day[order[j][0]] == day[order[i][0]]:
+            j += 1
+        for gp, hb, starter, relievers in order[i:j]:      # select for the whole day first
+            out[(gp, hb)] = select(gp, hb, starter)
+        for gp, hb, starter, relievers in order[i:j]:      # then fold the day in
+            fold(gp, starter, relievers)
+        i = j
     return out
 
 

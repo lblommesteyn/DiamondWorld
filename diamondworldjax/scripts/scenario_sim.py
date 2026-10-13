@@ -180,7 +180,8 @@ class Sim:
         return res["home"].reshape(n, R), res["away"].reshape(n, R)
 
     # ---- real games as specs ----
-    def real_games(self, season=2024, limit=400, pregame_staff=False):
+    def real_games(self, season=2024, limit=400, pregame_staff=False, staff_by_date=False,
+                   bullpen_fatigue=False):
         """Game specs for the simulator.
 
         pregame_staff=True replaces each side's realized staff, which extract_games
@@ -197,7 +198,14 @@ class Sim:
                               unknown_idx=self.ptab["unknown_index"])
         if pregame_staff:
             from diamondworldjax.sim.pregame_staff import pregame_staffs
-            staffs = pregame_staffs(te, self.id2i, self.ptab["unknown_index"])
+            dates = None
+            if staff_by_date or bullpen_fatigue:
+                # date order (game_pk is not chronological) and, optionally, availability
+                from diamondworldjax.scripts.run_inseason_sim import game_dates
+                dates = game_dates(season)
+            self.staff_stats = {}
+            staffs = pregame_staffs(te, self.id2i, self.ptab["unknown_index"], dates=dates,
+                                    fatigue=bullpen_fatigue, stats=self.staff_stats)
             # half_bin 0 (top, away batting) is pitched by the HOME staff, and vice
             # versa. extract_games tags them this way and the v1 extractor got it
             # crossed, so the mapping is spelled out rather than inferred.
