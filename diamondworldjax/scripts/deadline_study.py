@@ -48,14 +48,16 @@ def main():
                     help="ISO date: rebuild player ratings from training seasons plus every 2024 game "
                          "BEFORE this date (e.g. 2024-07-30, the trade deadline), as run_inseason_sim "
                          "does, and run the counterfactuals with them. Default: frozen training ratings.")
+    ap.add_argument("--season", type=int, default=2024)
+    ap.add_argument("--staff-by-date", action="store_true")
     ap.add_argument("--tag", default="v22L")
     args = ap.parse_args()
 
     names = {int(k): v for k, v in json.loads(
         Path("data/cache/projections/mlb_names.json").read_text()).items()}
-    dates, tnames = game_dates(), team_names()
-    sbt = starts_by_team()
-    credit, _ = starter_credits(args.arrays)
+    dates, tnames = game_dates(args.season), team_names(args.season)
+    sbt = starts_by_team(args.season)
+    credit, _ = starter_credits(args.arrays, season=args.season)
     cmap = {pid: {pk: (s, m) for pk, s, m in c} for pid, c in credit.items()}
 
     movers = []
@@ -82,7 +84,7 @@ def main():
         meta = pickle.load(open(args.ckpt, "rb"))["pa_metadata"]
         cfg = meta["config"]
         train = load_seasons(list(meta["train_seasons"]), data_root=processed_root())
-        te = load_seasons([2024], data_root=processed_root())
+        te = load_seasons([args.season], data_root=processed_root())
         before_pks = [p for p, d in dates.items() if d < args.ratings_through]
         before = te.filter(pl.col("game_pk").is_in(before_pks))
         fresh = _build_player_table(
@@ -95,9 +97,10 @@ def main():
             pitcher_bf_log=cfg.get("pitcher_bf_log", False))
         table, n_extra = extend_table(s.ptab, fresh)
         install(s, table, dict(s.params), n_extra)
-        print(f"ratings through {args.ratings_through} (exclusive): {len(before):,} 2024 pitches, "
+        print(f"ratings through {args.ratings_through} (exclusive): {len(before):,} {args.season} pitches, "
               f"{n_extra} players added", flush=True)
-    games = {int(g["game_pk"]): g for g in s.real_games(2024, limit=10000, pregame_staff=True)}
+    games = {int(g["game_pk"]): g for g in s.real_games(args.season, limit=10000, pregame_staff=True,
+                                                        staff_by_date=args.staff_by_date)}
     id2i = s.id2i
 
     rows = []
@@ -150,7 +153,7 @@ def main():
             cf_per_start=args.cal * deltas.mean() * 100,
             cf_wins=args.cal * deltas.sum()))
 
-    L = ["TRADE-DEADLINE DECISION STUDY (2024), win probability in market-calibrated points",
+    L = [f"TRADE-DEADLINE DECISION STUDY ({args.season}), win probability in market-calibrated points",
          f"  ratings: {'through ' + args.ratings_through + ' (exclusive)' if args.ratings_through else 'frozen at end of training'}; "
          f"per-start credits from {args.arrays}",
          f"  simulator: {args.ckpt}, R={args.r} per counterfactual, calibration slope {args.cal}",

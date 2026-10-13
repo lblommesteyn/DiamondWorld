@@ -18,11 +18,16 @@ from diamondworldjax.scripts.simulator_benchmarks import team_rates_2024
 from diamondworldjax.scripts.starter_value import starters_2024
 
 
-def starts_by_team():
+def _sched_path(season):
+    p = Path(f"data/cache/sched_{season}.json")
+    return p if p.exists() else Path(f"data/cache/market/sched_{season}.json")
+
+
+def starts_by_team(season=2024):
     """pitcher id -> list of (game_pk, team id, home?) for every 2024 start, in game order."""
-    st = starters_2024()
-    _, pkt = team_rates_2024()
-    dates = game_dates()
+    st = starters_2024(season)
+    _, pkt = team_rates_2024(season)
+    dates = game_dates(season)
     out = defaultdict(list)
     # game_pk is not chronological (postponed and makeup games keep their original ids), so
     # order by the scheduled date
@@ -35,14 +40,14 @@ def starts_by_team():
     return out
 
 
-def game_dates():
+def game_dates(season=2024):
     """game_pk -> ISO date from the cached 2024 schedule."""
-    sched = json.loads(Path("data/cache/sched_2024.json").read_text())
+    sched = json.loads(_sched_path(season).read_text())
     return {int(g["gamePk"]): d["date"] for d in sched["dates"] for g in d["games"]}
 
 
-def team_names():
-    sched = json.loads(Path("data/cache/sched_2024.json").read_text())
+def team_names(season=2024):
+    sched = json.loads(_sched_path(season).read_text())
     return {g["teams"][s]["team"]["id"]: g["teams"][s]["team"]["name"]
             for d in sched["dates"] for g in d["games"] for s in ("home", "away")}
 

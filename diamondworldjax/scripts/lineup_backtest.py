@@ -38,6 +38,8 @@ def main():
                          "their own feature table and config.")
     ap.add_argument("--pregame-staff", action="store_true",
                     help="bullpen from prior games only (leak-free), as in run_pregame_sim")
+    ap.add_argument("--season", type=int, default=2024)
+    ap.add_argument("--staff-by-date", action="store_true")
     ap.add_argument("--tag", default=None, help="report suffix; default keeps lineup_backtest.txt")
     args = ap.parse_args()
 
@@ -46,7 +48,8 @@ def main():
     bstat = s.stats
     bq = bstat[:, 0] + 1.8 * bstat[:, 3] + 0.7 * bstat[:, 1] - 0.3 * bstat[:, 2]     # wOBA-ish
     obp = bstat[:, 0] + 0.7 * bstat[:, 1]
-    games = [g for g in s.real_games(2024, limit=1500, pregame_staff=args.pregame_staff)
+    games = [g for g in s.real_games(args.season, limit=1500, pregame_staff=args.pregame_staff,
+                                staff_by_date=args.staff_by_date)
              if g["park"] != 0 and g["home_staff"] and g["home_staff"][0] != unknown
              and g["away_staff"] and g["away_staff"][0] != unknown
              and sum(1 for x in g["home_lineup"] if x != unknown) == 9][:args.games]
