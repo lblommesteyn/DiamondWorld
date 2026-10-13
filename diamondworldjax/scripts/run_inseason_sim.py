@@ -108,6 +108,10 @@ def main():
                          "(and with --npb, NPB) priors; pitchers too when the checkpoint has "
                          "pitcher rate columns. See run_milb_prior_sim.")
     ap.add_argument("--npb", action="store_true")
+    ap.add_argument("--block", choices=["month", "week"], default="month",
+                    help="how often ratings are rebuilt; blocks under 30 games merge forward")
+    ap.add_argument("--staff-by-date", action="store_true")
+    ap.add_argument("--bullpen-fatigue", action="store_true")
     ap.add_argument("--tag", required=True)
     args = ap.parse_args()
 
@@ -135,15 +139,32 @@ def main():
             print(line, flush=True)
     terminal = test.filter(pl.col("pa_terminal"))
 
-    months = defaultdict(list)
+    from datetime import date as _date
+    months = defaultdict(list)                       # block key -> game_pks
     for pk, d in dates.items():
         if pk in outcomes:
-            months[d[:7]].append(pk)
+            if args.block == "week":
+                y, w, _ = _date.fromisoformat(d).isocalendar()
+                months[f"{y}-W{w:02d}"].append(pk)
+            else:
+                months[d[:7]].append(pk)
     order = sorted(months)
-    # March has a handful of openers; fold it into April so the first block is not tiny
-    if order and order[0].endswith("-03") and len(order) > 1:
-        months[order[1]] += months.pop(order[0])
-        order = order[1:]
+    if args.block == "month":
+        # March has a handful of openers; fold it into April (the original rule, kept so
+        # earlier monthly results reproduce exactly)
+        if order and order[0].endswith("-03") and len(order) > 1:
+            months[order[1]] += months.pop(order[0])
+            order = order[1:]
+    else:
+        # Small weekly blocks (season openers, the All-Star week) merge into the next block
+        merged, carry = [], []
+        for k in order:
+            carry += months[k]
+            if len(carry) >= 30 or k == order[-1]:
+                merged.append((k, carry))
+                carry = []
+        months = dict(merged)
+        order = [k for k, _ in merged]
 
     Hs, As, pks = [], [], []
     for m in order:
@@ -168,7 +189,9 @@ def main():
                                                   pitchers=bool(cfg.get("pitcher_rates")))
             print(f"  {m} priors: " + "; ".join(describe(names, ctx)), flush=True)
         install(s, table, base_params, n_extra + n_prior)
-        games = [g for g in s.real_games(args.season, limit=100000, pregame_staff=True)
+        games = [g for g in s.real_games(args.season, limit=100000, pregame_staff=True,
+                                         staff_by_date=args.staff_by_date,
+                                         bullpen_fatigue=args.bullpen_fatigue)
                  if int(g["game_pk"]) in want and g["park"] != 0]
         if args.limit:
             games = games[:args.limit]
