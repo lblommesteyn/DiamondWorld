@@ -190,6 +190,18 @@ def simulate(
                 for k, (n, p) in enumerate(r):
                     inn[i, k], pid[i, k] = int(n), int(p)
             plans[side] = (inn, pid)
+    # Closer: optional "home_closer" / "away_closer" per game (pitcher idx or None). He is
+    # held out of the automatic staff and, at the first PA of the 9th inning or later with
+    # his side ahead by 1-3 runs, enters like a planned arm (owns the inning, lifted after
+    # it). Once per game.
+    closer_ids = {}
+    for side in ("home", "away"):
+        cl = [g.get(f"{side}_closer") for g in games]
+        if any(c is not None for c in cl):
+            games = [dict(g, **{f"{side}_staff": [g[f"{side}_staff"][0]] +
+                                [p for p in g[f"{side}_staff"][1:] if int(p) != int(c)]})
+                     if c is not None else g for g, c in zip(games, cl)]
+            closer_ids[side] = np.array([-1 if c is None else int(c) for c in cl], dtype=np.int64)
     home_staff, home_staff_len = pad_staffs(games, "home_staff", unknown_idx)  # pitches top halves
     away_staff, away_staff_len = pad_staffs(games, "away_staff", unknown_idx)  # pitches bottom halves
     park = np.array([g["park"] for g in games], dtype=np.int64)
@@ -291,6 +303,7 @@ def simulate(
             "hook": hook0,
             "lock": np.zeros(G, dtype=np.int64),   # inning a planned reliever owns (0 = none)
             "plan_ptr": np.zeros(G, dtype=np.int64),
+            "closer_used": np.zeros(G, dtype=bool),
         }
 
     home_ps = _staff_state()  # home staff state (faces away lineup)
@@ -407,6 +420,28 @@ def simulate(
                         ps["hook"][g] = np.inf
                         ps["lock"][g] = inning
                         ps["plan_ptr"][g] = k + 1
+                        cyc[g, :] = 0
+
+                closer = closer_ids.get("home" if half == 0 else "away")
+                if closer is not None and inning >= 9:
+                    lead = fld_score[idx] - bat_score[idx]
+                    want = idx[(closer[idx] >= 0) & ~ps["closer_used"][idx]
+                               & (lead >= 1) & (lead <= 3) & (ps["lock"][idx] != inning)]
+                    for g in want:
+                        pos = ps["cur"][g] + 1
+                        ps["closer_used"][g] = True
+                        if pos >= staff.shape[1]:
+                            continue
+                        s_ = list(staff[g, :staff_len[g]])
+                        s_ = (s_[:pos] + [int(closer[g])] + s_[pos:])[:staff.shape[1]]
+                        staff_len[g] = len(s_)
+                        staff[g, :len(s_)] = s_
+                        staff[g, len(s_):] = s_[-1]
+                        ps["cur"][g] = pos
+                        ps["pa"][g] = 0.0
+                        ps["ra"][g] = 0.0
+                        ps["hook"][g] = np.inf
+                        ps["lock"][g] = inning
                         cyc[g, :] = 0
 
             # Pitching change: decide who is pulled, then bring in a fresh arm.

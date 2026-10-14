@@ -43,6 +43,14 @@ reliever is moved to the back of the pool if, before this game's date, he
   (b) threw >= 30 pitches the previous day, or
   (c) threw >= 50 pitches over the previous three days.
 These are the common public availability heuristics, not tuned. Requires `dates`.
+
+CLOSER (opt-in). With a `closers` dict, each (game, half) also gets the pool reliever most
+used in the closer's role so far: a save-type appearance is finishing a half after entering
+in the 9th inning or later with a 1-3 run lead (blown saves count; the role is the point).
+Candidates are the top CLOSER_CANDIDATES relievers seen behind this starter (never the
+league-wide top-up), so the closer is on the current club; at least CLOSER_MIN_SAVES prior save-type appearances are needed, weighted by
+recency (CLOSER_HALFLIFE_DAYS) when dates are given. A tired closer (fatigue=True) is not
+named. The simulator holds him for the 9th in save situations.
 """
 from __future__ import annotations
 
@@ -76,6 +84,26 @@ def build_prior_cooccurrence(pa: pl.DataFrame) -> dict:
     return {"order": order}
 
 
+CLOSER_CANDIDATES = 8
+CLOSER_MIN_SAVES = 2.0
+CLOSER_HALFLIFE_DAYS = 30.0
+
+
+def save_entries(pa: pl.DataFrame) -> dict:
+    """(game_pk, half_bin) -> pitcher who finished the half after entering in the 9th or
+    later with a 1-3 run lead for his side (score_diff is the batting side's margin)."""
+    pcol = "pitcher_id" if "pitcher_id" in pa.columns else "pitcher_idx"
+    df = pa.select(["game_pk", "half_bin", pcol, "at_bat_number", "inning", "score_diff"]).sort(
+        ["game_pk", "half_bin", "at_bat_number"])
+    first = df.group_by(["game_pk", "half_bin", pcol]).agg(
+        pl.col("inning").first().alias("inn"), pl.col("score_diff").first().alias("sd"))
+    last = df.group_by(["game_pk", "half_bin"]).agg(pl.col(pcol).last().alias("fin"))
+    j = last.join(first, left_on=["game_pk", "half_bin", "fin"],
+                  right_on=["game_pk", "half_bin", pcol])
+    j = j.filter((pl.col("inn") >= 9) & (-pl.col("sd") >= 1) & (-pl.col("sd") <= 3))
+    return {(int(a), int(b)): int(c) for a, b, c in j.select(["game_pk", "half_bin", "fin"]).iter_rows()}
+
+
 FATIGUE_YESTERDAY_PITCHES = 30
 FATIGUE_THREE_DAY_PITCHES = 50
 
@@ -100,6 +128,7 @@ def _tired(log, day, ordinal):
 def pregame_staffs(
     pa: pl.DataFrame, id_to_idx: dict, unknown_idx: int | None = None,
     dates: dict | None = None, fatigue: bool = False, stats: dict | None = None,
+    closers: dict | None = None,
 ) -> dict:
     """(game_pk, half_bin) -> staff of player INDICES, leak-free.
 
@@ -111,6 +140,7 @@ def pregame_staffs(
     folded in only after each DAY, so same-day games (doubleheaders) never see each other.
     fatigue: needs dates; tired relievers (see module docstring) go to the back of the pool.
     stats: optional dict, filled with counts of how often fatigue changed a staff.
+    closers: optional dict, filled with (game_pk, half_bin) -> closer INDEX (see module doc).
     """
     if fatigue and dates is None:
         raise ValueError("fatigue=True needs dates")
@@ -123,6 +153,9 @@ def pregame_staffs(
     league: dict[int, int] = {}
     pitches = _pitches_by_game(pa) if fatigue else {}
     usage: dict[int, list] = {}            # pitcher -> [(day ordinal, pitches)]
+    saves = save_entries(pa) if closers is not None else {}
+    save_log: dict[int, list] = {}         # pitcher -> [day ordinal or game index]
+    gidx = {}
 
     order = co["order"]
     if dates is not None:
@@ -157,9 +190,23 @@ def pregame_staffs(
                 stats["changed"] = stats.get("changed", 0) + int(fresh + tired != pool)
             pool = fresh + tired
         staff_ids = [starter] + pool[: MAX_STAFF - 1]
+        if closers is not None:
+            now = day[gp] if day is not None else gidx.setdefault(gp, len(gidx))
+            hl = CLOSER_HALFLIFE_DAYS if day is not None else 15.0 * CLOSER_HALFLIFE_DAYS
+            def weight(p):
+                return sum(0.5 ** ((now - t) / hl) for t in save_log.get(p, ()))
+            own = [p for p, _ in ranked][:CLOSER_CANDIDATES]   # not the league top-up
+            cands = [p for p in own
+                     if not (fatigue and _tired(usage.get(p, ()), None, day[gp]))]
+            best = max(cands, key=lambda p: (weight(p), -pool.index(p)), default=None)
+            if best is not None and weight(best) >= CLOSER_MIN_SAVES:
+                closers[(gp, hb)] = id_to_idx.get(int(best), unknown_idx)
         return [id_to_idx.get(int(p), unknown_idx) for p in staff_ids]
 
-    def fold(gp, starter, relievers):
+    def fold(gp, starter, relievers, hb=None):
+        if hb is not None and (gp, hb) in saves:
+            t = day[gp] if day is not None else gidx.setdefault(gp, len(gidx))
+            save_log.setdefault(saves[(gp, hb)], []).append(t)
         d = hist.setdefault(starter, {})
         for r in relievers:
             d[r] = d.get(r, 0) + 1
@@ -174,7 +221,7 @@ def pregame_staffs(
             # --- select using ONLY what has accumulated from earlier games ---
             out[(gp, hb)] = select(gp, hb, starter)
             # --- only now fold this game into the history ---
-            fold(gp, starter, relievers)
+            fold(gp, starter, relievers, hb)
         return out
 
     i = 0
@@ -185,7 +232,7 @@ def pregame_staffs(
         for gp, hb, starter, relievers in order[i:j]:      # select for the whole day first
             out[(gp, hb)] = select(gp, hb, starter)
         for gp, hb, starter, relievers in order[i:j]:      # then fold the day in
-            fold(gp, starter, relievers)
+            fold(gp, starter, relievers, hb)
         i = j
     return out
 

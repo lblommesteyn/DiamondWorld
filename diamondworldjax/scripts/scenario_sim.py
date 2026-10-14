@@ -181,7 +181,7 @@ class Sim:
 
     # ---- real games as specs ----
     def real_games(self, season=2024, limit=400, pregame_staff=False, staff_by_date=False,
-                   bullpen_fatigue=False):
+                   bullpen_fatigue=False, closers=False):
         """Game specs for the simulator.
 
         pregame_staff=True replaces each side's realized staff, which extract_games
@@ -199,13 +199,14 @@ class Sim:
         if pregame_staff:
             from diamondworldjax.sim.pregame_staff import pregame_staffs
             dates = None
-            if staff_by_date or bullpen_fatigue:
+            if staff_by_date or bullpen_fatigue or closers:
                 # date order (game_pk is not chronological) and, optionally, availability
                 from diamondworldjax.scripts.run_inseason_sim import game_dates
                 dates = game_dates(season)
             self.staff_stats = {}
+            cl = {} if closers else None
             staffs = pregame_staffs(te, self.id2i, self.ptab["unknown_index"], dates=dates,
-                                    fatigue=bullpen_fatigue, stats=self.staff_stats)
+                                    fatigue=bullpen_fatigue, stats=self.staff_stats, closers=cl)
             # half_bin 0 (top, away batting) is pitched by the HOME staff, and vice
             # versa. extract_games tags them this way and the v1 extractor got it
             # crossed, so the mapping is spelled out rather than inferred.
@@ -215,6 +216,8 @@ class Sim:
                     st = staffs.get((gp, half))
                     if st:
                         g[f"{fielding}_staff"] = st
+                    if cl is not None and (gp, half) in cl:
+                        g[f"{fielding}_closer"] = cl[(gp, half)]
         return games  # each has game_pk, away/home_lineup, away/home_staff, park
 
     def player_rate(self, idx):

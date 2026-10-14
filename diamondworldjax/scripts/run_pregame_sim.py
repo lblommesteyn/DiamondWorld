@@ -84,6 +84,9 @@ def main():
     ap.add_argument("--bullpen-fatigue", action="store_true",
                     help="with --pregame-staff: relievers tired from recent days go to the "
                          "back of the bullpen (public availability rules; implies by-date)")
+    ap.add_argument("--closer", action="store_true",
+                    help="with --pregame-staff: name each side's closer from prior save-type "
+                         "appearances and hold him for the 9th+ with a 1-3 run lead (implies by-date)")
     ap.add_argument("--pregame-staff", action="store_true",
                     help="select relievers from prior games only, removing the "
                          "realized-bullpen leak described above")
@@ -118,7 +121,7 @@ def main():
     outcomes = real_runs(args.season)
     games = [g for g in s.real_games(args.season, limit=10000, pregame_staff=args.pregame_staff,
                                 staff_by_date=args.staff_by_date,
-                                bullpen_fatigue=args.bullpen_fatigue)
+                                bullpen_fatigue=args.bullpen_fatigue, closers=args.closer)
              if g["park"] != 0 and int(g["game_pk"]) in outcomes]
     if args.limit:
         games = games[:args.limit]
@@ -152,6 +155,7 @@ def main():
         "season": args.season,
         "staff_by_date": args.staff_by_date or args.bullpen_fatigue,
         "bullpen_fatigue": args.bullpen_fatigue,
+        **({"closer": True} if args.closer else {}),
         "r": args.r,
         "train_end": args.train_end,
         "contact_quality": args.contact_quality,
