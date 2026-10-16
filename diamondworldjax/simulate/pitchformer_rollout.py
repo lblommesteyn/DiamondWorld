@@ -183,9 +183,12 @@ def _cache_template(head: Any, params: dict[str, Any], batch: dict[str, np.ndarr
     init_batch["_decode_position"] = jnp.array(0, jnp.int32)
     init_batch["_cache_valid"] = init_batch["valid"].astype(bool)
     # The full token shape only allocates cache tensors here; the subsequent
-    # decode calls use T=1 and start from cache_index=0.
-    variables = head.init(jax.random.PRNGKey(0), init_batch, train=False, decode=True)
-    cached = variables["cache"]
+    # decode calls use T=1 and start from cache_index=0. Every cache variable is
+    # zero-initialised, so trace shapes only instead of running an eager forward
+    # pass, which at thousands of rows does not fit beside the decode buffers.
+    shapes = jax.eval_shape(
+        lambda b: head.init(jax.random.PRNGKey(0), b, train=False, decode=True), init_batch)
+    cached = jax.tree_util.tree_map(lambda x: jnp.zeros(x.shape, x.dtype), shapes["cache"])
     _CACHE_TEMPLATES[key] = cached
     return cached
 
