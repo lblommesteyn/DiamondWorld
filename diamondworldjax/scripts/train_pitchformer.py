@@ -380,7 +380,7 @@ def shared_marginal_prepare(model, params, heads, *, train=False, key=None):
 
 def run_shared(model, train, test, *, steps, bs, lr, seed, out_dir, tag,
                heads, loss_fns, base, player_tables=None, missing_samples=0,
-               d_hr_weight: float = 0.0):
+               d_hr_weight: float = 0.0, grad_accum: int = 1):
     """Joint updates: every head receives `steps` supervised batches and updates.
 
     Summing head losses avoids dormant heads receiving extra Adam momentum or
@@ -405,6 +405,11 @@ def run_shared(model, train, test, *, steps, bs, lr, seed, out_dir, tag,
     opt = optax.chain(optax.clip_by_global_norm(1.0),
                       optax.adamw(sched, weight_decay=1e-4))
     opt = trainable_optimizer(opt)
+    if grad_accum > 1:
+        # Average gradients over grad_accum micro-batches of bs // grad_accum before each
+        # update, so the effective batch and the schedule's update count are unchanged.
+        opt = optax.MultiSteps(opt, every_k_schedule=grad_accum)
+        bs = bs // grad_accum
     state = opt.init(params)
 
     @jax.jit
@@ -432,11 +437,14 @@ def run_shared(model, train, test, *, steps, bs, lr, seed, out_dir, tag,
         return optax.apply_updates(params, updates), new_state, loss
 
     t0 = time.time()
-    it = 0
+    it = micro = 0
     while it < steps:
         for batch in batches(train, bs, rng):
             key, sk = jax.random.split(key)
             params, state, loss = step(params, state, batch, sk)
+            micro += 1
+            if micro % grad_accum:
+                continue
             it += 1
             if it % 200 == 0:
                 print(f"[shared] step {it}/{steps} all heads loss {float(loss):.4f} "
@@ -482,6 +490,9 @@ def main():
     ap.add_argument("--test-season", type=int, default=2024)
     ap.add_argument("--steps", type=int, default=4000)
     ap.add_argument("--bs", type=int, default=32)
+    ap.add_argument("--grad-accum", type=int, default=1,
+                    help="split each --bs batch into this many micro-batches and average their "
+                         "gradients (same effective batch, less GPU memory; shared-emb path only)")
     ap.add_argument("--lr", type=float, default=3e-4)
     ap.add_argument("--max-len", type=int, default=160)
     ap.add_argument("--d-model", type=int, default=192)
@@ -551,6 +562,10 @@ def main():
         ap.error('context-len must cover window-size for identical target histories')
     if args.player_skills.startswith("pa") and not args.pa_skills_ckpt:
         ap.error("PA-compatible skills require --pa-skills-ckpt")
+    if args.grad_accum < 1 or args.bs % args.grad_accum:
+        ap.error("--grad-accum must divide --bs")
+    if args.grad_accum > 1 and not args.shared_emb:
+        ap.error("--grad-accum is implemented for the --shared-emb path only")
     if args.bs < 1 or args.steps < 2 or not args.stack or set(args.stack) - set("abcd") or len(set(args.stack)) != len(args.stack):
         ap.error("Use positive bs, steps >= 2, and distinct heads from abcd")
 
@@ -679,7 +694,8 @@ def main():
             model, train, test, steps=args.steps, bs=args.bs, lr=args.lr,
             seed=args.seed, out_dir=args.out, tag=args.tag,
             heads=args.stack, loss_fns=loss_fns, base=base, player_tables=player_tables,
-            missing_samples=args.missing_samples, d_hr_weight=args.d_hr_weight)
+            missing_samples=args.missing_samples, d_hr_weight=args.d_hr_weight,
+            grad_accum=args.grad_accum)
 
         # Map per-head results into the report.
         _head_metric_map = {
